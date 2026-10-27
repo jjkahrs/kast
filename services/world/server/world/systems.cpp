@@ -93,15 +93,24 @@ std::vector<std::pair<entt::entity, map::Portal>> area_system(entt::registry& re
 void aoi_rebucket(entt::registry& reg, AoiGrid& grid) {
     for (auto [e, tf, mr, cell] : reg.view<Moved, Transform, MapRef, AoiCell>().each()) {
         const CellKey c = grid.cell_of(mr.map, tf.pos.x, tf.pos.z);
-        if (c == cell.cell) continue;
+        if (c == cell.cell) {
+            grid.touch(c); // a move within the cell still changes who is in range
+            continue;
+        }
         grid.remove(wire_id(e), cell.cell);
         grid.insert(wire_id(e), c);
         cell.cell = c;
     }
 }
 
-// Re-buckets movers, then diffs every player's view: Spawn for entities that came into range, Despawn for those
-// that left. Range is symmetric, so each player only handles its own view; an NPC's Viewers follow the players'.
+// Re-buckets movers, then diffs the view of every player whose query window holds a touched cell: Spawn for entities
+// that came into range, Despawn for those that left. Range is symmetric, so each player only handles its own view; an
+// NPC's Viewers follow the players'. The touched cells (AoiGrid::touch) cover every grid change since the last pass:
+// moves (this tick's and the Lua moves re-bucketed after the last pass), spawns, despawns and transfers. A player
+// whose window holds none of them, itself included, would get the same view again: it is skipped with an empty
+// entered. The query buffer is swapped into vis.ids and the old one reused: no allocation once buffers have grown.
+// ponytail: the post-Lua re-bucket touches this tick's player movers' cells again, so their neighbours recompute once
+// more next tick (same result); a separate Lua-moved tag if that ever shows in a profile.
 void aoi_system(entt::registry& reg, AoiGrid& grid, const Send& send) {
     aoi_rebucket(reg, grid);
     auto posOf = [&](uint32_t id, float& x, float& z) {
@@ -109,11 +118,15 @@ void aoi_system(entt::registry& reg, AoiGrid& grid, const Send& send) {
         x = t.pos.x;
         z = t.pos.z;
     };
-    std::vector<uint32_t> entered, left;
+    thread_local std::vector<uint32_t> now, left; // scratch kept across calls
     for (auto [e, tf, mr, vis, link] : reg.view<Transform, MapRef, Visible, SessionLink>().each()) {
-        auto now = grid.query(mr.map, tf.pos.x, tf.pos.z, wire_id(e), posOf);
-        diff_sorted(vis.ids, now, entered, left);
-        for (uint32_t id : entered) {
+        if (!grid.touched_near(mr.map, tf.pos.x, tf.pos.z)) {
+            vis.entered.clear();
+            continue;
+        }
+        grid.query(mr.map, tf.pos.x, tf.pos.z, wire_id(e), posOf, now);
+        diff_sorted(vis.ids, now, vis.entered, left);
+        for (uint32_t id : vis.entered) {
             const auto other = from_wire(id);
             if (auto* viewers = reg.try_get<Viewers>(other)) insert_sorted(viewers->ids, wire_id(e));
             send(link.sessionId, spawn_message(reg, other));
@@ -122,9 +135,9 @@ void aoi_system(entt::registry& reg, AoiGrid& grid, const Send& send) {
             if (auto* viewers = reg.try_get<Viewers>(from_wire(id))) erase_sorted(viewers->ids, wire_id(e));
             send(link.sessionId, proto::Despawn{id});
         }
-        vis.ids = std::move(now);
-        vis.entered = entered;
+        vis.ids.swap(now); // the old ids become the next player's query buffer
     }
+    grid.clear_touched();
 }
 
 // Accepted player moves and script NPC moves go to every player that sees the mover; never back to the mover. Each

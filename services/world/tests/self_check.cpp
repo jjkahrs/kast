@@ -11,7 +11,9 @@
 #include "core/utc.h"
 #include "net/session.h"
 #include "world/aoi_grid.h"
+#include "world/components.h"
 #include "world/rules.h"
+#include "world/systems.h"
 
 #include <codec.h>
 
@@ -30,7 +32,9 @@
 #include <cstdlib>
 #include <map>
 #include <mutex>
+#include <random>
 #include <source_location>
+#include <string>
 #include <string_view>
 #include <thread>
 #include <vector>
@@ -401,10 +405,24 @@ void checkAoi() {
     std::map<uint32_t, std::pair<float, float>> pos = {{1, {100.f, 100.f}}, {2, {200.f, 100.f}}, {3, {100.f, 229.f}}, {4, {500.f, 500.f}}};
     for (auto& [id, p] : pos) grid.insert(id, grid.cell_of(1, p.first, p.second));
     auto posOf = [&](uint32_t id, float& x, float& z) { x = pos[id].first; z = pos[id].second; };
+    const auto query = [&](uint16_t map, float x, float z, uint32_t self) {
+        std::vector<uint32_t> out{99}; // stale contents are cleared
+        grid.query(map, x, z, self, posOf, out);
+        return out;
+    };
 
-    auto seen = grid.query(1, 100, 100, 1, posOf);
+    auto seen = query(1, 100, 100, 1);
     check(seen == std::vector<uint32_t>{2}, "1 sees 2 (100 m) not 3 (129 m) or 4");
-    check(grid.query(1, 200, 100, 2, posOf) == std::vector<uint32_t>{1}, "visibility is symmetric");
+    check(query(1, 200, 100, 2) == std::vector<uint32_t>{1}, "visibility is symmetric");
+
+    // touched cells: inserts touched; cleared, nothing is near; a touch is seen by every window over that cell only
+    check(grid.touched_near(1, 100, 100), "inserts touch their cells");
+    grid.clear_touched();
+    check(!grid.touched_near(1, 100, 100), "nothing touched after clear_touched");
+    grid.touch(grid.cell_of(1, 200, 100));
+    check(grid.touched_near(1, 100, 100) && !grid.touched_near(1, 500, 500) && !grid.touched_near(2, 200, 100),
+          "a touched cell is near windows over it only, on its own map");
+    grid.clear_touched();
 
     // 3 walks into range, 2 walks out
     grid.remove(3, grid.cell_of(1, 100, 229));
@@ -413,21 +431,301 @@ void checkAoi() {
     grid.remove(2, grid.cell_of(1, 200, 100));
     pos[2] = {300.f, 100.f};
     grid.insert(2, grid.cell_of(1, 300, 100));
-    auto now = grid.query(1, 100, 100, 1, posOf);
+    check(grid.touched_near(1, 100, 100), "removes and inserts touch");
+    auto now = query(1, 100, 100, 1);
     std::vector<uint32_t> entered, left;
     diff_sorted(seen, now, entered, left);
     check(entered == std::vector<uint32_t>{3}, "3 entered");
     check(left == std::vector<uint32_t>{2}, "2 left");
-    check(grid.query(1, 1900, 1900, 0, posOf).empty(), "empty corner");
+    check(query(1, 1900, 1900, 0).empty(), "empty corner");
     // maps: same x/z on another map is another cell; negative cells and big map ids keep apart
     pos[5] = {100.f, 100.f};
     grid.insert(5, grid.cell_of(2, 100, 100));
-    check(grid.query(1, 100, 100, 1, posOf) == std::vector<uint32_t>{3}, "map 1 never sees map 2's entity at the same x/z");
-    check(grid.query(2, 100, 100, 0, posOf) == std::vector<uint32_t>{5}, "map 2 sees only its own");
+    check(query(1, 100, 100, 1) == std::vector<uint32_t>{3}, "map 1 never sees map 2's entity at the same x/z");
+    check(query(2, 100, 100, 0) == std::vector<uint32_t>{5}, "map 2 sees only its own");
     pos[6] = {-100.f, -100.f};
     grid.insert(6, grid.cell_of(65535, -100, -100));
-    check(grid.query(65535, -100, -100, 0, posOf) == std::vector<uint32_t>{6} && grid.query(0, -100, -100, 0, posOf).empty(),
+    check(query(65535, -100, -100, 0) == std::vector<uint32_t>{6} && query(0, -100, -100, 0).empty(),
           "negative cells and map 65535 keyed apart");
+}
+
+// --- AOI differential check: aoi_system (skips players with no touched cell near) against the full recompute ---
+namespace aoi_diff {
+using namespace kast::world;
+
+// The aoi_system before touched cells: every player's view recomputed on every pass (kept here as the reference).
+void reference_aoi(entt::registry& reg, AoiGrid& grid, const Send& send) {
+    aoi_rebucket(reg, grid);
+    auto posOf = [&](uint32_t id, float& x, float& z) {
+        const auto& t = reg.get<Transform>(entt::entity{id});
+        x = t.pos.x;
+        z = t.pos.z;
+    };
+    std::vector<uint32_t> entered, left;
+    for (auto [e, tf, mr, vis, link] : reg.view<Transform, MapRef, Visible, SessionLink>().each()) {
+        std::vector<uint32_t> now;
+        grid.query(mr.map, tf.pos.x, tf.pos.z, wire_id(e), posOf, now);
+        diff_sorted(vis.ids, now, entered, left);
+        for (uint32_t id : entered) {
+            const auto other = entt::entity{id};
+            if (auto* viewers = reg.try_get<Viewers>(other)) insert_sorted(viewers->ids, wire_id(e));
+            send(link.sessionId, spawn_message(reg, other));
+        }
+        for (uint32_t id : left) {
+            if (auto* viewers = reg.try_get<Viewers>(entt::entity{id})) erase_sorted(viewers->ids, wire_id(e));
+            send(link.sessionId, proto::Despawn{id});
+        }
+        vis.ids = std::move(now);
+        vis.entered = entered;
+    }
+    grid.clear_touched(); // unused by the reference; keeps the list from growing
+}
+
+constexpr uint16_t kMaps = 3;
+constexpr float kSide = 640; // 10 x 10 cells per map: views overlap a lot, some corners stay empty
+
+// A registry and grid driven like World (spawn, despawn, transfer, create / destroy NPC and leave_views follow
+// world.cpp), recording every message each session gets in a tick as its encoded bytes.
+struct Sim {
+    entt::registry reg;
+    AoiGrid grid{64, 128};
+    std::map<uint32_t, std::vector<std::vector<uint8_t>>> sent;
+    Send send = [this](uint32_t session, const proto::Message& m) { sent[session].push_back(proto::encode(m)); };
+    uint32_t nextSession = 1;
+
+    entt::entity place(uint16_t map, proto::Vec3 pos) {
+        const auto e = reg.create();
+        reg.emplace<Transform>(e, pos, 0.f);
+        reg.emplace<MapRef>(e, map);
+        reg.emplace<AoiCell>(e, grid.cell_of(map, pos.x, pos.z));
+        grid.insert(wire_id(e), grid.cell_of(map, pos.x, pos.z));
+        return e;
+    }
+    void spawn_player(uint16_t map, proto::Vec3 pos) {
+        const auto e = place(map, pos);
+        reg.emplace<SessionLink>(e, nextSession++);
+        reg.emplace<CharacterRef>(e, uint64_t(wire_id(e)), "p" + std::to_string(wire_id(e)));
+        reg.emplace<Visible>(e);
+    }
+    void create_npc(uint16_t map, proto::Vec3 pos) {
+        const auto e = place(map, pos);
+        reg.emplace<Npc>(e, "n" + std::to_string(wire_id(e)), "goblin", "");
+        reg.emplace<Viewers>(e);
+    }
+    void destroy(entt::entity e) { // World::despawn / destroy_npc
+        leave_views(e);
+        grid.remove(wire_id(e), reg.get<AoiCell>(e).cell);
+        reg.destroy(e);
+    }
+    void move(entt::entity e, proto::Vec3 pos) { // movement_system / a Lua Transform set
+        reg.get<Transform>(e).pos = pos;
+        reg.emplace_or_replace<Moved>(e);
+    }
+    void transfer(entt::entity e, uint16_t map, proto::Vec3 pos) {
+        reg.get<MapRef>(e).map = map;
+        reg.get<Transform>(e) = {pos, 0.f};
+        auto& cell = reg.get<AoiCell>(e);
+        grid.remove(wire_id(e), cell.cell);
+        cell.cell = grid.cell_of(map, pos.x, pos.z);
+        grid.insert(wire_id(e), cell.cell);
+        reg.remove<Moved>(e);
+        if (const auto* link = reg.try_get<SessionLink>(e)) {
+            send(link->sessionId, proto::MapChange{map, pos, 0.f, 0});
+            for (uint32_t other : reg.get<Visible>(e).ids) send(link->sessionId, proto::Despawn{other});
+        }
+        leave_views(e);
+    }
+    void leave_views(entt::entity e) {
+        const uint32_t id = wire_id(e);
+        const auto unsee = [&](uint32_t viewer) {
+            auto& vis = reg.get<Visible>(entt::entity{viewer});
+            erase_sorted(vis.ids, id);
+            erase_sorted(vis.entered, id);
+            send(reg.get<SessionLink>(entt::entity{viewer}).sessionId, proto::Despawn{id});
+        };
+        if (auto* viewers = reg.try_get<Viewers>(e)) {
+            for (uint32_t viewer : viewers->ids) unsee(viewer);
+            viewers->ids.clear();
+            return;
+        }
+        auto& vis = reg.get<Visible>(e);
+        for (uint32_t other : vis.ids) {
+            if (auto* viewers = reg.try_get<Viewers>(entt::entity{other})) erase_sorted(viewers->ids, id);
+            else unsee(other);
+        }
+        vis.ids.clear();
+        vis.entered.clear();
+    }
+    template <typename Tag>
+    std::vector<entt::entity> all() const {
+        auto v = reg.view<Tag>();
+        std::vector<entt::entity> out(v.begin(), v.end());
+        std::sort(out.begin(), out.end());
+        return out;
+    }
+};
+
+struct Counts {
+    int idleTicks = 0, withinCell = 0, crossCell = 0, luaMoves = 0, creates = 0, destroys = 0, transfers = 0,
+        luaTransfers = 0, spawns = 0, despawns = 0, spawnMsgs = 0, despawnMsgs = 0;
+};
+
+// One tick in World::tick order; every random choice comes from rng (both sims draw the same sequence).
+void tick(Sim& s, std::mt19937& rng, bool incremental, Counts& n) {
+    std::uniform_real_distribution<float> u(0, 1), spot(0, kSide);
+    const auto chance = [&](float p) { return u(rng) < p; };
+    const auto map = [&] { return uint16_t(1 + rng() % kMaps); };
+    const auto pick = [&](const std::vector<entt::entity>& v) { return v[rng() % v.size()]; };
+    // A short step (mostly within its cell) or a long one across cells.
+    const auto step = [&](entt::entity e, bool& within) {
+        const auto from = s.reg.get<Transform>(e).pos;
+        std::uniform_real_distribution<float> d(chance(0.6f) ? -2.f : -120.f, 0);
+        const float sx = d(rng) * (chance(0.5f) ? -1 : 1), sz = d(rng) * (chance(0.5f) ? -1 : 1);
+        const proto::Vec3 to{std::clamp(from.x + sx, 0.f, kSide), 0, std::clamp(from.z + sz, 0.f, kSide)};
+        within = s.grid.cell_of(1, to.x, to.z) == s.grid.cell_of(1, from.x, from.z);
+        s.move(e, to);
+    };
+    const auto aoi = [&] { incremental ? aoi_system(s.reg, s.grid, s.send) : reference_aoi(s.reg, s.grid, s.send); };
+
+    if (chance(0.3f)) { // an idle tick: nothing joins, leaves or moves
+        ++n.idleTicks;
+        aoi();
+        aoi_rebucket(s.reg, s.grid);
+        end_of_tick_system(s.reg);
+        return;
+    }
+    // between ticks: logins and logouts
+    if (s.all<SessionLink>().size() < 40 && chance(0.3f)) {
+        s.spawn_player(map(), {spot(rng), 0, spot(rng)});
+        ++n.spawns;
+    }
+    if (auto players = s.all<SessionLink>(); players.size() > 5 && chance(0.15f)) {
+        s.destroy(pick(players));
+        ++n.despawns;
+    }
+    // movement_system
+    for (auto e : s.all<SessionLink>())
+        if (chance(0.25f)) {
+            bool within = false;
+            step(e, within);
+            ++(within ? n.withinCell : n.crossCell);
+        }
+    // area_system portals: to another map, or a teleport on the same one
+    if (auto players = s.all<SessionLink>(); !players.empty() && chance(0.2f)) {
+        s.transfer(pick(players), map(), {spot(rng), 0, spot(rng)});
+        ++n.transfers;
+    }
+    aoi();
+    // Lua update, after the aoi pass: NPC moves (and the odd player move), kast.create / destroy / transfer
+    bool within = false;
+    for (auto e : s.all<Npc>())
+        if (chance(0.3f)) {
+            step(e, within);
+            ++n.luaMoves;
+        }
+    if (auto players = s.all<SessionLink>(); !players.empty() && chance(0.1f)) {
+        step(pick(players), within);
+        ++n.luaMoves;
+    }
+    if (s.all<Npc>().size() < 40 && chance(0.4f)) {
+        s.create_npc(map(), {spot(rng), 0, spot(rng)});
+        ++n.creates;
+    }
+    if (auto npcs = s.all<Npc>(); npcs.size() > 5 && chance(0.25f)) {
+        s.destroy(pick(npcs));
+        ++n.destroys;
+    }
+    if (auto all = s.all<Transform>(); !all.empty() && chance(0.15f)) {
+        s.transfer(pick(all), map(), {spot(rng), 0, spot(rng)});
+        ++n.luaTransfers;
+    }
+    aoi_rebucket(s.reg, s.grid);
+    end_of_tick_system(s.reg);
+}
+
+std::string id_list(const std::vector<uint32_t>& ids) {
+    std::string out;
+    for (uint32_t id : ids) out += (out.empty() ? "" : " ") + std::to_string(id);
+    return "[" + out + "]";
+}
+
+// The first difference between the two sims after a tick, or "" if every message and view agrees.
+std::string mismatch(const Sim& ref, const Sim& inc) {
+    for (const auto& [session, msgs] : ref.sent) {
+        const auto it = inc.sent.find(session);
+        if (it == inc.sent.end() || it->second != msgs)
+            return "session " + std::to_string(session) + " messages differ (" + std::to_string(msgs.size()) +
+                   " from the reference, " + std::to_string(it == inc.sent.end() ? 0 : it->second.size()) +
+                   " from aoi_system)";
+    }
+    if (ref.sent.size() != inc.sent.size()) return "aoi_system sent to a session the reference did not";
+    if (ref.reg.view<Visible>().size() != inc.reg.view<Visible>().size() ||
+        ref.reg.view<Viewers>().size() != inc.reg.view<Viewers>().size())
+        return "different entities";
+    for (auto [e, vis] : ref.reg.view<Visible>().each()) {
+        const auto* other = inc.reg.try_get<Visible>(e);
+        const std::string who = "player " + std::to_string(wire_id(e));
+        if (!other) return who + " missing";
+        if (other->ids != vis.ids)
+            return who + " Visible.ids " + id_list(vis.ids) + " (reference) vs " + id_list(other->ids);
+        if (other->entered != vis.entered)
+            return who + " Visible.entered " + id_list(vis.entered) + " (reference) vs " + id_list(other->entered);
+    }
+    for (auto [e, viewers] : ref.reg.view<Viewers>().each()) {
+        const auto* other = inc.reg.try_get<Viewers>(e);
+        if (!other || other->ids != viewers.ids)
+            return "npc " + std::to_string(wire_id(e)) + " Viewers.ids " + id_list(viewers.ids) + " (reference) vs " +
+                   (other ? id_list(other->ids) : "missing");
+    }
+    return "";
+}
+} // namespace aoi_diff
+
+// Seeded random worlds (players and NPCs on several maps; within-cell and long moves, logins / logouts, NPC create /
+// destroy, transfers before and after the aoi pass, Lua moves after it, idle ticks) run through the reference full
+// recompute and through aoi_system: after every tick each session's messages (encoded, in order), every Visible and
+// every Viewers must be identical.
+void checkAoiDifferential() {
+    using namespace aoi_diff;
+    constexpr int kSeeds = 20, kTicks = 400;
+    Counts n;
+    int compared = 0;
+    std::string why;
+    for (int seed = 1; seed <= kSeeds && why.empty(); ++seed) {
+        Sim ref, inc;
+        std::mt19937 rngRef(seed), rngInc(seed);
+        for (uint16_t i = 0; i < 20; ++i) { // the starting population
+            const proto::Vec3 p{float(i * 31 % 640), 0, float(i * 97 % 640)};
+            for (Sim* s : {&ref, &inc}) {
+                s->spawn_player(uint16_t(1 + i % kMaps), p);
+                s->create_npc(uint16_t(1 + i % kMaps), {p.z, 0, p.x});
+            }
+        }
+        for (int t = 0; t < kTicks && why.empty(); ++t, ++compared) {
+            ref.sent.clear();
+            inc.sent.clear();
+            Counts ignored;
+            tick(ref, rngRef, false, n);
+            tick(inc, rngInc, true, ignored);
+            for (const auto& [session, msgs] : ref.sent)
+                for (const auto& m : msgs) {
+                    const auto op = proto::Opcode(m[2] | m[3] << 8);
+                    n.spawnMsgs += op == proto::Opcode::Spawn;
+                    n.despawnMsgs += op == proto::Opcode::Despawn;
+                }
+            if (why = mismatch(ref, inc); !why.empty())
+                std::fprintf(stderr, "aoi differential: seed %d tick %d: %s\n", seed, t, why.c_str());
+        }
+    }
+    check(why.empty(), "aoi differential: aoi_system matches the full recompute on every tick");
+    std::printf("aoi differential: %d ticks compared; idle %d, within-cell moves %d, cross-cell %d, Lua moves %d, NPC "
+                "creates %d / destroys %d, transfers %d before aoi + %d after, logins %d / logouts %d; %d Spawn, %d "
+                "Despawn\n",
+                compared, n.idleTicks, n.withinCell, n.crossCell, n.luaMoves, n.creates, n.destroys, n.transfers,
+                n.luaTransfers, n.spawns, n.despawns, n.spawnMsgs, n.despawnMsgs);
+    check(n.idleTicks > 100 && n.withinCell > 100 && n.crossCell > 100 && n.luaMoves > 100 && n.creates > 100 &&
+              n.destroys > 100 && n.transfers > 100 && n.luaTransfers > 100 && n.spawns > 100 && n.despawns > 100,
+          "aoi differential: every event kind ran many times");
 }
 
 void checkChat() {
@@ -865,6 +1163,65 @@ int log_bench() {
     return g_failures == 0 ? 0 : 1;
 }
 
+// --- AOI cost (ctest aoi_bench): ns per aoi_system call, players + NPCs spread over one 2 km map ---
+
+// One aoi_system scenario: `players` players and players/5 NPCs at random spots; `movingPct` of the players take a
+// short random step (often within their cell) every tick. Returns ns per call over the timed ticks.
+double aoi_bench_ns(int players, int movingPct) {
+    using namespace kast::world;
+    constexpr float kSide = 2000;
+    entt::registry reg;
+    AoiGrid grid(64, 128); // the WorldRules defaults
+    std::mt19937 rng(7);
+    std::uniform_real_distribution<float> spot(0, kSide), step(-3, 3);
+    std::vector<entt::entity> movers;
+    for (int i = 0; i < players + players / 5; ++i) {
+        const auto e = reg.create();
+        const proto::Vec3 p{spot(rng), 0, spot(rng)};
+        reg.emplace<Transform>(e, p, 0.f);
+        reg.emplace<MapRef>(e, uint16_t(1));
+        reg.emplace<AoiCell>(e, grid.cell_of(1, p.x, p.z));
+        grid.insert(wire_id(e), grid.cell_of(1, p.x, p.z));
+        if (i < players) {
+            reg.emplace<SessionLink>(e, uint32_t(i + 1));
+            reg.emplace<CharacterRef>(e, uint64_t(i + 1), "p");
+            reg.emplace<Visible>(e);
+            if (i < players * movingPct / 100) movers.push_back(e);
+        } else {
+            reg.emplace<Npc>(e, "n", "t", "");
+            reg.emplace<Viewers>(e);
+        }
+    }
+    const Send send = [](uint32_t, const proto::Message&) {};
+    const auto tick = [&] {
+        for (auto e : movers) {
+            auto& p = reg.get<Transform>(e).pos;
+            p.x = std::clamp(p.x + step(rng), 0.f, kSide);
+            p.z = std::clamp(p.z + step(rng), 0.f, kSide);
+            reg.emplace_or_replace<Moved>(e);
+        }
+        const auto t = std::chrono::steady_clock::now();
+        aoi_system(reg, grid, send);
+        const auto ns = std::chrono::duration<double, std::nano>(std::chrono::steady_clock::now() - t).count();
+        end_of_tick_system(reg);
+        return ns;
+    };
+    for (int i = 0; i < 20; ++i) tick(); // warm up: first views, buffers grown
+    constexpr int kTicks = 200;
+    double total = 0;
+    for (int i = 0; i < kTicks; ++i) total += tick();
+    return total / kTicks;
+}
+
+int aoi_bench() {
+    for (int players : {500, 2000})
+        for (int moving : {0, 10, 100})
+            std::fprintf(stderr, "aoi bench: %4d players %4d npcs, %3d%% moving: %10.0f ns/aoi_system\n", players,
+                         players / 5, moving, aoi_bench_ns(players, moving));
+    // ponytail: printed, not checked (like log_bench); before/after numbers are compared by hand in the report
+    return 0;
+}
+
 void segv() {
     volatile int* null = nullptr;
     *null = 1; // SIGSEGV / access violation
@@ -929,12 +1286,14 @@ static void disable_crash_dialogs() {
 int main(int argc, char** argv) {
     disable_crash_dialogs();
     if (argc > 1 && std::string_view(argv[1]) == "--log-bench") return log_bench();
+    if (argc > 1 && std::string_view(argv[1]) == "--aoi-bench") return aoi_bench();
     if (argc > 2 && std::string_view(argv[1]) == "--log-crash") return log_crash(argv[2]);
     checkCodecRoundTrip();
     checkFrameRejection();
     checkNames();
     checkMovement();
     checkAoi();
+    checkAoiDifferential();
     checkChat();
     checkClientEvents();
     checkMessageRate();
