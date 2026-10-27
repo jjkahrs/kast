@@ -3,7 +3,8 @@
 // switching, editor Play mode, Lua components, game.pak, Build, state machines, Assets panel file operations and the
 // game GUI (builder document model, GUI files, UIDocument, button click events), the external editor setting and models
 // (Assimp loading, animation sampling, crossfades, skinning limits) and physics (bodies, events, kast.physics,
-// characters). --bench-physics instead times 500 dynamic boxes and exits.
+// characters). --bench-physics instead times 500 dynamic boxes and exits; --bench-events times event bus drains and
+// exits.
 // Exit 0 if every check passes. Run by CTest as engine_self_check.
 #include "asset_ids.h" // stable asset ids; links editor/asset_ids.cpp
 #include "assets.h"   // Assets panel file logic; links editor/assets.cpp
@@ -13389,6 +13390,36 @@ int benchPhysics()
     return 0;
 }
 
+// kast_self_check --bench-events: average drain time with 10,000 cheap subscribers and 10,000 events per drain, the
+// subscribers spread over 1,000 names, then all on one name.
+int benchEvents()
+{
+    const auto run = [](int names, int drains) {
+        kast::EventBus bus;
+        uint64_t calls = 0;
+        std::vector<kast::EventBus::Subscription> subscriptions;
+        for (int i = 0; i < 10000; ++i)
+            subscriptions.push_back(bus.subscribe(std::format("e{}", i % names), [&calls](const nlohmann::json&) { ++calls; }));
+        double total = 0.0;
+        for (int d = 0; d < drains; ++d) {
+            for (int i = 0; i < 10000; ++i)
+                bus.publish(std::format("e{}", i % names), i);
+            const auto start = std::chrono::steady_clock::now();
+            bus.drain();
+            total += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+        }
+        if (calls != 10000ull * drains * (10000 / names))
+            kast::log::error(std::format("Events bench: {} callbacks, expected {}", calls, 10000ull * drains * (10000 / names)));
+        return total / drains;
+    };
+    const double spread = run(1000, 10);
+    const double one = run(1, 3);
+    kast::log::info(std::format("Events: 10,000 subscribers, 10,000 events per drain, {:.3f} ms average drain over "
+                                "1,000 names, {:.3f} ms on 1 name",
+                                spread, one));
+    return 0;
+}
+
 // --- Audio ---
 // Offline Audio (no device, the mix pulled with render()) unless a check says otherwise; main() makes Offline the
 // default, so LuaSystems and Document sessions are offline too.
@@ -16867,6 +16898,8 @@ int main(int argc, char** argv)
     }
     if (argc == 2 && std::string_view(argv[1]) == "--bench-physics")
         return benchPhysics();
+    if (argc == 2 && std::string_view(argv[1]) == "--bench-events")
+        return benchEvents();
     if (argc == 2 && std::string_view(argv[1]) == "--undo") { // only the undo / redo checks
         checkUndoStack();
         checkSceneUndo();
