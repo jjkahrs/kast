@@ -88,7 +88,7 @@ void GuiRenderer::shutdown()
 }
 
 void GuiRenderer::begin(bgfx::ViewId view, bgfx::FrameBufferHandle frameBuffer, int width, int height, float scale,
-                        bool shareViews, bool clear)
+                        bool shareViews, bool clear, bool redirectBase)
 {
     if (width != width_ || height != height_)
         destroyLayers(); // the pool is the GUI's size; recreated as layers are pushed
@@ -99,16 +99,43 @@ void GuiRenderer::begin(bgfx::ViewId view, bgfx::FrameBufferHandle frameBuffer, 
     top_ = 0;
     scissor_ = false;
     transform_.reset();
+    baseMaskAsked_ = false;
+    redirected_ = redirectBase;
+    if (redirected_ && !bgfx::isValid(redirect_)) {
+        redirect_ = createLayer();
+        log::info(std::format("GUI base layer redirected for clip masks ({}x{})", width_, height_));
+    }
     bx::mtxOrtho(proj_, 0.0f, static_cast<float>(width) / scale_, static_cast<float>(height) / scale_, 0.0f, 0.0f,
                  1000.0f, 0.0f, bgfx::getCaps()->homogeneousDepth);
+    // Redirected: frameBuffer still gets its view (and clear) first, then the redirect is cleared to transparent.
+    const Rml::LayerHandle first = redirected_ ? kHost : 0;
     if (shareViews) {
-        if (!nextView(0, clear))
+        if (!nextView(first, clear) || (redirected_ && !nextView(0, true)))
             viewLayer_ = kNoLayer; // out of views: every draw tries for one and is dropped
         return;
     }
     firstView_ = view_ = view;
-    viewLayer_ = 0;
+    viewLayer_ = first;
     setView(view, frameBuffer);
+    if (redirected_ && !nextView(0, true))
+        viewLayer_ = kNoLayer;
+}
+
+bool GuiRenderer::end()
+{
+    if (redirected_)
+        flushBase(false);
+    redirected_ = false;
+    return baseMaskAsked_;
+}
+
+bool GuiRenderer::flushBase(bool more)
+{
+    if (!nextView(kHost, false))
+        return false;
+    bgfx::setState(kBlendState);
+    drawImage({0, 1.0f}, 1.0f, program_);
+    return !more || nextView(0, true);
 }
 
 void GuiRenderer::setView(bgfx::ViewId view, bgfx::FrameBufferHandle frameBuffer)
@@ -135,23 +162,29 @@ bool GuiRenderer::nextView(Rml::LayerHandle layer, bool clear)
     ++view_;
     viewLayer_ = layer;
     setView(view_, frameBuffer(layer));
-    bgfx::setViewName(view_, layer ? "GUI layer" : "GUI");
+    bgfx::setViewName(view_, layer == 0 || layer == kHost ? "GUI" : "GUI layer");
     bgfx::setViewClear(view_, clear ? BGFX_CLEAR_COLOR : BGFX_CLEAR_NONE, 0); // views keep their clear across frames
     return true;
 }
 
 bgfx::FrameBufferHandle GuiRenderer::frameBuffer(Rml::LayerHandle layer) const
 {
-    return layer == 0 ? base_ : layers_[layer - 1];
+    if (layer == 0)
+        return redirected_ ? redirect_ : base_;
+    return layer == kHost ? base_ : layers_[layer - 1];
 }
 
 void GuiRenderer::destroyLayers()
 {
-    for (bgfx::FrameBufferHandle layer : layers_) {
+    const auto destroy = [](bgfx::FrameBufferHandle layer) {
         bgfx::destroy(bgfx::getTexture(layer)); // its color; the stencil is shared
         bgfx::destroy(layer);
-    }
+    };
+    std::ranges::for_each(layers_, destroy);
     layers_.clear();
+    if (bgfx::isValid(redirect_))
+        destroy(redirect_);
+    redirect_ = BGFX_INVALID_HANDLE;
     if (bgfx::isValid(stencil_))
         bgfx::destroy(stencil_);
     stencil_ = BGFX_INVALID_HANDLE;
@@ -286,15 +319,20 @@ void GuiRenderer::SetTransform(const Rml::Matrix4f* transform)
         transform_.reset();
 }
 
-void GuiRenderer::ensureLayer(Rml::LayerHandle layer)
+bgfx::FrameBufferHandle GuiRenderer::createLayer()
 {
     if (!bgfx::isValid(stencil_))
         stencil_ =
             bgfx::createTexture2D(width_, height_, false, 1, bgfx::TextureFormat::D24S8, BGFX_TEXTURE_RT_WRITE_ONLY);
+    const bgfx::TextureHandle textures[] = {
+        bgfx::createTexture2D(width_, height_, false, 1, bgfx::TextureFormat::RGBA8, kLayerFlags), stencil_};
+    return bgfx::createFrameBuffer(2, textures, false);
+}
+
+void GuiRenderer::ensureLayer(Rml::LayerHandle layer)
+{
     while (layers_.size() < static_cast<size_t>(layer)) {
-        const bgfx::TextureHandle textures[] = {
-            bgfx::createTexture2D(width_, height_, false, 1, bgfx::TextureFormat::RGBA8, kLayerFlags), stencil_};
-        layers_.push_back(bgfx::createFrameBuffer(2, textures, false));
+        layers_.push_back(createLayer());
         log::info(std::format("GUI layer framebuffer {} created ({}x{})", layers_.size(), width_, height_));
     }
 }
@@ -318,6 +356,11 @@ void GuiRenderer::CompositeLayers(Rml::LayerHandle source, Rml::LayerHandle dest
         // the host gives later frames a readable target (gui::wantsReadableTarget).
         wantsReadable_ = true;
         return;
+    }
+    if (source == 0 && redirected_) { // what is under it: the target with the base layer drawn so far on it
+        if (!flushBase(true))
+            return;
+        source = kHost;
     }
     Image image{source, 1.0f};
     for (Rml::CompiledFilterHandle filter : filters)
@@ -363,7 +406,8 @@ void GuiRenderer::drawImage(Image image, float toScale, bgfx::ProgramHandle prog
 
 uint32_t GuiRenderer::clipTest() const
 {
-    if (!clipMask_ || !maskInLayer_ || viewLayer_ == 0)
+    const bool stencil = viewLayer_ == 0 ? redirected_ : viewLayer_ != kHost;
+    if (!clipMask_ || !maskInLayer_ || !stencil)
         return BGFX_STENCIL_NONE;
     return BGFX_STENCIL_TEST_EQUAL | BGFX_STENCIL_FUNC_REF(clipRef_) | BGFX_STENCIL_FUNC_RMASK(0xff) |
            BGFX_STENCIL_OP_FAIL_S_KEEP | BGFX_STENCIL_OP_FAIL_Z_KEEP | BGFX_STENCIL_OP_PASS_Z_KEEP;
@@ -374,7 +418,8 @@ void GuiRenderer::EnableClipMask(bool enable) { clipMask_ = enable; }
 void GuiRenderer::RenderToClipMask(Rml::ClipMaskOperation operation, Rml::CompiledGeometryHandle geometry,
                                    Rml::Vector2f translation)
 {
-    maskInLayer_ = top_ != 0;
+    baseMaskAsked_ = baseMaskAsked_ || top_ == 0;
+    maskInLayer_ = top_ != 0 || redirected_;
     if (!maskInLayer_ || !target(top_))
         return;
     // As RmlUi's GL3 backend: Set / SetInverse clear the stencil to outside / inside and draw the geometry as the

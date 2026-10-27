@@ -26,9 +26,13 @@ public:
     // after it, up to view + gui::kViews - 1. scale: RmlUi's units are scale pixels each (a context laid out at
     // width / scale x height / scale, drawn scaled up). shareViews: a second context drawn over the last begin()'s in
     // the same frame, taking the views after the ones it used (view is ignored), within the same range. clear (with
-    // shareViews): that view clears frameBuffer to transparent first.
+    // shareViews): that view clears frameBuffer to transparent first. redirectBase: the base layer draws into a pool
+    // layer with the shared stencil, put over frameBuffer by end(), so clip masks work on it too (see EnableClipMask).
     void begin(bgfx::ViewId view, bgfx::FrameBufferHandle frameBuffer, int width, int height, float scale = 1.0f,
-               bool shareViews = false, bool clear = false);
+               bool shareViews = false, bool clear = false, bool redirectBase = false);
+    // After the context's Render(): puts a redirected base layer on begin()'s target. True if the document asked for a
+    // clip mask on its base layer (drawn with plain scissoring unless this render redirected it).
+    bool end();
 
     Rml::CompiledGeometryHandle CompileGeometry(Rml::Span<const Rml::Vertex> vertices, Rml::Span<const int> indices) override;
     void RenderGeometry(Rml::CompiledGeometryHandle geometry, Rml::Vector2f translation, Rml::TextureHandle texture) override;
@@ -50,10 +54,10 @@ public:
     void RenderShader(Rml::CompiledShaderHandle shader, Rml::CompiledGeometryHandle geometry, Rml::Vector2f translation,
                       Rml::TextureHandle texture) override;
     void ReleaseShader(Rml::CompiledShaderHandle shader) override;
-    // Clip masks only inside layers, which share one stencil buffer: what box-shadow needs to keep its shadow off the
-    // element. ponytail: on the base layer (the backbuffer or a host target, whose stencil isn't ours) they stay
-    // no-ops, so overflow clipping of transformed or rounded boxes there falls back to plain scissoring; draw the base
-    // through a layer with stencil if a GUI needs them.
+    // Clip masks draw into the stencil the layers share: box-shadow keeps its shadow off the element with one, and
+    // overflow clips transformed or rounded boxes to their shape. The base layer (the backbuffer or a host target,
+    // whose stencil isn't ours) has none unless begin() redirects it; a clip mask asked for there falls back to plain
+    // scissoring and makes end() return true, so the host redirects the next renders (GuiContext::render).
     void EnableClipMask(bool enable) override;
     void RenderToClipMask(Rml::ClipMaskOperation operation, Rml::CompiledGeometryHandle geometry,
                           Rml::Vector2f translation) override;
@@ -65,6 +69,7 @@ public:
 private:
     static constexpr int kMaxGradientStops = 16; // fs_gui_gradient.sc's MAX_STOPS
     static constexpr Rml::LayerHandle kNoLayer = ~Rml::LayerHandle(0); // viewLayer_ when no view is left to draw in
+    static constexpr Rml::LayerHandle kHost = kNoLayer - 1; // begin()'s target itself, while layer 0 is redirected
 
     // A layer's picture held at scale (1, 1/2, 1/4, ...) of the GUI's size, from the target's top-left corner.
     struct Image {
@@ -83,7 +88,10 @@ private:
     // The scissor region (the whole GUI without one) at scale, rounded outwards.
     void applyScissor(float scale);
     void destroyLayers();
+    bgfx::FrameBufferHandle createLayer(); // a GUI-sized RGBA8 target on the shared stencil
     void ensureLayer(Rml::LayerHandle layer);
+    // Draws the redirected base layer over begin()'s target; then, if more draws follow, clears it for them.
+    bool flushBase(bool more);
     void submit(Rml::CompiledGeometryHandle geometry, Rml::Vector2f translation, bgfx::TextureHandle texture,
                 bgfx::ProgramHandle program, uint64_t state, uint32_t stencil);
     // Draws image with program over the whole current target at toScale, moved by offset (GUI pixels). Set the
@@ -101,7 +109,10 @@ private:
 
     bgfx::ViewId firstView_ = 0;
     bgfx::ViewId view_ = 0;
-    bgfx::FrameBufferHandle base_ = BGFX_INVALID_HANDLE; // layer 0, begin()'s target
+    bgfx::FrameBufferHandle base_ = BGFX_INVALID_HANDLE; // begin()'s target: layer 0 unless redirected
+    bgfx::FrameBufferHandle redirect_ = BGFX_INVALID_HANDLE; // layer 0 while redirected_ (created on first use)
+    bool redirected_ = false;
+    bool baseMaskAsked_ = false; // since begin(), RenderToClipMask on the base layer
     uint16_t width_ = 0;
     uint16_t height_ = 0;
     float scale_ = 1.0f; // target pixels per RmlUi unit (begin)
@@ -113,7 +124,7 @@ private:
     bool wantsReadable_ = false;
     bgfx::TextureHandle stencil_ = BGFX_INVALID_HANDLE; // shared by the layers
     bool clipMask_ = false;
-    bool maskInLayer_ = false; // the last RenderToClipMask drew into a layer's stencil
+    bool maskInLayer_ = false; // the last RenderToClipMask drew into the stencil (a layer or the redirected base)
     uint8_t clipRef_ = 1;      // stencil value inside the mask
     bgfx::VertexLayout layout_;
     bgfx::ProgramHandle program_ = BGFX_INVALID_HANDLE;
