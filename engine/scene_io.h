@@ -5,6 +5,7 @@
 
 #include <filesystem>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -27,13 +28,30 @@ struct SceneLoadReport {
 bool loadScene(const std::string& path, Scene& out, std::string& error, SceneLoadReport* report = nullptr,
                const std::filesystem::path& projectRoot = {});
 
-// Deterministic output: entities depth-first in child order, fixed key order, shortest round-trip floats.
+// Deterministic output: entities depth-first in child order, fixed key order, shortest round-trip floats. Writes one
+// loaded scene (additive scenes, scene.h): its entities with their file ids and its own settings; without slot, the
+// active one. out's (only) loaded scene gets path as its path.
 bool saveScene(const Scene& scene, const std::string& path, std::string& error);
+bool saveScene(const Scene& scene, SceneSlot slot, const std::string& path, std::string& error);
 
-// The same, in memory (Play mode snapshots). sceneFromJson's error does not include a path.
+// The same, in memory. sceneFromJson's error does not include a path.
 nlohmann::ordered_json sceneToJson(const Scene& scene);
+nlohmann::ordered_json sceneToJson(const Scene& scene, SceneSlot slot);
 bool sceneFromJson(const nlohmann::ordered_json& json, Scene& out, std::string& error, SceneLoadReport* report = nullptr,
                    const std::filesystem::path& projectRoot = {});
+
+// Additive scenes (docs/engine/additive-scenes.html). appendScene moves from's entities and settings into into as one
+// more loaded scene named path (last, not active; see Scene::addScene for slot) and returns its slot; from is left
+// empty. loadSceneAdditive loads the file path that way; false + error (into unchanged) if into already has a scene
+// with that path or the load fails.
+SceneSlot appendScene(Scene& into, Scene&& from, std::string path, std::optional<SceneSlot> slot = std::nullopt);
+bool loadSceneAdditive(const std::string& path, Scene& into, SceneSlot& slot, std::string& error,
+                       SceneLoadReport* report = nullptr, const std::filesystem::path& projectRoot = {});
+// Every loaded scene with its slot and path, and the active one: Play mode snapshots, prefab instance reloads.
+// scenesFromJson rebuilds the same slots, paths and active scene; out is replaced only on success.
+nlohmann::ordered_json scenesToJson(const Scene& scene);
+bool scenesFromJson(const nlohmann::ordered_json& json, Scene& out, std::string& error, SceneLoadReport* report = nullptr,
+                    const std::filesystem::path& projectRoot = {});
 
 // A scene's "lighting" > "lightmaps" block (kast.lightmaps uses these too): every field, and back (missing fields
 // default). lightmapsFromJson replaces out only on success; error says why not.

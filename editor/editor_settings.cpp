@@ -45,7 +45,7 @@ std::string editorSetting(const nlohmann::json& settings, const char* key, std::
     return it != settings.end() && it->is_string() ? it->get<std::string>() : fallback;
 }
 
-bool saveEditorSetting(const std::filesystem::path& file, const char* key, const std::string& value, std::string& error)
+bool saveEditorSetting(const std::filesystem::path& file, const char* key, const nlohmann::json& value, std::string& error)
 {
     nlohmann::json settings = loadEditorSettings(file);
     settings[key] = value;
@@ -56,4 +56,33 @@ bool saveEditorSetting(const std::filesystem::path& file, const char* key, const
         return false;
     }
     return true;
+}
+
+namespace {
+
+// A project's key in "openScenes": its absolute root, '/' separators.
+std::string projectKey(const std::filesystem::path& projectRoot)
+{
+    return utf8(std::filesystem::absolute(projectRoot).lexically_normal());
+}
+
+} // namespace
+
+nlohmann::json openScenesSetting(const nlohmann::json& settings, const std::filesystem::path& projectRoot)
+{
+    const auto all = settings.find("openScenes");
+    if (all == settings.end() || !all->is_object())
+        return nullptr;
+    const auto state = all->find(projectKey(projectRoot));
+    return state == all->end() ? nlohmann::json() : *state;
+}
+
+bool saveOpenScenesSetting(const std::filesystem::path& file, const std::filesystem::path& projectRoot,
+                           const nlohmann::json& state, std::string& error)
+{
+    nlohmann::json all = loadEditorSettings(file).value("openScenes", nlohmann::json::object());
+    if (!all.is_object())
+        all = nlohmann::json::object();
+    all[projectKey(projectRoot)] = state;
+    return saveEditorSetting(file, "openScenes", all, error);
 }

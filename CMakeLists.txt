@@ -1819,6 +1819,7 @@ function(kast_game_project name project_name start_scene empty_systems)
 endfunction()
 # name, project name, startScene, empty its systems[, game state machine]
 set(KAST_GAMES "switch|Switch Test|scene_a.scene|FALSE" "switch_no_systems|Switch Test|scene_a.scene|TRUE"
+               "additive|Additive Test|additive_player.scene|FALSE"
                "health|Health Test|health.scene|FALSE" "health_no_systems|Health Test|health.scene|TRUE"
                "events|Events Test|events.scene|FALSE" "events_no_systems|Events Test|events.scene|TRUE"
                "fsm|FSM Test|fsm.scene|FALSE|game_flow" "fsm_no_systems|FSM Test|fsm.scene|TRUE|game_flow"
@@ -3366,6 +3367,9 @@ include(cmake/world_ui_tests.cmake)
 add_test(NAME asset_ids_rename
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSOURCE=${CMAKE_CURRENT_SOURCE_DIR}/tests/legacy_project"
           "-DWORK=${CMAKE_CURRENT_BINARY_DIR}/asset_ids_rename" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/asset_ids_test.cmake")
+
+# Additive scenes: several open scenes in the editor, Lua's additive loads in the player.
+include(cmake/additive_scene_tests.cmake)
 
 # Keep last: every test above runs with crash dialogs off, so a failing test exits instead of waiting for a click.
 get_property(kast_tests DIRECTORY PROPERTY TESTS)

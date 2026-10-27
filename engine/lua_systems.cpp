@@ -26,6 +26,7 @@
 #include <cmath>
 #include <format>
 #include <functional>
+#include <list>
 #include <map>
 #include <optional>
 #include <stdexcept>
@@ -79,24 +80,27 @@ Json materialValueToJson(const sol::object& value)
 
 } // namespace
 
-// A scene switch requested by kast.loadScene, applied at the end of the frame.
-struct PendingScene {
+// A kast.loadScene / unloadScene / setActiveScene call, applied at the end of the frame in call order.
+struct SceneRequest {
+    enum class Kind { Switch, Add, Unload, Activate } kind = Kind::Switch;
     std::string path; // project-relative
-    Scene scene;
+    Scene scene;      // Switch, Add: read and checked at the call
 };
 
 struct LuaSystems::State {
-    State(Scene& scene, const std::optional<std::filesystem::path>& projectRoot, std::string scenePath, Input* input,
+    State(Scene& scene, const std::optional<std::filesystem::path>& projectRoot, const std::string& scenePath, Input* input,
           EventBus& bus, StateMachines& fsm, Physics& physics, Audio& audio, Network& network, AuthClient& auth,
           WorldClient& world, ChatClient& chat, GuiAccess* gui, DisplayAccess* display)
-        : scene(scene), projectRoot(projectRoot), scenePath(std::move(scenePath)), input(input), bus(bus), fsm(fsm),
-          physics(physics), audio(audio), network(network), auth(auth), world(world), chat(chat), gui(gui), display(display)
+        : scene(scene), projectRoot(projectRoot), input(input), bus(bus), fsm(fsm), physics(physics), audio(audio),
+          network(network), auth(auth), world(world), chat(chat), gui(gui), display(display)
     {
+        for (const LoadedScene& loaded : scene.loadedScenes())
+            scenePaths[loaded.slot] = loaded.slot == scene.activeSlot() ? scenePath : projectPath(loaded.path);
     }
 
     Scene& scene;
     std::optional<std::filesystem::path> projectRoot;
-    std::string scenePath; // project-relative, empty if unsaved or no project
+    std::map<SceneSlot, std::string> scenePaths; // each loaded scene's, project-relative; empty if unsaved or no project
     Input* input;
     EventBus& bus;
     StateMachines& fsm;
@@ -110,8 +114,8 @@ struct LuaSystems::State {
     DisplayAccess* display; // null: no window here, kast.display is nil
     std::unordered_map<entt::entity, AudioHandle> sources; // the last voice each AudioSource started (kast.audio.stopSource)
     MaterialLibrary materials; // shared .mat files, for kast.get/setMaterialProperty
-    std::optional<PendingScene> pending; // last kast.loadScene call wins
-    bool inShutdown = false;             // kast.loadScene is ignored while a shutdown runs
+    std::vector<SceneRequest> sceneRequests; // this frame's, in call order (a switch drops the ones before it)
+    bool inShutdown = false;                 // kast.loadScene is ignored while a shutdown runs
     sol::state lua;        // declared before everything holding Lua references, so it is destroyed last
     sol::table api;        // kast.* functions, copied into each system's own read-only kast table
     sol::table inputApi;   // kast.input.*
@@ -134,7 +138,7 @@ struct LuaSystems::State {
     sol::table displayApi; // kast.display.*, only with a DisplayAccess
     DefinitionFiles fsmFiles; // state machine definition files at the last load, for hot reload
     std::string callbackPath; // the definition file whose enter/exit is running (log prefixes, event publisher)
-    std::vector<System> systems;
+    std::list<System> systems; // every loaded scene's, each path once (a list: removing one keeps the others' addresses)
     std::unordered_map<EntityId, entt::entity> ids; // ponytail: rebuilt after any entity creation; index in Scene if big
     uint64_t indexedAt = 0; // Scene::creations() when ids was built
     std::map<std::string, std::shared_ptr<const PrefabAsset>> prefabs; // kast.instantiate's, loaded once per session
@@ -149,6 +153,14 @@ struct LuaSystems::State {
     void init(const std::vector<std::string>& paths);
     void tick(float dt);
     void stop();
+    void startSystem(System& system); // resolves its file and runs it (init)
+    // Additive scenes: what kast.loadScene(path, {additive = true}) and kast.unloadScene do at the end of the frame.
+    void addScene(SceneRequest& request);
+    void unloadScene(const std::string& path);
+    std::string projectPath(const std::string& file) const; // a LoadedScene path, project-relative if inside the project
+    std::string luaScenePath(lua_State* L, const char* function, const std::string& path) const; // checked, normalized
+    std::vector<std::string> loadedAfterRequests() const; // the loaded paths once this frame's requests apply
+    SceneSlot slotOf(const std::string& path) const; // a loaded scene's, by project-relative path
 
     void indexIds();
     entt::entity find(EntityId id);
@@ -187,7 +199,8 @@ struct LuaSystems::State {
     void bindDisplayApi();
     // Starts entity's AudioSource. Throws std::invalid_argument (see Audio::play).
     AudioHandle playSource(entt::entity entity);
-    void playOnStart(); // every AudioSource with playOnStart; a bad clip logs an error and plays nothing
+    // Every AudioSource with playOnStart (slot: that loaded scene's); a bad clip logs an error and plays nothing.
+    void playOnStart(std::optional<SceneSlot> slot = std::nullopt);
 };
 
 void LuaSystems::State::init(const std::vector<std::string>& paths)
@@ -202,21 +215,114 @@ void LuaSystems::State::init(const std::vector<std::string>& paths)
     }
     for (const std::string& path : paths)
         systems.push_back({.path = path});
-    for (System& system : systems) {
-        std::string error = "no project (open a scene inside a project to run Lua systems)";
-        const std::optional<std::filesystem::path> file =
-            projectRoot ? resolveProjectPath(*projectRoot, system.path, error) : std::nullopt;
-        if (!file) {
-            disable(system, std::format("{}: {}", system.path, error));
-            continue;
-        }
-        system.file = *file;
-        std::error_code ec;
-        system.mtime = std::filesystem::last_write_time(system.file, ec);
-        load(system);
-    }
+    for (System& system : systems)
+        startSystem(system);
     indexIds(); // entities the inits created
     fsm.enterAll();
+}
+
+void LuaSystems::State::startSystem(System& system)
+{
+    std::string error = "no project (open a scene inside a project to run Lua systems)";
+    const std::optional<std::filesystem::path> file =
+        projectRoot ? resolveProjectPath(*projectRoot, system.path, error) : std::nullopt;
+    if (!file)
+        return disable(system, std::format("{}: {}", system.path, error));
+    system.file = *file;
+    std::error_code ec;
+    system.mtime = std::filesystem::last_write_time(system.file, ec);
+    load(system);
+}
+
+void LuaSystems::State::addScene(SceneRequest& request)
+{
+    std::string file = projectRoot ? (*projectRoot / std::filesystem::path(request.path)).lexically_normal().string()
+                                   : request.path;
+    const SceneSlot slot = appendScene(scene, std::move(request.scene), std::move(file));
+    scenePaths[slot] = request.path;
+    indexIds();
+    log::info(std::format("Loaded scene '{}' additively", request.path));
+    playOnStart(slot);
+    for (const std::string& path : scene.settingsOf(slot).systems) // a script another loaded scene runs isn't started twice
+        if (std::ranges::find(systems, path, &System::path) == systems.end())
+            startSystem(systems.emplace_back(System{.path = path}));
+    indexIds(); // entities the inits created
+    fsm.syncAll(); // its StateMachine entities enter their initial states
+}
+
+void LuaSystems::State::unloadScene(const std::string& path)
+{
+    const SceneSlot slot = slotOf(path);
+    std::vector<std::string> kept; // the other loaded scenes' systems keep running
+    for (const LoadedScene& loaded : scene.loadedScenes())
+        if (loaded.slot != slot)
+            for (const std::string& system : scene.settingsOf(loaded.slot).systems)
+                kept.push_back(system);
+    for (const std::string& listed : scene.settingsOf(slot).systems) {
+        const auto it = std::ranges::find(systems, listed, &System::path);
+        if (it == systems.end() || std::ranges::find(kept, listed) != kept.end())
+            continue;
+        if (it->ok && it->shutdown)
+            call(*it, it->shutdown, "shutdown");
+        std::erase_if(requests, [&](const auto& entry) { return entry.second.owner == &*it; });
+        systems.erase(it);
+    }
+    scene.removeScene(slot);
+    scenePaths.erase(slot);
+    for (auto it = sources.begin(); it != sources.end();) // the unloaded entities' voices stop with them
+        if (!scene.valid(it->first)) {
+            audio.stop(it->second);
+            it = sources.erase(it);
+        } else {
+            ++it;
+        }
+    indexIds();
+    log::info(std::format("Unloaded scene '{}'", path));
+}
+
+std::string LuaSystems::State::projectPath(const std::string& file) const
+{
+    if (file.empty() || !projectRoot)
+        return file;
+    std::filesystem::path path(file);
+    if (path.is_relative())
+        path = *projectRoot / path;
+    return toProjectPath(*projectRoot, path).value_or(file);
+}
+
+std::string LuaSystems::State::luaScenePath(lua_State* L, const char* function, const std::string& path) const
+{
+    if (!projectRoot)
+        raise(L, std::format("{}: no project is active", function));
+    std::string error;
+    const std::optional<std::filesystem::path> file = resolveProjectPath(*projectRoot, path, error);
+    if (!file)
+        raise(L, std::format("{}: {}", function, error));
+    return toProjectPath(*projectRoot, *file).value_or(path);
+}
+
+std::vector<std::string> LuaSystems::State::loadedAfterRequests() const
+{
+    std::vector<std::string> loaded;
+    for (const LoadedScene& each : scene.loadedScenes())
+        loaded.push_back(scenePaths.at(each.slot));
+    for (const SceneRequest& request : sceneRequests) {
+        if (request.kind == SceneRequest::Kind::Switch)
+            loaded = {request.path};
+        else if (request.kind == SceneRequest::Kind::Add)
+            loaded.push_back(request.path);
+        else if (request.kind == SceneRequest::Kind::Unload)
+            std::erase(loaded, request.path);
+    }
+    return loaded;
+}
+
+SceneSlot LuaSystems::State::slotOf(const std::string& path) const
+{
+    for (const auto& [slot, loaded] : scenePaths)
+        if (loaded == path)
+            return slot;
+    return scene.activeSlot(); // never: requests are checked against loadedAfterRequests
 }
 
 void LuaSystems::State::tick(float dt)
@@ -803,23 +909,63 @@ void LuaSystems::State::bindApi()
     api.set_function("warn", logger(log::warn));
     api.set_function("error", logger(log::error));
 
-    // Validated now (raises at the calling line); applied by LuaSystems::tick after every update has run.
-    api.set_function("loadScene", [this](sol::this_state L, const std::string& path) {
+    // Validated now (raises at the calling line); applied by LuaSystems::tick after every update has run, in call
+    // order (docs/engine/additive-scenes.html). A switch (no {additive = true}) drops the requests before it.
+    api.set_function("loadScene", [this](sol::this_state L, const std::string& path, const sol::object& options) {
         if (inShutdown)
             return; // the session is ending
-        if (!projectRoot)
-            raise(L, "kast.loadScene: no project is active");
+        bool additive = false;
+        if (options.get_type() == sol::type::table) {
+            const sol::object flag = options.as<sol::table>()["additive"];
+            if (flag.get_type() != sol::type::lua_nil && flag.get_type() != sol::type::boolean)
+                raise(L, std::format("kast.loadScene: additive must be a boolean, got {}", toString(L, flag)));
+            additive = flag.get_type() == sol::type::boolean && flag.as<bool>();
+        } else if (options.get_type() != sol::type::lua_nil && options.get_type() != sol::type::none) {
+            raise(L, std::format("kast.loadScene: options must be a table, got {}", toString(L, options)));
+        }
+        const std::string relative = luaScenePath(L, "kast.loadScene", path);
+        if (const std::vector<std::string> loaded = loadedAfterRequests();
+            additive && std::ranges::find(loaded, relative) != loaded.end())
+            raise(L, std::format("kast.loadScene: '{}' is already loaded", relative));
         std::string error;
-        const std::optional<std::filesystem::path> file = resolveProjectPath(*projectRoot, path, error);
-        if (!file)
-            raise(L, std::format("kast.loadScene: {}", error));
         Scene loaded;
-        if (!loadScene(file->string(), loaded, error, nullptr, *projectRoot))
+        if (!loadScene(resolveProjectPath(*projectRoot, relative, error)->string(), loaded, error, nullptr, *projectRoot))
             raise(L, std::format("kast.loadScene: {}", error));
-        pending = PendingScene{toProjectPath(*projectRoot, *file).value_or(path), std::move(loaded)};
+        if (!additive)
+            sceneRequests.clear(); // the last switch wins
+        sceneRequests.push_back({additive ? SceneRequest::Kind::Add : SceneRequest::Kind::Switch, relative, std::move(loaded)});
     });
-    api.set_function("currentScene", [this]() -> sol::optional<std::string> {
-        return scenePath.empty() ? sol::nullopt : sol::optional<std::string>(scenePath);
+    api.set_function("unloadScene", [this](sol::this_state L, const std::string& path) {
+        if (inShutdown)
+            return;
+        const std::string relative = luaScenePath(L, "kast.unloadScene", path);
+        const std::vector<std::string> loaded = loadedAfterRequests();
+        if (std::ranges::find(loaded, relative) == loaded.end())
+            raise(L, std::format("kast.unloadScene: '{}' is not loaded", relative));
+        if (loaded.size() == 1)
+            raise(L, std::format("kast.unloadScene: '{}' is the only loaded scene (kast.loadScene replaces it)", relative));
+        sceneRequests.push_back({SceneRequest::Kind::Unload, relative});
+    });
+    api.set_function("setActiveScene", [this](sol::this_state L, const std::string& path) {
+        if (inShutdown)
+            return;
+        const std::string relative = luaScenePath(L, "kast.setActiveScene", path);
+        const std::vector<std::string> loaded = loadedAfterRequests();
+        if (std::ranges::find(loaded, relative) == loaded.end())
+            raise(L, std::format("kast.setActiveScene: '{}' is not loaded", relative));
+        sceneRequests.push_back({SceneRequest::Kind::Activate, relative});
+    });
+    const auto activeScene = [this]() -> sol::optional<std::string> {
+        const std::string& path = scenePaths.at(scene.activeSlot());
+        return path.empty() ? sol::nullopt : sol::optional<std::string>(path);
+    };
+    api.set_function("currentScene", activeScene);
+    api.set_function("activeScene", activeScene);
+    api.set_function("loadedScenes", [this]() {
+        sol::table list = lua.create_table();
+        for (const LoadedScene& loaded : scene.loadedScenes())
+            list.add(scenePaths.at(loaded.slot));
+        return list;
     });
 
     // Events: queued, delivered by bus.drain() after every update (see docs/engine/events.html). Subscriptions belong to the
@@ -1145,11 +1291,11 @@ AudioHandle LuaSystems::State::playSource(entt::entity entity)
     return handle;
 }
 
-void LuaSystems::State::playOnStart()
+void LuaSystems::State::playOnStart(std::optional<SceneSlot> slot)
 {
     scene.forEachDepthFirst([&](entt::entity e) {
         const AudioSource* source = scene.registry().try_get<AudioSource>(e);
-        if (!source || !source->playOnStart)
+        if (!source || !source->playOnStart || (slot && scene.sceneOf(e) != *slot))
             return;
         try {
             playSource(e);
@@ -2069,7 +2215,12 @@ void LuaSystems::launch(Scene& scene, const std::optional<std::filesystem::path>
     state_ = std::make_unique<State>(scene, projectRoot, scenePath, input, bus_, fsm_, physics_, audio_, network_, auth_,
                                      world_, chat_, gui_, display_);
     state_->playOnStart(); // before the inits, which may stop them
-    state_->init(scene.systems);
+    std::vector<std::string> systems; // every loaded scene's, in load order, each once
+    for (const LoadedScene& loaded : scene.loadedScenes())
+        for (const std::string& system : scene.settingsOf(loaded.slot).systems)
+            if (std::ranges::find(systems, system) == systems.end())
+                systems.push_back(system);
+    state_->init(systems);
 }
 
 bool LuaSystems::tick(float dt)
@@ -2097,19 +2248,34 @@ bool LuaSystems::tick(float dt)
         state_->gui->advance(dt); // floating world texts age (kast.gui.worldText)
     state_->tick(dt);
     replication_.update(dt); // sends what this frame's systems did to the local player
-    if (!state_->pending)
+    if (state_->sceneRequests.empty())
         return false;
-    PendingScene next = std::move(*state_->pending);
-    Scene& scene = state_->scene;
-    const std::optional<std::filesystem::path> projectRoot = state_->projectRoot;
-    Input* input = state_->input;
-    if (input)
-        input->clear(); // held buttons and the cursor lock belong to the old scene
-    endSession(); // old systems' shutdowns see the old scene; the Lua state and queued events are discarded
-    scene = std::move(next.scene);
-    log::info(std::format("Switched to scene '{}'", next.path));
-    launch(scene, projectRoot, next.path, input); // C++ subscriptions, the bus history and game states carry over
-    return true;
+    std::vector<SceneRequest> requests = std::move(state_->sceneRequests);
+    state_->sceneRequests.clear();
+    bool switched = false;
+    for (SceneRequest& request : requests) {
+        if (request.kind == SceneRequest::Kind::Switch) { // only ever the first
+            Scene& scene = state_->scene;
+            const std::optional<std::filesystem::path> projectRoot = state_->projectRoot;
+            Input* input = state_->input;
+            if (input)
+                input->clear(); // held buttons and the cursor lock belong to the old scene
+            endSession(); // old systems' shutdowns see the old scene; the Lua state and queued events are discarded
+            scene = std::move(request.scene);
+            log::info(std::format("Switched to scene '{}'", request.path));
+            launch(scene, projectRoot, request.path, input); // C++ subscriptions, the bus history and game states carry over
+            switched = true;
+        } else if (request.kind == SceneRequest::Kind::Add) {
+            state_->addScene(request);
+        } else if (request.kind == SceneRequest::Kind::Unload) {
+            state_->unloadScene(request.path);
+        } else {
+            state_->scene.setActiveScene(state_->slotOf(request.path));
+            log::info(std::format("Active scene '{}'", request.path));
+        }
+    }
+    ++sceneChanges_;
+    return switched;
 }
 
 void LuaSystems::endSession()
@@ -2145,6 +2311,9 @@ std::vector<LuaSystemStatus> LuaSystems::status() const
     return out;
 }
 
-std::string LuaSystems::scenePath() const { return state_ ? state_->scenePath : std::string(); }
+std::string LuaSystems::scenePath() const
+{
+    return state_ ? state_->scenePaths.at(state_->scene.activeSlot()) : std::string();
+}
 
 } // namespace kast

@@ -72,6 +72,8 @@ public:
     std::string assetFolder() const;
     // files: the prefab edit mode breadcrumb's Back.
     void drawHierarchy(Document& doc, FileActions& files);
+    // Opens scene header index's context menu on the next frame (--scene-menu, screenshots).
+    void openSceneMenu(size_t index) { sceneMenuRequest_ = index; }
     void drawInspector(Document& doc);
     void drawSystems(Document& doc);
     void drawComponents(Document& doc);
@@ -130,11 +132,15 @@ public:
 private:
     // Tree edits are deferred to the end of drawHierarchy so the child lists are not changed mid-iteration.
     struct Edit {
-        enum class Op { None, Create, CreateModel, CreatePrefab, DropPrefab, Delete, Duplicate, Reparent } op = Op::None;
+        enum class Op {
+            None, Create, CreateModel, CreatePrefab, DropPrefab, Delete, Duplicate, Reparent,
+            MoveToScene, SetActiveScene, SaveScene, RemoveScene, NewScene, OpenSceneAdditive // the scene headers
+        } op = Op::None;
         entt::entity target = entt::null;
         entt::entity parent = entt::null;
         ObjectKind kind = ObjectKind::Empty;
         std::string path; // CreateModel, DropPrefab: the dropped file
+        std::optional<kast::SceneSlot> scene; // Create (a root of it), MoveToScene and the scene header actions
     };
 
     // Assets panel file operations, deferred like Edit and applied at the end of drawAssets. Paths are
@@ -165,8 +171,10 @@ private:
     void requestAssetDelete(const Document& doc, const std::string& path);
     void applyAssetEdit(Document& doc, GuiBuilder& gui, ShaderGraphEditor& graphs, ModelPreview& preview, ZoneSession& zone);
     void assetsFailed(std::string error); // logs it and shows the Assets Error modal
-    void drawCreateItems(entt::entity parent);
-    void applyEdit(Document& doc);
+    void drawCreateItems(entt::entity parent, std::optional<kast::SceneSlot> scene = std::nullopt);
+    // An open scene's collapsible header (name, unsaved "*", active marker): a drop target and a context menu.
+    void drawSceneHeader(Document& doc, kast::SceneSlot slot, bool& open);
+    void applyEdit(Document& doc, FileActions& files);
     void drawNewComponentModal(Document& doc);
     void drawNewStateMachineModal(Document& doc);
     // The StateMachine component's Inspector body: machine and initial state combos, live state while playing. True if
@@ -221,6 +229,7 @@ private:
     bool focusRename_ = false;
     std::string renameBuffer_;
     uint32_t sceneGeneration_ = 0; // the Document::sceneGeneration last drawn
+    std::optional<size_t> sceneMenuRequest_; // openSceneMenu
 
     // Euler angles shown in the Inspector, kept while editing so they don't jump between equivalent forms.
     entt::entity eulerEntity_ = entt::null;

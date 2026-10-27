@@ -1,0 +1,248 @@
+{
+  "version": 5,
+  "entities": [
+    {
+      "id": 1,
+      "name": "Ground",
+      "parent": null,
+      "components": {
+        "Transform": {
+          "position": [
+            0.0,
+            0.0,
+            0.0
+          ],
+          "rotation": [
+            0.0,
+            0.0,
+            0.0,
+            1.0
+          ],
+          "scale": [
+            12.0,
+            1.0,
+            12.0
+          ]
+        },
+        "MeshRenderer": {
+          "primitive": "plane",
+          "material": "",
+          "castShadows": true,
+          "receiveShadows": true,
+          "giMode": "off",
+          "lightmapScale": 1.0
+        }
+      }
+    },
+    {
+      "id": 2,
+      "name": "Sun",
+      "parent": null,
+      "components": {
+        "Transform": {
+          "position": [
+            0.0,
+            4.0,
+            0.0
+          ],
+          "rotation": [
+            -0.408218,
+            -0.23457,
+            -0.109382,
+            0.875426
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "DirectionalLight": {
+          "color": [
+            1.0,
+            0.95,
+            0.9
+          ],
+          "intensity": 1.1,
+          "castShadows": true,
+          "bias": 0.05,
+          "normalBias": 1.5,
+          "maxDistance": 100.0,
+          "cascadeCount": 4,
+          "bakeMode": "indirect"
+        }
+      }
+    },
+    {
+      "id": 3,
+      "name": "Main Camera",
+      "parent": null,
+      "components": {
+        "Transform": {
+          "position": [
+            0.0,
+            2.5,
+            6.0
+          ],
+          "rotation": [
+            -0.173648,
+            0.0,
+            0.0,
+            0.984808
+          ],
+          "scale": [
+            1.0,
+            1.0,
+            1.0
+          ]
+        },
+        "Camera": {
+          "verticalFovDegrees": 60.0,
+          "nearPlane": 0.1,
+          "farPlane": 1000.0,
+          "projection": "perspective",
+          "orthographicSize": 5.0
+        }
+      }
+    }
+  ],
+  "systems": [
+    {
+      "id": "08b752fe-e26d-4bd3-b4b7-17cb487269e6",
+      "path": "scripts/additive_player.lua"
+    }
+  ],
+  "lighting": {
+    "ambientColor": [
+      1.0,
+      1.0,
+      1.0
+    ],
+    "ambientIntensity": 0.2
+  },
+  "postProcessing": {
+    "tonemapping": {
+      "enabled": false,
+      "exposure": 0.0,
+      "operator": "None"
+    },
+    "bloom": {
+      "enabled": false,
+      "threshold": 1.0,
+      "intensity": 0.5,
+      "radius": 0.5
+    },
+    "colorGrading": {
+      "enabled": false,
+      "contrast": 1.0,
+      "saturation": 1.0,
+      "colorFilter": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "temperature": 0.0
+    },
+    "vignette": {
+      "enabled": false,
+      "intensity": 0.3,
+      "smoothness": 0.5
+    },
+    "fxaa": {
+      "enabled": false
+    },
+    "fog": {
+      "enabled": false,
+      "color": [
+        0.5,
+        0.6,
+        0.7
+      ],
+      "density": 0.05,
+      "start": 0.0
+    },
+    "ssao": {
+      "enabled": false,
+      "radius": 0.5,
+      "intensity": 1.0,
+      "power": 1.5,
+      "sliceCount": 2
+    },
+    "ssr": {
+      "enabled": false,
+      "maxDistance": 50.0,
+      "thickness": 0.3,
+      "maxRoughness": 0.6,
+      "intensity": 1.0,
+      "steps": 32
+    },
+    "depthOfField": {
+      "enabled": false,
+      "focusDistance": 10.0,
+      "fStop": 2.8,
+      "focalLength": 50.0,
+      "maxCoc": 16.0
+    },
+    "volumetricFog": {
+      "enabled": false,
+      "density": 0.02,
+      "albedo": [
+        0.9,
+        0.9,
+        0.9
+      ],
+      "anisotropy": 0.2,
+      "heightFalloff": 0.1,
+      "baseHeight": 0.0,
+      "maxDistance": 100.0,
+      "temporalBlend": 0.9,
+      "lightIntensity": 1.0,
+      "ambientIntensity": 1.0
+    }
+  },
+  "sky": {
+    "mode": "procedural",
+    "top": [
+      0.1,
+      0.3,
+      0.75
+    ],
+    "horizon": [
+      0.55,
+      0.7,
+      0.85
+    ],
+    "bottom": [
+      0.2,
+      0.2,
+      0.22
+    ],
+    "faces": {
+      "px": "",
+      "nx": "",
+      "py": "",
+      "ny": "",
+      "pz": "",
+      "nz": ""
+    }
+  },
+  "physics": {
+    "gravity": [
+      0.0,
+      -9.81,
+      0.0
+    ]
+  },
+  "editor": {
+    "camera": {
+      "pivot": [
+        0.0,
+        0.75,
+        0.0
+      ],
+      "yaw": 20.0,
+      "pitch": -20.0,
+      "distance": 9.0
+    }
+  }
+}

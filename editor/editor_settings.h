@@ -16,4 +16,10 @@ nlohmann::json loadEditorSettings(const std::filesystem::path& file);
 // settings[key] if it is a string, else fallback.
 std::string editorSetting(const nlohmann::json& settings, const char* key, std::string fallback = {});
 // Sets key to value in file, keeping its other keys, creating file's folder if needed. False + error on failure.
-bool saveEditorSetting(const std::filesystem::path& file, const char* key, const std::string& value, std::string& error);
+bool saveEditorSetting(const std::filesystem::path& file, const char* key, const nlohmann::json& value, std::string& error);
+
+// The open scene set per project ("openScenes": {<project root>: Document's openScenesState}): the editor reopens it
+// the next time it opens the project. openScenesSetting is null if settings have none for projectRoot.
+nlohmann::json openScenesSetting(const nlohmann::json& settings, const std::filesystem::path& projectRoot);
+bool saveOpenScenesSetting(const std::filesystem::path& file, const std::filesystem::path& projectRoot,
+                           const nlohmann::json& state, std::string& error);

@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Additive scenes - Kast Engine</title>
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<header class="top"><a class="brand" href="../index.html">Kast Docs</a><nav><a href="../editor/index.html">Editor</a><a href="index.html">Engine</a><a href="../services/auth/index.html">Auth Server</a><a href="../services/world/index.html">World Server</a><a href="../services/chat/index.html">Chat Server</a><a href="../services/admin/index.html">Admin App</a><a href="../development/tests.html">Development</a></nav></header>
+<div class="layout">
+<nav class="side"><h2>Engine</h2><ul><li><a href="index.html">Overview</a></li><li><a href="coordinates-and-scenes.html">Coordinates and scenes</a></li><li><a href="additive-scenes.html" class="active">Additive scenes</a></li><li><a href="materials.html">Materials</a></li><li><a href="models-animation.html">Models &amp; Animation</a></li><li><a href="post-processing.html">Post-processing and fog</a></li><li><a href="ssao.html">SSAO</a></li><li><a href="ssr.html">Screen-space reflections</a></li><li><a href="depth-of-field.html">Depth of field</a></li><li><a href="volumetric-fog.html">Volumetric fog</a></li><li><a href="skybox.html">Skybox</a></li><li><a href="ibl-reflection-probes.html">Image-based lighting</a></li><li><a href="lightmaps.html">Lightmaps and GI</a></li><li><a href="voxelgi.html">VoxelGI</a></li><li><a href="sdfgi.html">SDFGI</a></li><li><a href="particles.html">Particles</a></li><li><a href="components-systems.html">Components and systems</a></li><li><a href="lua-systems.html">Lua systems</a></li><li><a href="events.html">Events</a></li><li><a href="physics.html">Physics</a></li><li><a href="terrain.html">Terrain</a></li><li><a href="audio.html">Audio</a></li><li><a href="networking.html">Networking</a></li><li><a href="online-services.html">Online Services</a></li><li><a href="lua-components.html">Lua components</a></li><li><a href="state-machines.html">State machines</a></li><li><a href="game-gui.html">Game GUI</a></li><li><a href="world-ui.html">World-space UI</a></li><li><a href="shaders.html">Shaders</a></li><li><a href="shader-graph.html">Shader graphs</a></li><li><a href="instancing-and-culling.html">Instancing and culling</a></li><li><a href="lod-and-occlusion.html">LOD and occlusion</a></li><li><a href="asset-refs.html">Asset references</a></li></ul></nav>
+<main>
+<h1 id="additive-scenes">Additive scenes</h1>
+<p>Several <code>.scene</code> files can be loaded at once, as with Unity's additive scene loading: a town, its interiors and a
+UI scene, say, each its own file, loaded and unloaded while the game runs. Lua does it with
+<code>kast.loadScene(path, {additive = true})</code> and <code>kast.unloadScene(path)</code> (in the editor's Play mode and in the built
+player); the editor opens several scenes together (<a href="../editor/multi-scene.html">Multi-scene editing</a>). The scene file
+format does not change: an additively loaded scene saves exactly as it does when loaded alone.</p>
+
+<h2 id="model">One registry, several loaded scenes</h2>
+<ul>
+<li>Every loaded scene shares the one <code>kast::Scene</code> (one EnTT registry). The renderer, physics and Lua see all their
+  entities together; there is no list of scenes to pass around.</li>
+<li>Each loaded scene file is a <code>LoadedScene</code> (<code>Scene::loadedScenes()</code>, in load order): a <em>slot</em>, the path it was
+  loaded from and its scene-level settings. Every entity carries a <code>SceneMember</code> component naming its slot, and a
+  subtree never spans two scenes. The roots are kept grouped by scene, in load order.</li>
+<li>Entity ids (<code>PersistentId</code>) are unique per file, so two files may both use id 1. In memory an entity's id is its
+  file id with its scene's slot in the high 32 bits (<code>scopedId(slot, fileId)</code>); the first loaded scene is slot 0,
+  so a scene loaded alone keeps its file's ids. Every lookup by id (selection, undo, prefab instances, Lua, the state
+  machines, Play's selection restore) is therefore scoped by scene, and saving writes the file id back
+  (<code>fileEntityId</code>). Scene files may use ids up to 4294967295.</li>
+<li>Slots are never reused while the scene runs, so an id of an unloaded scene never names an entity of a later one.</li>
+<li>A path can be loaded only once at a time; loading it again is an error. The same scene twice (instancing) is not
+  supported.</li>
+<li>Cross-scene references are not supported: moving an entity into another scene (reparenting it under one of that
+  scene's entities, or <code>Scene::moveToScene</code>) moves its whole subtree. Each moved entity keeps its file id unless the
+  target scene already uses it, in which case it gets a fresh one.</li>
+</ul>
+
+<h2 id="active-scene">The active scene</h2>
+<p>One loaded scene is <strong>active</strong>. Its settings are the <code>Scene</code>'s own (<code>systems</code>, <code>lighting</code> with the
+lightmap and SDFGI settings, <code>sky</code>, <code>postProcessing</code>, <code>physics</code>, <code>editorData</code>), so they are the ones that render
+(sky, ambient, post-processing, fog) and simulate (gravity). The other scenes' settings wait in their
+<code>LoadedScene</code> untouched, so each one saves back unchanged. <code>Scene::setActiveScene</code> swaps them;
+<code>Scene::settingsOf(slot)</code> reads any scene's.</p>
+<ul>
+<li>New entities created without a parent (<code>kast.create</code>, <code>kast.instantiate</code>, the editor's GameObject menu) go into the
+  active scene; with a parent, into the parent's scene.</li>
+<li>The first scene loaded is active. Unloading the active scene makes the first remaining one (in load order) active.</li>
+<li>Lightmap and VoxelGI bakes are made and applied as before additive scenes, for the active scene's file; baking
+  while several scenes are open is not supported (their entities are not told apart in a bake).</li>
+</ul>
+
+<h2 id="lua">From Lua</h2>
+<p>All of these are queued and applied at the <strong>end of the frame</strong>, after every system's <code>update</code>, in call order;
+each is checked at the call (raising at the calling line). Paths are project-relative. See the
+<a href="lua-systems.html">Lua systems</a> API table for the full list.</p>
+<table>
+<thead><tr><th>Function</th><th>What it does</th></tr></thead>
+<tbody>
+<tr><td><code>kast.loadScene(path, {additive = true})</code></td><td>Reads and checks <code>path</code> now (a missing or broken file raises),
+  then adds it to the loaded scenes at the end of the frame: its entities appear, its systems not already running start
+  (<code>init</code>), its <code>playOnStart</code> audio sources play and its state machines enter their initial states. Raises if
+  <code>path</code> is already loaded (or queued to be).</td></tr>
+<tr><td><code>kast.loadScene(path)</code></td><td>As before additive scenes: unloads every loaded scene and loads <code>path</code> as the only,
+  active one (the old systems' <code>shutdown</code> run, a fresh Lua session starts). It drops the requests queued before it in
+  the frame; the last such call wins.</td></tr>
+<tr><td><code>kast.unloadScene(path)</code></td><td>Shuts down the systems only that scene lists (one another loaded scene also runs keeps
+  running), destroys exactly its entities and drops it. Raises if <code>path</code> isn't loaded, or is the only loaded scene
+  (use <code>kast.loadScene</code> to replace it).</td></tr>
+<tr><td><code>kast.setActiveScene(path)</code></td><td>Makes a loaded scene the active one. Raises if it isn't loaded.</td></tr>
+<tr><td><code>kast.activeScene()</code>, <code>kast.currentScene()</code></td><td>The active scene's path (<code>nil</code> if untitled or no project).</td></tr>
+<tr><td><code>kast.loadedScenes()</code></td><td>The loaded scenes' paths, in load order (<code>""</code> for an untitled one).</td></tr>
+</tbody>
+</table>
+<p>A system runs once however many loaded scenes list it, and only shuts down when the last of them unloads. Lua entity
+ids are opaque numbers: ids of an additively loaded scene's entities carry its slot (e.g. <code>4294967297</code> for its
+entity 1), so look entities up with <code>kast.query</code> rather than hard-coding file ids.</p>
+<pre><code>-- town.lua: load the interior when the player walks in, drop it on the way out
+return {
+    update = function(dt)
+        if enteredInn() then kast.loadScene("interiors/inn.scene", {additive = true}) end
+        if leftInn() then kast.unloadScene("interiors/inn.scene") end
+    end,
+}</code></pre>
+<p>The game's other per-scene parts follow additive loads and unloads: physics creates and removes the bodies (gravity
+is the active scene's), the game GUIs load and unload their <code>UIDocument</code>s and <code>WorldUI</code>s, the unloaded entities'
+audio stops. A switch still resets everything as before. Replication keeps working on the combined entities.</p>
+
+<h2 id="cpp">From C++</h2>
+<ul>
+<li><code>kast::loadSceneAdditive(path, scene, slot, error)</code> loads a file as one more scene; <code>appendScene(into, std::move(from), path)</code>
+  moves an already-loaded <code>Scene</code> in.</li>
+<li><code>kast::saveScene(scene, slot, path, error)</code> and <code>sceneToJson(scene, slot)</code> write one loaded scene: its entities with
+  their file ids and its own settings, byte-identical to the file it came from if unchanged. Without a slot they write
+  the active scene.</li>
+<li><code>kast::scenesToJson</code> / <code>scenesFromJson</code> hold every loaded scene with its slot and path and the active one (the
+  editor's Play snapshot).</li>
+<li><code>Scene::removeScene(slot)</code> destroys a scene's entities and drops it; <code>Scene::roots(slot)</code> lists its roots.</li>
+<li><code>LuaSystems::tick</code> still returns true only for a switch; <code>LuaSystems::sceneChanges()</code> counts every applied change, for
+  hosts that hold entity handles (the editor's panels).</li>
+</ul>
+</main>
+</div>
+</body>
+</html>

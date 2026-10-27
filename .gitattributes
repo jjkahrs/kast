@@ -1,0 +1,2 @@
+# The additive scene checks compare saved scenes byte for byte with these files (saves write LF).
+tests/project/additive_*.scene text eol=lf

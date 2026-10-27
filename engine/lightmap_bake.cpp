@@ -327,6 +327,7 @@ void dilate(Image& image)
 }
 
 // Runs work(i) for i in 0..count on every hardware thread, chunk by chunk, until done or cancelled; done counts up.
+// Cancel is checked before each item: a chunk at high sample counts takes seconds.
 template <typename Work>
 void parallelFor(size_t count, LightmapBakeProgress& progress, std::atomic<size_t>& done, Work work)
 {
@@ -335,13 +336,16 @@ void parallelFor(size_t count, LightmapBakeProgress& progress, std::atomic<size_
     std::vector<std::jthread> pool;
     for (unsigned t = 0; t < threads; ++t)
         pool.emplace_back([&] {
-            while (!progress.cancel.load(std::memory_order_relaxed)) {
+            for (;;) {
                 const size_t first = next.fetch_add(kChunk);
                 if (first >= count)
                     return;
                 const size_t last = std::min(count, first + kChunk);
-                for (size_t i = first; i < last; ++i)
+                for (size_t i = first; i < last; ++i) {
+                    if (progress.cancel.load(std::memory_order_relaxed))
+                        return;
                     work(i);
+                }
                 done.fetch_add(last - first);
             }
         });

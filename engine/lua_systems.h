@@ -43,8 +43,9 @@ public:
     // network connection and request, loads the project's state machine definitions (fsms/) and every script in
     // scene.systems (paths relative to projectRoot), calls each init, then enters gameMachines (project.kast
     // "stateMachines") and every StateMachine entity. With no project every listed system is disabled ("no
-    // project"). scenePath is the scene's project-relative path, empty if unsaved or outside a project
-    // (kast.currentScene returns nil). Stops any running session first
+    // project"). With several loaded scenes (additive scenes) every one's systems run, each path once. scenePath is
+    // the active scene's project-relative path, empty if unsaved or outside a project (kast.currentScene returns nil);
+    // the others' come from their LoadedScene paths. Stops any running session first
     // (without its shutdowns: the old scene may be gone). scene and input must outlive the session; input may be
     // null (no keys down, no mouse motion). auth: the project's Online Services auth endpoint (authConfig in auth_client.h);
     // nullopt leaves kast.auth and kast.world nil. The session starts logged out.
@@ -53,19 +54,25 @@ public:
                std::optional<AuthConfig> auth = std::nullopt);
     // Publishes the network results received since the last tick, reloads scripts and state machine definitions whose
     // file changed, enters the machines of entities that gained StateMachine, then calls each enabled system's
-    // update(dt) in listed order, then drains the event bus. Then applies a scene switch queued by kast.loadScene:
-    // the old systems' shutdowns run, queued events are dropped, the loaded scene replaces scene (same object) and a
-    // new session starts for its systems (C++ subscriptions, the bus history, the game state machines' states and the
-    // network connections are kept). Returns true if the scene was switched.
+    // update(dt) in listed order, then drains the event bus. Then applies the frame's kast.loadScene / unloadScene /
+    // setActiveScene calls in call order. A switch (kast.loadScene without additive): the old systems' shutdowns
+    // run, queued events are dropped, the loaded scene replaces scene (same object) and a new session starts for its
+    // systems (C++ subscriptions, the bus history, the game state machines' states and the network connections are
+    // kept). An additive load appends the scene (Scene::loadedScenes) and inits its systems not already running; an
+    // unload shuts down the systems no other loaded scene lists and destroys its entities; see
+    // docs/engine/additive-scenes.html. Returns true if the scene was switched.
     bool tick(float dt);
+    // Bumped by every tick that applied scene requests (a switch, additive loads and unloads, active scene changes):
+    // entity handles held across it may be stale.
+    uint32_t sceneChanges() const { return sceneChanges_; }
     // Calls each enabled system's shutdown, ends the session, resets the state machines, drops queued events and
     // closes every network connection and request. Does nothing if none is running.
     void stop();
 
     bool running() const { return state_ != nullptr; }
-    // One entry per Scene::systems entry while running; empty otherwise.
+    // One entry per running system (every loaded scene's Scene::systems, each path once) while running; empty otherwise.
     std::vector<LuaSystemStatus> status() const;
-    // The running scene's project-relative path; empty if unsaved, outside a project or no session is running.
+    // The running active scene's project-relative path; empty if unsaved, outside a project or no session is running.
     std::string scenePath() const;
 
     // The session's event bus, also for C++ publishers and subscribers. Its history outlives stop().
@@ -134,6 +141,7 @@ private:
     GuiAccess* gui_ = nullptr;
     DisplayAccess* display_ = nullptr;
     std::unique_ptr<State> state_;
+    uint32_t sceneChanges_ = 0;
     StateMachines fsm_{bus_}; // declared after state_, so its Lua callbacks are released while the Lua state lives
 };
 

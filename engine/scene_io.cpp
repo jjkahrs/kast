@@ -37,6 +37,8 @@ EntityId entityId(const Json& value, const char* what)
 {
     if (!value.is_number_unsigned() || value.get<EntityId>() == 0)
         throw Invalid(std::format("\"{}\" must be a positive integer", what));
+    if (value.get<EntityId>() > kMaxFileEntityId) // the high bits name the scene in memory (scene.h scopedId)
+        throw Invalid(std::format("\"{}\" must be at most {}", what, kMaxFileEntityId));
     return value.get<EntityId>();
 }
 
@@ -902,6 +904,7 @@ void parseScene(const Json& json, Scene& out, LoadContext& context, SceneLoadRep
 }
 
 EntityId idOf(const Scene& scene, entt::entity entity) { return scene.registry().get<PersistentId>(entity).value; }
+EntityId fileIdOf(const Scene& scene, entt::entity entity) { return fileEntityId(idOf(scene, entity)); } // as saved
 
 Json parentJson(const Scene& scene, entt::entity entity)
 {
@@ -909,7 +912,7 @@ Json parentJson(const Scene& scene, entt::entity entity)
     if (parent == entt::null)
         return nullptr;
     const auto* child = scene.registry().try_get<PlaceholderChild>(entity);
-    return child && isMissingPrefab(scene, parent) ? child->parent : idOf(scene, parent);
+    return child && isMissingPrefab(scene, parent) ? child->parent : fileIdOf(scene, parent);
 }
 
 Json instanceToJson(const Scene& scene, entt::entity root, const PrefabInstance& instance)
@@ -938,22 +941,25 @@ Json instanceToJson(const Scene& scene, entt::entity root, const PrefabInstance&
             entries.push_back({{"source", base.id}, {"deleted", true}});
             continue;
         }
-        Json entry = {{"source", base.id}, {"id", idOf(scene, it->second)}};
+        Json entry = {{"source", base.id}, {"id", fileIdOf(scene, it->second)}};
         const Json overrides = diffPrefabEntity(registry.get<Name>(it->second).value,
                                                 entityComponentsToJson(registry, it->second), base, it->second == root);
         for (const auto& [key, value] : overrides.items())
             entry[key] = value;
         entries.push_back(std::move(entry));
     }
-    return {{"id", rootId}, {"name", registry.get<Name>(root).value}, {"parent", parentJson(scene, root)},
+    return {{"id", fileEntityId(rootId)}, {"name", registry.get<Name>(root).value}, {"parent", parentJson(scene, root)},
             {"prefab", instance.path}, {"instance", std::move(entries)}};
 }
 
-Json entitiesToJson(const Scene& scene)
+// slot: only that loaded scene's entities.
+Json entitiesToJson(const Scene& scene, std::optional<SceneSlot> slot = std::nullopt)
 {
     const entt::registry& registry = scene.registry();
     Json entities = Json::array();
     scene.forEachDepthFirst([&](entt::entity entity) {
+        if (slot && scene.sceneOf(entity) != *slot)
+            return;
         const EntityId id = idOf(scene, entity);
         const auto* link = registry.try_get<PrefabLink>(entity);
         if (link && link->hops.front().root != id)
@@ -965,18 +971,18 @@ Json entitiesToJson(const Scene& scene)
             }
             Json json = instance->placeholder;
             if (!json.is_object()) // a nested placeholder that an Unpack made top-level: only its root's state is known
-                json = {{"id", id}, {"name", registry.get<Name>(entity).value}, {"parent", nullptr},
+                json = {{"id", fileEntityId(id)}, {"name", registry.get<Name>(entity).value}, {"parent", nullptr},
                         {"prefab", instance->path},
-                        {"instance", Json::array({{{"id", id},
+                        {"instance", Json::array({{{"id", fileEntityId(id)},
                                                    {"components", {{"Transform", componentToJson(
                                                                         registry, entity, ComponentType(entt::resolve<Transform>()))}}}}})}};
-            json["id"] = id;
+            json["id"] = fileEntityId(id);
             json["parent"] = parentJson(scene, entity);
             entities.push_back(std::move(json));
             return;
         }
         Json json;
-        json["id"] = id;
+        json["id"] = fileEntityId(id);
         json["name"] = registry.get<Name>(entity).value;
         json["parent"] = parentJson(scene, entity);
         json["components"] = entityComponentsToJson(registry, entity);
@@ -1053,9 +1059,17 @@ entt::entity instantiatePrefab(Scene& scene, const std::shared_ptr<const PrefabA
     try {
         std::vector<Record> records;
         SceneLoadReport report;
-        const EntityId id = scene.newId();
-        expandAsset(asset, id, nullptr, asset->entities.front().name, {}, nullptr, [&] { return scene.newId(); },
-                    records, report);
+        // Expanded with file ids (what the scene file checks allow), then scoped to parent's scene.
+        const auto fresh = [&] { return fileEntityId(scene.newId(parent)); };
+        expandAsset(asset, fresh(), nullptr, asset->entities.front().name, {}, nullptr, fresh, records, report);
+        const SceneSlot slot = parent != entt::null ? scene.sceneOf(parent) : scene.activeSlot();
+        for (Record& record : records) {
+            record.id = scopedId(slot, record.id);
+            if (record.parent)
+                record.parent = scopedId(slot, *record.parent);
+            for (PrefabHop& hop : record.hops)
+                hop.root = scopedId(slot, hop.root);
+        }
         build(records, scene, parent);
         return scene.children(parent).back();
     } catch (const Invalid& e) {
@@ -1105,6 +1119,7 @@ bool loadScene(const std::string& path, Scene& out, std::string& error, SceneLoa
         Json json = Json::parse(text);
         readAssetRefs(json);
         if (sceneFromJson(json, out, reason, &local, projectRoot)) {
+            out.activeScene().path = path;
             for (const std::string& warning : local.warnings)
                 log::warn(std::format("Scene '{}': {}", path, warning));
             if (report)
@@ -1240,13 +1255,16 @@ bool skyFromJson(const Json& json, SceneSky& out, std::string& error)
     return false;
 }
 
-Json sceneToJson(const Scene& scene)
+Json sceneToJson(const Scene& scene) { return sceneToJson(scene, scene.activeSlot()); }
+
+Json sceneToJson(const Scene& scene, SceneSlot slot)
 {
+    const SceneSettings& settings = scene.settingsOf(slot);
     Json root;
     root["version"] = kSceneFileVersion;
-    root["entities"] = entitiesToJson(scene);
-    root["systems"] = scene.systems;
-    const SceneLighting& lighting = scene.lighting;
+    root["entities"] = entitiesToJson(scene, slot);
+    root["systems"] = settings.systems;
+    const SceneLighting& lighting = settings.lighting;
     root["lighting"] = {{"ambientColor", Json::array({jsonNumber(lighting.ambientColor.x), jsonNumber(lighting.ambientColor.y),
                                                       jsonNumber(lighting.ambientColor.z)})},
                         {"ambientIntensity", jsonNumber(lighting.ambientIntensity)}};
@@ -1254,19 +1272,107 @@ Json sceneToJson(const Scene& scene)
         root["lighting"]["lightmaps"] = lightmapsToJson(lighting.lightmaps);
     if (lighting.sdfgi != SceneSdfgi{}) // nor without SDFGI settings
         root["lighting"]["sdfgi"] = sdfgiToJson(lighting.sdfgi);
-    root["postProcessing"] = postProcessingToJson(scene.postProcessing);
-    root["sky"] = skyToJson(scene.sky);
-    const bx::Vec3& gravity = scene.physics.gravity;
+    root["postProcessing"] = postProcessingToJson(settings.postProcessing);
+    root["sky"] = skyToJson(settings.sky);
+    const bx::Vec3& gravity = settings.physics.gravity;
     root["physics"] = {{"gravity", Json::array({jsonNumber(gravity.x), jsonNumber(gravity.y), jsonNumber(gravity.z)})}};
-    root["editor"] = scene.editorData;
+    root["editor"] = settings.editorData;
     return root;
+}
+
+SceneSlot appendScene(Scene& into, Scene&& from, std::string path, std::optional<SceneSlot> slot)
+{
+    const SceneSlot added = into.addScene(std::move(path), std::move(static_cast<SceneSettings&>(from)), slot);
+    const entt::registry& source = from.registry();
+    entt::registry& target = into.registry();
+    const auto scoped = [added](EntityId id) { return scopedId(added, fileEntityId(id)); };
+    const auto copy = [&](auto& self, entt::entity entity, entt::entity parent) -> void {
+        const entt::entity created = into.createWithId(scoped(idOf(from, entity)), source.get<Name>(entity).value, parent);
+        copyComponents(source, entity, target, created);
+        if (const auto* link = source.try_get<PrefabLink>(entity)) {
+            PrefabLink scopedLink = *link;
+            for (PrefabHop& hop : scopedLink.hops)
+                hop.root = scoped(hop.root);
+            target.emplace<PrefabLink>(created, std::move(scopedLink));
+        }
+        if (const auto* instance = source.try_get<PrefabInstance>(entity))
+            target.emplace<PrefabInstance>(created, *instance);
+        if (const auto* child = source.try_get<PlaceholderChild>(entity))
+            target.emplace<PlaceholderChild>(created, *child);
+        for (entt::entity grandchild : from.children(entity))
+            self(self, grandchild, created);
+    };
+    for (entt::entity root : from.children(entt::null))
+        copy(copy, root, entt::null);
+    from = Scene{};
+    return added;
+}
+
+bool loadSceneAdditive(const std::string& path, Scene& into, SceneSlot& slot, std::string& error, SceneLoadReport* report,
+              const std::filesystem::path& projectRoot)
+{
+    if (into.findScene(path)) {
+        error = std::format("Scene '{}' is already loaded", path);
+        return false;
+    }
+    Scene loaded;
+    if (!loadScene(path, loaded, error, report, projectRoot))
+        return false;
+    slot = appendScene(into, std::move(loaded), path);
+    return true;
+}
+
+Json scenesToJson(const Scene& scene)
+{
+    Json scenes = Json::array();
+    for (const LoadedScene& loaded : scene.loadedScenes())
+        scenes.push_back({{"slot", loaded.slot}, {"path", loaded.path}, {"scene", sceneToJson(scene, loaded.slot)}});
+    return {{"active", scene.activeSlot()}, {"scenes", std::move(scenes)}};
+}
+
+bool scenesFromJson(const Json& json, Scene& out, std::string& error, SceneLoadReport* report,
+                    const std::filesystem::path& projectRoot)
+{
+    try {
+        Scene result;
+        bool first = true;
+        for (const Json& entry : json.at("scenes")) {
+            const SceneSlot slot = entry.at("slot").get<SceneSlot>();
+            Scene loaded;
+            SceneLoadReport local;
+            if (!sceneFromJson(entry.at("scene"), loaded, error, &local, projectRoot))
+                return false;
+            if (report)
+                report->warnings.insert(report->warnings.end(), local.warnings.begin(), local.warnings.end());
+            if (first && slot == 0) {
+                result = std::move(loaded);
+                result.activeScene().path = entry.at("path").get<std::string>();
+            } else {
+                appendScene(result, std::move(loaded), entry.at("path").get<std::string>(), slot);
+            }
+            first = false;
+        }
+        result.setActiveScene(json.at("active").get<SceneSlot>());
+        if (result.loadedScenes().front().slot == 0 && json.at("scenes").front().at("slot") != 0)
+            result.removeScene(0); // the empty one Scene starts with
+        out = std::move(result);
+        return true;
+    } catch (const Json::exception& e) {
+        error = e.what();
+    }
+    return false;
 }
 
 Json prefabToJson(const Scene& scene) { return {{"version", kSceneFileVersion}, {"entities", entitiesToJson(scene)}}; }
 
 bool saveScene(const Scene& scene, const std::string& path, std::string& error)
 {
-    Json json = sceneToJson(scene);
+    return saveScene(scene, scene.activeSlot(), path, error);
+}
+
+bool saveScene(const Scene& scene, SceneSlot slot, const std::string& path, std::string& error)
+{
+    Json json = sceneToJson(scene, slot);
     writeAssetRefs(json);
     if (!writeFileAtomic(path, json.dump(2) + '\n')) {
         error = std::format("Cannot write scene '{}'", path);

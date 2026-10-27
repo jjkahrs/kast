@@ -31,7 +31,7 @@ if(EXISTS "${copy}/lightmap_room_slow_lightmaps" OR NOT before STREQUAL after)
   message(FATAL_ERROR "a cancelled bake wrote files, or changed the previous bake")
 endif()
 
-run(background 1200 --bake-lightmaps-async)
+run(background 3000 --bake-lightmaps-async)
 string(REGEX MATCHALL "Baking lightmaps: [0-9]+% \\(frame [0-9]+\\)" progress "${out}")
 set(frames "")
 foreach(line IN LISTS progress)

@@ -106,6 +106,10 @@ Without `--project`, `--scene`, `--save-scene` or `--build`, `kast_editor` runs 
 `run.bat debug --project samples\starter-mmo` opens a project directly. Every flag:
 [Editor command line](docs/editor/command-line.html).
 
+Several scenes can be open and loaded at once ([additive scenes](docs/engine/additive-scenes.html): File > Open Scene
+Additive in the editor, `kast.loadScene(path, {additive = true})` / `kast.unloadScene(path)` from Lua; see
+[Multi-scene editing](docs/editor/multi-scene.html)).
+
 ## Rendering effects
 
 Besides the HDR post stack and distance fog ([Post-processing and fog](docs/engine/post-processing.html)), a scene can

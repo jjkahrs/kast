@@ -93,6 +93,17 @@ bool SceneState::hasPrefabInstances() const
     return !stash_.registry().view<kast::PrefabLink>().empty() || !stash_.registry().view<kast::PrefabInstance>().empty();
 }
 
+std::vector<kast::SceneSlot> SceneState::scenes() const
+{
+    std::vector<kast::SceneSlot> slots;
+    for (const Record& record : records_)
+        if (std::ranges::find(slots, kast::slotOfId(record.id)) == slots.end())
+            slots.push_back(kast::slotOfId(record.id));
+    if (settings_ && std::ranges::find(slots, settings_->slot) == slots.end())
+        slots.push_back(settings_->slot);
+    return slots;
+}
+
 std::vector<kast::EntityId> SceneState::ids() const
 {
     std::vector<kast::EntityId> ids;
@@ -132,7 +143,7 @@ void SceneState::capture(const kast::Scene& scene, const SceneScope& scope)
     for (kast::EntityId id : scope.entities)
         add(scene, id, scope.deep);
     if (scope.settings && !settings_)
-        settings_ = Settings{scene.systems, scene.lighting, scene.sky, scene.postProcessing, scene.physics};
+        settings_ = Settings{scene.activeSlot(), scene.systems, scene.lighting, scene.sky, scene.postProcessing, scene.physics};
 }
 
 void SceneState::captureLike(const kast::Scene& scene, const SceneState& shape)
@@ -168,7 +179,7 @@ void SceneState::restore(kast::Scene& scene) const
         if (record.deep)
             scene.destroy(kast::findById(scene, record.id));
     for (const Record& record : records_) {
-        if (!record.deep || !record.present)
+        if (!record.deep || !record.present || !scene.findScene(kast::slotOfId(record.id)))
             continue;
         const entt::entity parent = record.parent == 0 ? entt::null : kast::findById(scene, record.parent);
         const entt::entity entity = copyEntity(stash_, record.copy, scene, parent, true);
@@ -179,15 +190,16 @@ void SceneState::restore(kast::Scene& scene) const
         if (!record.deep && record.present && entity != entt::null)
             syncEntity(stash_.registry(), record.copy, scene.registry(), entity);
     }
-    if (settings_) {
+    if (settings_ && scene.findScene(settings_->slot)) {
+        kast::SceneSettings& target = scene.settingsOf(settings_->slot);
         // A lightmap bake isn't an undo step: undoing a settings edit made before it keeps the bake it wrote.
-        const std::string baked = scene.lighting.lightmaps.bakedPath;
-        scene.systems = settings_->systems;
-        scene.lighting = settings_->lighting;
-        scene.lighting.lightmaps.bakedPath = baked;
-        scene.sky = settings_->sky;
-        scene.postProcessing = settings_->postProcessing;
-        scene.physics = settings_->physics;
+        const std::string baked = target.lighting.lightmaps.bakedPath;
+        target.systems = settings_->systems;
+        target.lighting = settings_->lighting;
+        target.lighting.lightmaps.bakedPath = baked;
+        target.sky = settings_->sky;
+        target.postProcessing = settings_->postProcessing;
+        target.physics = settings_->physics;
     }
 }
 
@@ -245,13 +257,27 @@ void commitSceneEdit(Document& doc)
     auto after = std::make_shared<SceneState>();
     after->captureLike(doc.scene, *before);
     if (after->describe() == before->describe()) {
-        doc.dirty = !doc.history.atSavePoint(); // a no-op edit may have called markDirty
+        updateDirty(doc); // a no-op edit may have called markDirty
         return;
     }
+    // The step becomes the head of every scene it touched; undo puts back the heads it replaced.
+    const uint64_t serial = ++doc.undoSerial;
+    std::map<kast::SceneSlot, uint64_t> previous;
+    for (kast::SceneSlot slot : after->scenes())
+        previous[slot] = std::exchange(doc.sceneSaves[slot].head, serial);
     const uint32_t saves = doc.prefabSaves;
-    doc.history.push({std::move(recording.name), [&doc, before, saves] { applySceneState(doc, *before, saves); },
-                      [&doc, after, saves] { applySceneState(doc, *after, saves); }});
-    doc.dirty = true;
+    doc.history.push({std::move(recording.name),
+                      [&doc, before, saves, previous] {
+                          applySceneState(doc, *before, saves);
+                          for (const auto& [slot, head] : previous)
+                              doc.sceneSaves[slot].head = head;
+                      },
+                      [&doc, after, saves, previous, serial] {
+                          applySceneState(doc, *after, saves);
+                          for (const auto& [slot, head] : previous)
+                              doc.sceneSaves[slot].head = serial;
+                      }});
+    updateDirty(doc);
 }
 
 } // namespace
@@ -303,7 +329,7 @@ void undoScene(Document& doc)
     if (doc.history.canUndo())
         kast::log::info(std::format("Undo {}", doc.history.undoName()));
     doc.history.undo();
-    doc.dirty = !doc.history.atSavePoint();
+    updateDirty(doc);
 }
 
 void redoScene(Document& doc)
@@ -314,7 +340,7 @@ void redoScene(Document& doc)
     if (doc.history.canRedo())
         kast::log::info(std::format("Redo {}", doc.history.redoName()));
     doc.history.redo();
-    doc.dirty = !doc.history.atSavePoint();
+    updateDirty(doc);
 }
 
 void clearSceneHistory(Document& doc)
