@@ -18,10 +18,11 @@
 namespace kast {
 
 struct GuiFilter {
-    enum class Type { Blur, DropShadow, ColorMatrix } type;
+    enum class Type { Blur, DropShadow, ColorMatrix, Mask } type;
     float sigma = 0.0f;           // Blur, DropShadow
     Rml::Vector2f offset;         // DropShadow
     Rml::Matrix4f matrix;         // ColorMatrix; DropShadow: its tint (alpha to the premultiplied color)
+    Rml::LayerHandle mask = 0;    // Mask: the layer holding it, at full scale
 };
 
 namespace {
@@ -38,6 +39,7 @@ struct GuiGradient {
 constexpr uint64_t kPassState = BGFX_STATE_WRITE_RGB | BGFX_STATE_WRITE_A;
 constexpr uint64_t kOverState =
     kPassState | BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_ONE, BGFX_STATE_BLEND_INV_SRC_ALPHA);
+constexpr uint64_t kMaskState = kPassState | BGFX_STATE_BLEND_FUNC(BGFX_STATE_BLEND_ZERO, BGFX_STATE_BLEND_SRC_ALPHA);
 constexpr float kMaxPassSigma = 3.0f; // texels; fs_gui_blur.sc reaches 6 (2 sigma)
 
 void warnOnce(const std::string& message)
@@ -129,6 +131,20 @@ Rml::CompiledFilterHandle GuiRenderer::CompileFilter(const Rml::String& name, co
     return reinterpret_cast<Rml::CompiledFilterHandle>(new GuiFilter(filter));
 }
 
+Rml::CompiledFilterHandle GuiRenderer::SaveLayerAsMaskImage()
+{
+    // As RmlUi's GL3 backend (which copies the layer to a mask buffer): RmlUi pops this layer and composites the
+    // element's with the mask as its last filter, drawing nothing in between, so the layer is kept as it is.
+    if (top_ == 0 || !bgfx::isValid(pool_.layers[top_ - 1])) {
+        warnOnce("GUI mask-image has no layer to save its mask in: elements using it draw unmasked");
+        return 0;
+    }
+    maskLayer_ = top_;
+    GuiFilter filter{GuiFilter::Type::Mask};
+    filter.mask = top_;
+    return reinterpret_cast<Rml::CompiledFilterHandle>(new GuiFilter(filter));
+}
+
 void GuiRenderer::ReleaseFilter(Rml::CompiledFilterHandle filter) { delete reinterpret_cast<GuiFilter*>(filter); }
 
 Rml::LayerHandle GuiRenderer::spare(std::initializer_list<Rml::LayerHandle> busy)
@@ -136,7 +152,7 @@ Rml::LayerHandle GuiRenderer::spare(std::initializer_list<Rml::LayerHandle> busy
     // ponytail: three scratch layers above the top one cover every filter (drop-shadow needs its input, the shadow
     // and the result at once).
     Rml::LayerHandle layer = top_ + 1;
-    while (std::find(busy.begin(), busy.end(), layer) != busy.end())
+    while (layer == maskLayer_ || std::find(busy.begin(), busy.end(), layer) != busy.end())
         ++layer;
     ensureLayer(layer);
     return layer;
@@ -162,6 +178,19 @@ bool GuiRenderer::applyFilter(const GuiFilter& filter, Image& image)
             bgfx::setState(kOverState);
             drawImage(layer, image.scale, program_);
         }
+        image.layer = out;
+        return true;
+    }
+    case GuiFilter::Type::Mask: { // a copy of the element times the mask's alpha, the mask resampled to its scale
+        const Rml::LayerHandle out = spare({image.layer});
+        if (!nextView(out, true))
+            return false;
+        applyScissor(image.scale);
+        bgfx::setState(kPassState);
+        drawImage(image, image.scale, program_);
+        applyScissor(image.scale);
+        bgfx::setState(kMaskState); // the copy's color and alpha times the mask's alpha
+        drawImage({filter.mask, 1.0f}, image.scale, program_);
         image.layer = out;
         return true;
     }

@@ -42,7 +42,7 @@ add_test(NAME starter_mmo_player
           "-DEXTRA_ARGS=--no-audio-device" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/player_test.cmake")
 # GUI glows (ui/starter.rcss box-shadows): the mouse held over Log in (50 px below the Game view's centre) glows it, 3 and
 # 11 px left of its edge fading over the card, while Create an account doesn't; the HUD's ready powers glow in the GUI
-# Builder preview (scaled to the panel), above, below and not far off.
+# Builder preview (scaled to the panel), above, below and not far off (the buttons are empty there: label and wipe only).
 add_test(NAME starter_mmo_login_hover_screenshot
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${KAST_STARTER_OUT}/starter_mmo_login_hover.png"
           "-DEXTRA_ARGS=--project ${KAST_STARTER_COPY} --play --no-audio-device --sim-mouse 60,none,0,0,0,0,50" -DFRAMES=120
@@ -56,7 +56,7 @@ add_test(NAME starter_mmo_hud_glow_screenshot
           "-DEXPECT_OUTPUT=GUI layer framebuffer 1 created" "-DFORBID_OUTPUT=\\[error\\]|\\[warn\\] RmlUi|GUI filter|GUI effects need"
           -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
 add_test(NAME starter_mmo_hud_glow_probe COMMAND kast_self_check --probe-png "${KAST_STARTER_OUT}/starter_mmo_hud_glow.png"
-         0.4334,0.6285,255,170,0,6 0.4334,0.6185,84,75,51,14 0.4334,0.6405,105,82,37,14 0.4334,0.6485,43,52,64,6)
+         0.4334,0.6255,255,170,0,6 0.4334,0.6155,84,75,51,14 0.4334,0.6375,105,82,37,14 0.4334,0.6455,43,52,64,6)
 set_tests_properties(starter_mmo_login_hover_screenshot PROPERTIES FIXTURES_SETUP starter_mmo_hover_shot)
 set_tests_properties(starter_mmo_login_hover_probe PROPERTIES FIXTURES_REQUIRED starter_mmo_hover_shot)
 set_tests_properties(starter_mmo_hud_glow_screenshot PROPERTIES FIXTURES_SETUP starter_mmo_hud_shot)
@@ -79,6 +79,29 @@ add_test(NAME starter_mmo_hit_sparks
 add_test(NAME starter_mmo_lists
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSAMPLE=${KAST_STARTER}" "-DOUT=${KAST_STARTER_OUT}/lists"
           "-DSCREENSHOT=${KAST_STARTER_OUT}/starter_mmo_lists.png" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/starter_mmo_lists.cmake")
+# HUD masks (ui/hud.rml, ui/chat.rml, ui/starter.rcss), offline: a test-only driver selects the Guard, fills the chat and
+# starts Firebolt's 8 s cooldown under a 4 s GCD (cmake/starter_mmo_hud_masks.cmake). The shot (Play, 1600x1000: the
+# Game view's GUI at 321,44) is probed at GUI pixels:
+# - the round portrait (border-radius 28px + overflow: hidden, the base clip mask): the NPC placeholder's head and
+#   background inside the circle, the sky (not the image's corner) inside its box but outside the circle, its gold ring;
+# - the chat's top fade (mask-image linear-gradient over 60px): one glyph stem of "Chat line" on lines 1, 2 and 19, 133,
+#   186 and 240 (unmasked);
+# - the cooldown wipes (conic-gradient masks, about 94deg cleared on Firebolt, 172deg on Frost Nova): #454545 where the
+#   sweep has passed (from 12 o'clock clockwise), 21 under the wipe; Firebolt above-right light, above-left and
+#   below-right dark, Frost Nova above-right and below-right light, above-left dark.
+set(KAST_STARTER_HUD_MASKS_PROBES
+    342,27,240,200,160,8 326,40,160,60,40,8 319,17,175,200,235,10 316,40,255,170,0,8
+    32,276,133,135,132,10 32,293,186,186,185,10 32,576,240,240,240,10
+    499,605,69,69,69,6 419,605,21,21,21,6 499,631,21,21,21,6 639,605,69,69,69,6 639,631,69,69,69,6 559,605,21,21,21,6)
+add_test(NAME starter_mmo_hud_masks
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSAMPLE=${KAST_STARTER}" "-DOUT=${KAST_STARTER_OUT}/hud_masks"
+          "-DSCREENSHOT=${KAST_STARTER_OUT}/starter_mmo_hud_masks.png" "-DFORBID=${masks_forbid}"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/starter_mmo_hud_masks.cmake")
+kast_effects_probes(starter_hud_masks_probes 1600 1000 321 44 PROBES KAST_STARTER_HUD_MASKS_PROBES)
+add_test(NAME starter_mmo_hud_masks_probe COMMAND kast_self_check --probe-png "${KAST_STARTER_OUT}/starter_mmo_hud_masks.png"
+         ${starter_hud_masks_probes})
+set_tests_properties(starter_mmo_hud_masks PROPERTIES FIXTURES_SETUP starter_mmo_hud_masks_shot)
+set_tests_properties(starter_mmo_hud_masks_probe PROPERTIES FIXTURES_REQUIRED starter_mmo_hud_masks_shot)
 # Nameplates, damage numbers and the notice board (scripts/nameplates.lua, scripts/notice_board.lua), offline: a
 # test-only driver plays the world client's part on the bus (cmake/starter_mmo_nameplates.cmake). The shot (the Guard
 # hit for 12, the Bat dead): Tester's bar full, the Guard's 38/50 red then grey, no bar under the friendly Elder's name,

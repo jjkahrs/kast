@@ -181,6 +181,26 @@ button.class_button.selected {
     padding: 3px 12px 6px 12px;
 }
 
+/* Left of the frame: a round clip (overflow: hidden on a rounded box; RmlUi 6 takes no % radius, so half the 56px
+   border box) cuts scripts/hud.lua's portrait image to a circle inside the gold ring. */
+#target_portrait {
+    position: absolute;
+    left: -64px;
+    top: 0;
+    width: 52px;
+    height: 52px;
+    border: 2px #ffaa00;
+    border-radius: 28px;
+    overflow: hidden;
+    background-color: #313131;
+}
+
+#target_portrait_image {
+    display: block;
+    width: 52px;
+    height: 52px;
+}
+
 /* The class's powers (scripts/powers.lua): bottom centre; a ready button glows, it greys while it cools down. */
 #action_bar {
     position: absolute;
@@ -195,6 +215,7 @@ button.class_button.selected {
 
 button.power {
     display: inline-block;
+    position: relative;
     width: 136px;
     margin: 0 2px;
     padding: 10px 0;
@@ -206,6 +227,27 @@ button.power.cooling {
     background-color: #454545;
     color: #a0a0a0;
     box-shadow: none;
+}
+
+/* The cooldown wipe: dark over the part of the button still cooling down. scripts/powers.lua sets its mask-image, a
+   conic-gradient whose edge sweeps clockwise from 12 o'clock as the time left runs out; the label stays on top. */
+button.power .wipe {
+    display: none;
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    background-color: #000000b0;
+    border-radius: 5px;
+}
+
+button.power.cooling .wipe {
+    display: block;
+}
+
+button.power .label {
+    position: relative;
 }
 
 /* Narrow views (the editor's Game view): centred, the bar would cover the chat box; start it right of the chat. */
@@ -228,8 +270,10 @@ button.power.cooling {
 }
 
 /* scripts/chat.lua's lines, newest last; a long line wraps and the box grows upwards, to 20 lines' height; past that the
-   oldest lines leave at the top (flex-end keeps the newest at the bottom). Colours by kind, WoW-like. */
+   oldest lines leave at the top (flex-end keeps the newest at the bottom), fading out over its top 60px (the mask).
+   Colours by kind, WoW-like. */
 #chat_log {
+    mask-image: linear-gradient(to bottom, #00000000 0px, #000000ff 60px);
     display: flex;
     flex-direction: column;
     justify-content: flex-end;

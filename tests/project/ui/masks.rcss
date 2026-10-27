@@ -1,0 +1,33 @@
+/* Masking test cases: 100x100 boxes on black, placed at fixed GUI pixels for the masks screenshot probes. */
+body { width: 100%; height: 100%; background-color: #000000; }
+div { display: block; }
+.box { position: absolute; width: 100px; height: 100px; background-color: #ff0000; }
+
+/* mask-image sources (top row): a plus-shaped PNG, a left-to-right fade, a hard 30px circle, a quarter wedge from
+   12 to 3 o'clock (a cooldown wipe) and 10px stripes. */
+#image { left: 40px; top: 40px; mask-image: image(mask_plus.png); }
+#linear { left: 180px; top: 40px; mask-image: linear-gradient(to right, #000000ff, #00000000); }
+#radial { left: 320px; top: 40px; mask-image: radial-gradient(circle, #000000ff 30px, #00000000 31px); }
+#conic { left: 460px; top: 40px; mask-image: conic-gradient(#000000ff 0deg, #000000ff 90deg, #00000000 90deg); }
+#repeating { left: 600px; top: 40px;
+             mask-image: repeating-linear-gradient(to right, #000000ff 0px, #000000ff 10px, #00000000 10px, #00000000 20px); }
+
+/* Masks combined with filters, border-radius, a second mask and a round clip (second row). */
+#opacity { left: 40px; top: 180px; filter: opacity(0.5);
+           mask-image: conic-gradient(#000000ff 0deg, #000000ff 90deg, #00000000 90deg); }
+#blur { left: 180px; top: 180px; filter: blur(4px);
+        mask-image: conic-gradient(#000000ff 0deg, #000000ff 90deg, #00000000 90deg); }
+#rounded { left: 320px; top: 180px; border-radius: 50px; mask-image: linear-gradient(to bottom, #000000ff, #00000000); }
+#layers { left: 460px; top: 180px;
+          mask-image: linear-gradient(to right, #000000ff 0%, #000000ff 50%, #00000000 50%),
+                      linear-gradient(to bottom, #000000ff 0%, #000000ff 50%, #00000000 50%); }
+#wrap { position: absolute; left: 600px; top: 180px; width: 100px; height: 100px; border-radius: 50px; overflow: hidden; }
+#inner { width: 100px; height: 100px; background-color: #00ff00; mask-image: linear-gradient(to right, #000000ff, #00000000); }
+
+/* Shape clipping on the base layer (third row): a circle (RmlUi 6 takes no % radius) and a 45deg-rotated square,
+   each over a child that fills (or overflows) its whole bounding box. */
+#round { position: absolute; left: 40px; top: 320px; width: 100px; height: 100px; border-radius: 50px; overflow: hidden; }
+#round .fill { width: 100px; height: 100px; background-color: #00ff00; }
+#rotated { position: absolute; left: 200px; top: 320px; width: 100px; height: 100px; transform: rotate(45deg);
+           overflow: hidden; }
+#rotated .fill { margin: -50px 0 0 -50px; width: 200px; height: 200px; background-color: #0000ff; }

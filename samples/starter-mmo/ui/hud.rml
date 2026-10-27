@@ -10,13 +10,16 @@
             <p id="hud_gold" class="stat">Gold -</p>
             <p id="hud_map" class="stat">Map -</p>
         </div>
-        <!-- scripts/powers.lua: the class's three powers (server "class.powers"); a click = its key. -->
+        <!-- scripts/powers.lua: the class's three powers (server "class.powers"); a click = its key. While one cools down,
+             its wipe (a dark overlay under the label) is masked by a conic-gradient that sweeps with the time left. -->
         <div id="action_bar">
-            <button id="power_1" class="power" data-event="combat.power"></button>
-            <button id="power_2" class="power" data-event="combat.power"></button>
-            <button id="power_3" class="power" data-event="combat.power"></button>
+            <button id="power_1" class="power" data-event="combat.power"><div id="power_1_wipe" class="wipe"></div><span id="power_1_label" class="label"></span></button>
+            <button id="power_2" class="power" data-event="combat.power"><div id="power_2_wipe" class="wipe"></div><span id="power_2_label" class="label"></span></button>
+            <button id="power_3" class="power" data-event="combat.power"><div id="power_3_wipe" class="wipe"></div><span id="power_3_label" class="label"></span></button>
         </div>
         <div id="target_frame">
+            <!-- scripts/hud.lua sets the image per target kind; the frame's round clip (starter.rcss) cuts it to a circle -->
+            <div id="target_portrait"><img id="target_portrait_image" src="../textures/portraits/npc.png"/></div>
             <p id="target_name">-</p>
             <p id="target_health" class="stat">Health -</p>
         </div>

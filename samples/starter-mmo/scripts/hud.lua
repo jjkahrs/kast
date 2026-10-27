@@ -1,9 +1,10 @@
 -- HUD (ui/hud.rml): the local player's Health, Wallet and Class as the world server replicates them
 -- (components/health.lua, wallet.lua, class.lua: the same files the server loads), plus the character and map name; and
--- the target frame: the name and Health of the NPC scripts/combat.lua selected ("target.selected" / "target.cleared"),
--- hidden without one. The action bar is scripts/powers.lua's. Event-driven: it writes only when a world.component
+-- the target frame: the name, Health and portrait (PORTRAITS, by the target's kind) of the NPC scripts/combat.lua
+-- selected ("target.selected" / "target.cleared"), hidden without one. The action bar is scripts/powers.lua's. Event-driven: it writes only when a world.component
 -- update or a target change arrives (Health changes about once a second from regeneration, and once per hit).
 local MAP_NAMES = {[10] = "Meadow", [11] = "Cavern"}
+local PORTRAITS = {npc = "../textures/portraits/npc.png", player = "../textures/portraits/player.png"} -- placeholders
 local me, target
 
 local function health(data) return string.format("Health %d / %d", data.current, data.max) end
@@ -22,6 +23,7 @@ return {
         kast.subscribe("target.selected", function(e)
             target = e.entityId
             kast.gui.setText("target_name", e.name)
+            kast.gui.setAttribute("target_portrait_image", "src", PORTRAITS[e.kind] or PORTRAITS.npc)
             kast.gui.setText("target_health", e.health and health(e.health) or "Health -")
             kast.gui.setVisible("target_frame", true)
         end)

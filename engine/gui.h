@@ -29,7 +29,8 @@ namespace kast::gui {
 // pushes a layer (filter, backdrop-filter, box-shadow); each later switch of render target (layer, composite, saved
 // texture, filter pass) takes the next view, in order. Hosts reserve the whole range for each context they render in a
 // frame. A blurred box-shadow costs about 9 views the frame its texture is made (then it is cached), a blur filter
-// 3 to 5 per frame, a color filter 2.
+// 3 to 5 per frame, a color filter 2. A clip mask on the base layer (overflow on a rounded or transformed box) redirects
+// the later renders' base layer through a layer: 2 views more, and 2 more per backdrop-filter.
 constexpr bgfx::ViewId kViews = 65; // the editor fits two of these with two viewports (main.cpp) in bgfx's 256 views
 
 // Starts RmlUi; call after bgfx::init. False (logged) if it fails; GUI calls then do nothing.
@@ -107,10 +108,17 @@ public:
     float unitsPerPixel() const { return scaling_ == GuiScaling::All ? 1.0f / dpRatio_ : 1.0f; }
 
 private:
+    // Renders the base layer stays redirected through a stencil layer (GuiRenderer::begin's redirectBase) after the
+    // last one whose document asked for a clip mask on it: about a second at 60 fps, so a masked element that hides
+    // or scrolls away for a moment doesn't lose its shape for a frame when it returns, while a document that stops
+    // masking goes back to drawing straight into the target.
+    static constexpr int kBaseMaskRenders = 60;
+
     Rml::Vector2i layoutSize() const;
 
     std::string name_;
     Rml::Context* context_ = nullptr;
+    int baseMaskIdle_ = kBaseMaskRenders; // renders since a base-layer clip mask was asked for, up to kBaseMaskRenders
     int width_ = 1;
     int height_ = 1;
     float dpRatio_ = 1.0f;

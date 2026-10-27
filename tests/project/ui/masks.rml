@@ -1,0 +1,21 @@
+<rml>
+    <head>
+        <title>Masks</title>
+        <link type="text/rcss" href="masks.rcss" data-kast-id="fbdbb31f-ed0e-4cbe-a201-d5ee75de59af"/>
+    </head>
+    <body>
+        <!-- One element per masking case at a fixed spot (masks.rcss), for the masks screenshot probes. -->
+        <div id="image" class="box"></div>
+        <div id="linear" class="box"></div>
+        <div id="radial" class="box"></div>
+        <div id="conic" class="box"></div>
+        <div id="repeating" class="box"></div>
+        <div id="opacity" class="box"></div>
+        <div id="blur" class="box"></div>
+        <div id="rounded" class="box"></div>
+        <div id="layers" class="box"></div>
+        <div id="wrap"><div id="inner"></div></div>
+        <div id="round"><div class="fill"></div></div>
+        <div id="rotated"><div class="fill"></div></div>
+    </body>
+</rml>

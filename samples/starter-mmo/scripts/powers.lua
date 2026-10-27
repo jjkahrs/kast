@@ -9,7 +9,9 @@
 -- "power.rejected" {power, reason, predicted, cooldown} (scripts/player.lua stops the clip, scripts/combat.lua logs the
 -- reason). A press while the power still cools down here predicts nothing: the server's refusal is only logged.
 -- Keys typed into a GUI text field do nothing, and neither does anything while the local player is dead. A button
--- greys (class "power cooling") and counts down the seconds left while its own cooldown or the global cooldown runs.
+-- greys (class "power cooling") and counts down the seconds left while its own cooldown or the global cooldown runs,
+-- and its wipe (power_<key>_wipe) darkens the part still to go: a conic-gradient mask whose edge sweeps clockwise from
+-- 12 o'clock as that cooldown's fraction left runs out.
 -- The server's "combat.power" with caster = me starts them too unless already running (a press the client gave up on).
 -- Effects, from the server's "combat.power" for every player in view (the local one too), each a primitive like
 -- scripts/combat.lua's target marker: "bolt" a small sphere flying from the caster to the target in BOLT_SECONDS;
@@ -36,6 +38,7 @@ local readyAt = {}    -- power id -> time its own cooldown ends
 local gcdUntil = 0
 local now = 0
 local shown = {}      -- key -> the button text last written
+local swept = {}      -- key -> the wipe angle (degrees) last written
 local target          -- server id of the selected NPC
 local entities = {}   -- server id -> {entity = clone, name =}
 local bolts = {}      -- {entity, from = server id, to = server id, t = seconds}
@@ -54,7 +57,16 @@ end
 -- Seconds until power may be used again: its own cooldown or the global one, whichever ends last.
 local function cooldownLeft(power) return math.max((readyAt[power.id] or 0) - now, gcdUntil - now, 0) end
 
--- The bar: name and key per button, greyed with the seconds left while cooling down. Writes only what changed.
+-- The fraction (0-1) of that cooldown still to go: of the power's own, or of the global one if it ends last.
+local function fractionLeft(power)
+    local own, global = (readyAt[power.id] or 0) - now, gcdUntil - now
+    local left, total = own, power.cooldown
+    if global > own then left, total = global, gcd end
+    return total > 0 and math.min(math.max(left / total, 0), 1) or 0
+end
+
+-- The bar: name and key per button, greyed with the seconds left and the wipe while cooling down. Writes only what
+-- changed (the wipe's angle in whole degrees).
 local function refreshBar()
     for key = 1, 3 do
         local power = powers[key]
@@ -67,8 +79,14 @@ local function refreshBar()
         end
         if shown[key] ~= text then
             shown[key] = text
-            kast.gui.setText("power_" .. key, text)
+            kast.gui.setText("power_" .. key .. "_label", text)
             kast.gui.setAttribute("power_" .. key, "class", cooling and "power cooling" or "power")
+        end
+        local angle = cooling and math.floor(360 * (1 - fractionLeft(power)) + 0.5)
+        if angle and swept[key] ~= angle then
+            swept[key] = angle
+            kast.gui.setAttribute("power_" .. key .. "_wipe", "style", string.format(
+                "mask-image: conic-gradient(#00000000 0deg, #00000000 %ddeg, #000000ff %ddeg)", angle, angle))
         end
     end
 end
@@ -206,7 +224,7 @@ return {
             if key then use(key) end
         end)
         kast.subscribe("server.class.powers", function(e)
-            powers, gcd, readyAt, gcdUntil, shown = {}, e.gcd, {}, 0, {}
+            powers, gcd, readyAt, gcdUntil, shown, swept = {}, e.gcd, {}, 0, {}, {}
             for _, power in ipairs(e.powers) do powers[power.key] = power end
             kast.gui.setVisible("action_bar", true)
             refreshBar()

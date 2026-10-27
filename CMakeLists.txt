@@ -1822,7 +1822,8 @@ set(KAST_GAMES "switch|Switch Test|scene_a.scene|FALSE" "switch_no_systems|Switc
                "health|Health Test|health.scene|FALSE" "health_no_systems|Health Test|health.scene|TRUE"
                "events|Events Test|events.scene|FALSE" "events_no_systems|Events Test|events.scene|TRUE"
                "fsm|FSM Test|fsm.scene|FALSE|game_flow" "fsm_no_systems|FSM Test|fsm.scene|TRUE|game_flow"
-               "ui|UI Test|ui.scene|FALSE" "effects|Effects Test|ui_effects.scene|FALSE" "bind|Bind Test|ui_bind.scene|FALSE"
+               "ui|UI Test|ui.scene|FALSE" "effects|Effects Test|ui_effects.scene|FALSE"
+               "masks|Masks Test|ui_masks.scene|FALSE" "bind|Bind Test|ui_bind.scene|FALSE"
                "widgets|Widgets Test|ui_widgets.scene|FALSE" "lists|Lists Test|ui_lists.scene|FALSE"
                "richtext|Rich Text Test|ui_richtext.scene|FALSE" "guiprefab|GUI Prefab Test|ui_prefab.scene|FALSE"
                "lights|Lights Test|point_lights.scene|FALSE"
@@ -2638,7 +2639,7 @@ string(REPLACE "ui/main_menu.rml" "ui/missing.rml" ui_bad_scene "${ui_scene}")
 file(WRITE "${KAST_HEALTH_PROJECT}/ui_bad_path.scene" "${ui_bad_scene}")
 add_test(NAME ui_play_screenshot
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/ui_play.png"
-          "-DEXTRA_ARGS=--scene ${KAST_TEST_PROJECT}/ui.scene --play" "-DFORBID_OUTPUT=GUI layer framebuffer"
+          "-DEXTRA_ARGS=--scene ${KAST_TEST_PROJECT}/ui.scene --play" "-DFORBID_OUTPUT=GUI layer framebuffer|GUI base layer"
           -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
 add_test(NAME ui_play_hidden_screenshot
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/ui_play_hidden.png"
@@ -2669,7 +2670,7 @@ file(WRITE "${KAST_HEALTH_PROJECT}/ui_layer.scene" "${ui_layer_scene}")
 add_test(NAME ui_layer_screenshot
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/ui_layer.png"
           "-DEXTRA_ARGS=--scene ${KAST_HEALTH_PROJECT}/ui_layer.scene --play"
-          "-DEXPECT_OUTPUT=GUI layer framebuffer 1 created"
+          "-DEXPECT_OUTPUT=GUI layer framebuffer 1 created" "-DFORBID_OUTPUT=GUI base layer"
           -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
 set_tests_properties(ui_layer_screenshot PROPERTIES FIXTURES_SETUP ui_layer_shot)
 add_test(NAME ui_layer_probe COMMAND kast_self_check --probe-png "${CMAKE_CURRENT_BINARY_DIR}/ui_layer.png"
@@ -2703,9 +2704,18 @@ set(KAST_EFFECTS_PROBES
     50,410,0,94,225,3 230,410,104,104,104,3 410,410,29,55,88,3
     614,430,255,0,0,10 622,430,0,0,255,10 630,430,255,0,0,10 637,430,0,0,255,10
     697,411,255,0,0,10 708,422,0,255,0,10 708,437,255,0,0,10 697,448,0,255,0,10)
+# PROBES names another such list (default KAST_EFFECTS_PROBES); SCALE (in 1/10000) is the screenshot pixels per GUI
+# pixel, for a GUI drawn scaled (default 10000).
 function(kast_effects_probes out width height left top)
+  cmake_parse_arguments(arg "" "PROBES;SCALE" "" ${ARGN})
+  if(NOT arg_PROBES)
+    set(arg_PROBES KAST_EFFECTS_PROBES)
+  endif()
+  if(NOT arg_SCALE)
+    set(arg_SCALE 10000)
+  endif()
   set(probes "")
-  foreach(probe ${KAST_EFFECTS_PROBES})
+  foreach(probe ${${arg_PROBES}})
     string(REPLACE "," ";" probe "${probe}")
     list(POP_FRONT probe x y)
     set(fractions "")
@@ -2713,6 +2723,7 @@ function(kast_effects_probes out width height left top)
       list(GET axis 0 at)
       list(GET axis 1 origin)
       list(GET axis 2 size)
+      math(EXPR at "${at} * ${arg_SCALE} / 10000")
       math(EXPR n "((2 * (${at} + ${origin}) + 1) * 10000 + ${size}) / (2 * ${size})") # the pixel's center, 4 places
       string(LENGTH "${n}" digits)
       math(EXPR zeros "4 - ${digits}")
@@ -2728,7 +2739,7 @@ endfunction()
 add_test(NAME ui_effects_screenshot
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/ui_effects.png"
           "-DEXTRA_ARGS=--scene ${KAST_TEST_PROJECT}/ui_effects.scene --play" "-DEXPECT_OUTPUT=GUI layer framebuffer 1 created"
-          "-DFORBID_OUTPUT=\\[warn\\] RmlUi|GUI filter|GUI shader|GUI effects need"
+          "-DFORBID_OUTPUT=\\[warn\\] RmlUi|GUI filter|GUI shader|GUI effects need|GUI base layer"
           -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
 set_tests_properties(ui_effects_screenshot PROPERTIES FIXTURES_SETUP ui_effects_shot)
 kast_effects_probes(play_effects_probes 1280 720 257 44) # the editor's Game view
@@ -2740,6 +2751,52 @@ kast_effects_probes(player_effects_probes 1280 720 0 0)
 add_test(NAME player_effects_probe COMMAND kast_self_check --probe-png "${CMAKE_CURRENT_BINARY_DIR}/player_effects.png"
          ${player_effects_probes})
 set_tests_properties(player_effects_probe PROPERTIES FIXTURES_REQUIRED player_effects_shot)
+# GUI masks: ui_masks.scene shows ui/masks.rml (one element per masking case, placed by masks.rcss), probed like the
+# effects at GUI pixels in Play, the built player (game "masks") and the GUI Builder. The round and rotated
+# overflow: hidden boxes ask for clip masks on the base layer, so it is redirected (logged; the plain UI scenes above
+# forbid that line) from the second frame on: the screenshots are taken after 120 frames.
+# - image(mask_plus.png), a plus: its center and arm red, its corner black.
+# - linear-gradient to right: 249, 126, 4 at x = 2.5, 50.5, 98.5 of 100.
+# - radial-gradient circle, opaque to 30px: center red, 35px below and the corner black.
+# - conic-gradient 0-90deg (12 to 3 o'clock): top-right red, top-left and bottom-right black.
+# - repeating-linear-gradient 10px stripes: 5px red, 15px black.
+# - mask + opacity(0.5): 127 in the wedge, black outside; mask + blur(4px): the wedge red, the rest black.
+# - border-radius 50px + to-bottom fade: 228 near the top, 24 near the bottom, the corner black.
+# - two masks (left half, top half): their union red, bottom-right black.
+# - a masked green child in a round overflow: hidden box: ramps left to right, the box's corner black.
+# - #round (border-radius 50px, overflow: hidden over a green fill): center and 45px out green; its bounding box's
+#   corners black.
+# - #rotated (rotate(45deg), overflow: hidden over a 200x200 blue fill): center and 65px toward a tip blue; inside
+#   its bounding box but outside the diamond black.
+set(KAST_MASKS_PROBES
+    90,90,255,0,0,6 45,45,0,0,0,6 50,90,255,0,0,6
+    182,90,249,0,0,6 230,90,126,0,0,6 278,90,4,0,0,6
+    370,90,255,0,0,6 330,50,0,0,0,6 370,125,0,0,0,6
+    535,65,255,0,0,6 485,65,0,0,0,6 535,115,0,0,0,6
+    605,90,255,0,0,6 615,90,0,0,0,6
+    115,205,127,0,0,6 65,205,0,0,0,6 250,205,255,0,0,6 205,205,0,0,0,6 250,255,0,0,0,6
+    370,190,228,0,0,6 370,270,24,0,0,6 325,185,0,0,0,6
+    480,200,255,0,0,6 540,260,0,0,0,6 480,260,255,0,0,6 540,200,255,0,0,6
+    602,230,0,250,0,6 650,230,0,126,0,6 605,185,0,0,0,6
+    90,370,0,255,0,6 90,325,0,255,0,6 135,370,0,255,0,6 45,325,0,0,0,6 135,415,0,0,0,6
+    250,370,0,0,255,6 250,305,0,0,255,6 220,340,0,0,255,6 185,305,0,0,0,6 205,325,0,0,0,6 315,435,0,0,0,6)
+set(masks_forbid "\\[warn\\] RmlUi|GUI filter|GUI shader|GUI effects need|GUI mask-image")
+add_test(NAME ui_masks_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/ui_masks.png"
+          "-DEXTRA_ARGS=--scene ${KAST_TEST_PROJECT}/ui_masks.scene --play"
+          "-DEXPECT_OUTPUT=GUI base layer redirected for clip masks" "-DFORBID_OUTPUT=${masks_forbid}"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+set_tests_properties(ui_masks_screenshot PROPERTIES FIXTURES_SETUP ui_masks_shot)
+kast_effects_probes(play_masks_probes 1280 720 257 44 PROBES KAST_MASKS_PROBES)
+add_test(NAME ui_masks_probe COMMAND kast_self_check --probe-png "${CMAKE_CURRENT_BINARY_DIR}/ui_masks.png"
+         ${play_masks_probes})
+set_tests_properties(ui_masks_probe PROPERTIES FIXTURES_REQUIRED ui_masks_shot)
+# The built player logs to the test output: the same warnings fail it.
+set_tests_properties(player_masks_screenshot PROPERTIES FAIL_REGULAR_EXPRESSION "${masks_forbid}")
+kast_effects_probes(player_masks_probes 1280 720 0 0 PROBES KAST_MASKS_PROBES)
+add_test(NAME player_masks_probe COMMAND kast_self_check --probe-png "${CMAKE_CURRENT_BINARY_DIR}/player_masks.png"
+         ${player_masks_probes})
+set_tests_properties(player_masks_probe PROPERTIES FIXTURES_REQUIRED player_masks_shot)
 # A filter the renderer can't compile (a negative blur RmlUi parses but GuiRenderer rejects) warns exactly once however
 # many frames ask for it (RmlUi adds its own "Could not compile filter on element"), and the element still draws,
 # unfiltered: #3a6fb0 inside it (GUI pixel 70,60).
@@ -3036,13 +3093,25 @@ set_tests_properties(gui_builder_pick_differs PROPERTIES FIXTURES_REQUIRED "gui_
 add_test(NAME gui_builder_effects_screenshot
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/gui_builder_effects.png"
           "-DEXTRA_ARGS=--project ${KAST_TEST_PROJECT} --open-gui ui/effects.rml --size 1600x1000"
-          "-DEXPECT_OUTPUT=GUI layer framebuffer 1 created" "-DFORBID_OUTPUT=\\[warn\\] RmlUi|GUI filter|GUI shader|GUI effects need"
+          "-DEXPECT_OUTPUT=GUI layer framebuffer 1 created" "-DFORBID_OUTPUT=\\[warn\\] RmlUi|GUI filter|GUI shader|GUI effects need|GUI base layer"
           -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
 set_tests_properties(gui_builder_effects_screenshot PROPERTIES FIXTURES_SETUP gui_builder_effects_shot)
 add_test(NAME gui_builder_effects_probe COMMAND kast_self_check --probe-png "${CMAKE_CURRENT_BINARY_DIR}/gui_builder_effects.png"
          0.2184,0.1675,61,41,0,12 0.2153,0.1675,38,25,0,8 0.2103,0.1675,1,1,0,8 0.2253,0.1505,49,49,49,3
          0.4734,0.1675,247,0,8,10 0.5266,0.1675,5,0,250,10)
 set_tests_properties(gui_builder_effects_probe PROPERTIES FIXTURES_REQUIRED gui_builder_effects_shot)
+# The GUI Builder previews ui/masks.rml the same way: the 1280x720 preview drawn 0.7477x from (321, 115) of the
+# 1600x1000 window, probed at the masks' GUI pixels (KAST_MASKS_PROBES).
+add_test(NAME gui_builder_masks_screenshot
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/gui_builder_masks.png"
+          "-DEXTRA_ARGS=--project ${KAST_TEST_PROJECT} --open-gui ui/masks.rml --size 1600x1000"
+          "-DEXPECT_OUTPUT=GUI base layer redirected for clip masks" "-DFORBID_OUTPUT=${masks_forbid}"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+set_tests_properties(gui_builder_masks_screenshot PROPERTIES FIXTURES_SETUP gui_builder_masks_shot)
+kast_effects_probes(builder_masks_probes 1600 1000 321 115 PROBES KAST_MASKS_PROBES SCALE 7477)
+add_test(NAME gui_builder_masks_probe COMMAND kast_self_check --probe-png "${CMAKE_CURRENT_BINARY_DIR}/gui_builder_masks.png"
+         ${builder_masks_probes})
+set_tests_properties(gui_builder_masks_probe PROPERTIES FIXTURES_REQUIRED gui_builder_masks_shot)
 # The Inspector's UI Document (path combo, Visible) on the Main Menu entity; ui.scene survives save/load.
 add_test(NAME ui_document_inspector_screenshot
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>"

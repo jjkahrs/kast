@@ -384,11 +384,13 @@ void GuiContext::render(bgfx::ViewId view, bgfx::FrameBufferHandle frameBuffer, 
     GuiRenderer* renderer = gui::renderer();
     if (!rml || !renderer)
         return;
-    renderer->begin(view, frameBuffer, width_, height_, 1.0f / unitsPerPixel(), shareViews, clear);
+    renderer->begin(view, frameBuffer, width_, height_, 1.0f / unitsPerPixel(), shareViews, clear,
+                    baseMaskIdle_ < kBaseMaskRenders);
     gui::g_updating = true;
     rml->Update();
     gui::g_updating = false;
     rml->Render();
+    baseMaskIdle_ = renderer->end() ? 0 : std::min(baseMaskIdle_ + 1, kBaseMaskRenders);
 }
 
 void GuiContext::onEvent(const SDL_Event& event, float originX, float originY, float scale)
