@@ -64,7 +64,9 @@ void EventBus::drain() {
     pruned_.clear();
 }
 
-void EventBus::deliver(Event& event) {
+void EventBus::deliver(Event& queued) {
+    // queued lives in the dispatcher's vector: a subscriber's publish can grow it and move queued away mid-loop.
+    const Event event = std::move(queued);
     const auto bucket = subscribers_.find(event.name);
     if (bucket == subscribers_.end()) return;
     // Buckets are not erased during a drain. Index loop over the count at the start: subscriptions added by a callback

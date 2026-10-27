@@ -898,6 +898,23 @@ void checkEventBus() {
     bus.drain(); // the last "again"
     seen.clear();
 
+    // A subscriber publishing mid-delivery grows the queue the event being delivered sits in: the subscribers after it
+    // must still get that event.
+    {
+        EventBus grow;
+        std::vector<std::string> got;
+        EventBus::Subscription publisher = grow.subscribe("spawn", [&](const nlohmann::json&) {
+            for (int i = 0; i < 100; ++i) grow.publish("spawned", i);
+        });
+        EventBus::Subscription after =
+            grow.subscribe("spawn", [&](const nlohmann::json& payload) { got.push_back(payload.get<std::string>()); });
+        grow.publish("spawn", "Guard");
+        grow.publish("spawn", "Bat");
+        grow.drain();
+        check(got == std::vector<std::string>{"Guard", "Bat"},
+              "bus: a later subscriber still gets the event after an earlier one published mid-delivery");
+    }
+
     bool after = false;
     EventBus::Subscription thrower = bus.subscribe("t", [](const nlohmann::json&) { throw std::runtime_error("bad"); });
     EventBus::Subscription next = bus.subscribe("t", [&](const nlohmann::json&) { after = true; });
