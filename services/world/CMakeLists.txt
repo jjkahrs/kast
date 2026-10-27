@@ -115,6 +115,8 @@ endif()
 add_test(NAME world_self_check COMMAND world_self_check)
 # Caller-side logging cost vs a synchronous stdout write, and no lines lost under queue pressure.
 add_test(NAME log_bench COMMAND world_self_check --log-bench)
+# ns per aoi_system call: 500 / 2000 players, idle, 10% and 100% moving (printed, not checked).
+add_test(NAME aoi_bench COMMAND world_self_check --aoi-bench)
 # Lines logged right before a crash or a fatal startup error still reach stdout.
 add_test(NAME log_flush COMMAND ${CMAKE_COMMAND} -DCHECK=$<TARGET_FILE:world_self_check> -DWORLD=$<TARGET_FILE:kast_world>
   -DOUT=${CMAKE_CURRENT_BINARY_DIR} -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/log_flush.cmake)

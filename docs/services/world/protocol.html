@@ -490,6 +490,9 @@
 <ul>
 <li><strong>Grid:</strong> a uniform grid with <code>AOI_CELL_SIZE</code> m cells (default 64). A player sees every other player and every NPC on the same map within <code>AOI_VIEW_RADIUS</code> m (default 128) on the x/z plane. Entities on other maps are never seen, whatever their x/z.</li>
 <li><strong>Updates:</strong> each tick, a player gets <code>Spawn</code> for anyone who came into range and <code>Despawn</code> for anyone who left, logged out or (an NPC) was destroyed.</li>
+<li><strong>Skip rule (server cost only):</strong> the grid remembers every cell touched since the last pass (a move in or between cells, a spawn, despawn,
+  NPC create / destroy or transfer, including Lua NPC moves after the pass). A player whose view window covers no touched cell, its own
+  included, keeps its view without a recompute; what clients get is exactly what a full recompute would send.</li>
 <li><strong>NPCs:</strong> server-side entities that Lua systems create, move and destroy (<a href="lua.html">Lua components and systems</a>). Their <code>Spawn</code> has <code>kind</code> 1 and the <code>template</code> the system chose; a client shows them however it likes (the engine clones the scene entity of that name). Their moves arrive in <code>EntityMoves</code>, like a player's. NPCs see nothing themselves.</li>
 <li><strong>Entity ids:</strong> <code>entityId</code> is valid only while the entity exists. A later entity may reuse its slot with a different id.</li>
 </ul>

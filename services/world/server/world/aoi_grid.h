@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace kast {
@@ -19,20 +20,39 @@ public:
     AoiGrid(float cellSize, float viewRadius) : cell_(cellSize), radius_(viewRadius) {}
 
     CellKey cell_of(uint16_t map, float x, float z) const;
+    // insert and remove also touch c.
     void insert(uint32_t id, CellKey c);
     void remove(uint32_t id, CellKey c);
-    // Ids on map within view radius of (x, z), sorted ascending; `self` is excluded. posOf(id, x, z) gives current
-    // positions.
+    // out = ids on map within view radius of (x, z), sorted ascending; `self` is excluded. posOf(id, x, z) gives
+    // current positions. out keeps its capacity: no allocation once it is big enough.
     template <typename PosOf>
-    std::vector<uint32_t> query(uint16_t map, float x, float z, uint32_t self, PosOf&& posOf) const;
+    void query(uint16_t map, float x, float z, uint32_t self, PosOf&& posOf, std::vector<uint32_t>& out) const;
+
+    // Touched cells: every cell an insert / remove / touch hit since the last clear_touched. A view query at (x, z)
+    // can only change if a cell of its window was touched (or the viewer itself moved, which touches its own cell).
+    void touch(CellKey c) {
+        touched_.push_back(pack(c));
+        sorted_ = false;
+    }
+    // Whether any cell query(map, x, z, ...) scans was touched.
+    bool touched_near(uint16_t map, float x, float z);
+    void clear_touched() { touched_.clear(); }
 
 private:
+    // The cells query scans: lo..hi inclusive on both axes.
+    std::pair<CellKey, CellKey> window(uint16_t map, float x, float z) const {
+        return {cell_of(map, x - radius_, z - radius_), cell_of(map, x + radius_, z + radius_)};
+    }
     // map:16 | cx:24 | cz:24 (cells wrap past +-2^23, far beyond any map at a sane cell size).
     static uint64_t pack(CellKey c) {
         return (uint64_t(c.map) << 48) | (uint64_t(uint32_t(c.cx) & 0xFFFFFF) << 24) | (uint32_t(c.cz) & 0xFFFFFF);
     }
     float cell_, radius_;
     std::unordered_map<uint64_t, std::vector<uint32_t>> cells_;
+    // ponytail: a flat vector (sorted + deduplicated on the first touched_near), so it allocates only while it grows
+    // past its high-water mark; a per-cell flag if touched sets ever get large.
+    std::vector<uint64_t> touched_;
+    bool sorted_ = true;
 };
 
 // a and b sorted ascending. entered = b \ a, left = a \ b.
@@ -48,9 +68,9 @@ inline void erase_sorted(std::vector<uint32_t>& ids, uint32_t id) {
 }
 
 template <typename PosOf>
-std::vector<uint32_t> AoiGrid::query(uint16_t map, float x, float z, uint32_t self, PosOf&& posOf) const {
-    std::vector<uint32_t> out;
-    const CellKey lo = cell_of(map, x - radius_, z - radius_), hi = cell_of(map, x + radius_, z + radius_);
+void AoiGrid::query(uint16_t map, float x, float z, uint32_t self, PosOf&& posOf, std::vector<uint32_t>& out) const {
+    out.clear();
+    const auto [lo, hi] = window(map, x, z);
     const float r2 = radius_ * radius_;
     for (int32_t cx = lo.cx; cx <= hi.cx; ++cx)
         for (int32_t cz = lo.cz; cz <= hi.cz; ++cz) {
@@ -64,7 +84,6 @@ std::vector<uint32_t> AoiGrid::query(uint16_t map, float x, float z, uint32_t se
             }
         }
     std::sort(out.begin(), out.end());
-    return out;
 }
 
 } // namespace kast

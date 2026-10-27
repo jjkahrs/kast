@@ -20,6 +20,14 @@
   entry, a count past the payload, bytes past the count and a NaN position. They cover the event bus (the engine's cases), <code>kast.publish/subscribe/unsubscribe</code> and the client sends: audiences, order, rejections and timing. They also cover state machines, from definitions to C++ / Lua parity, and Lua logging
   (<code>kast.debug</code>, fields tables, their errors, <code>LOG_LEVEL</code>). Log lines are written by a background thread, so the checks call
   <code>log::flush()</code> before reading what they captured.</li>
+<li><strong>AOI differential check</strong> (<code>self_check.cpp</code>, <code>checkAoiDifferential</code>): seeded random worlds (20 seeds &times; 400 ticks;
+  players and NPCs on 3 maps, moves within a cell and across cells, logins and logouts, NPC create / destroy, transfers before
+  and after the aoi pass, Lua-style moves after it, idle ticks) run through the old full recompute (kept in the test) and through
+  <code>aoi_system</code>, which skips players with no touched cell near. After every tick each session's messages (encoded, in order),
+  every <code>Visible.ids</code> / <code>Visible.entered</code> and every NPC's <code>Viewers</code> must be identical; it prints how often each event
+  kind ran and fails if any ran 100 times or fewer. Leaving out any touch (for example the one for a move within a cell) fails it.</li>
+<li><strong>AOI cost</strong> (ctest <code>aoi_bench</code>, <code>world_self_check --aoi-bench</code>): ns per <code>aoi_system</code> call with 500 and
+  2000 players (plus a fifth as many NPCs) on a 2 km map, all idle, 10% and 100% moving a short step each tick. Printed, not checked.</li>
 <li><strong>Logging</strong> (ctest <code>log_bench</code> and <code>log_flush</code>): <code>log_bench</code> (<code>world_self_check --log-bench</code>, stdout to the null device)
   prints the caller-side ns per line of <code>log::info</code> and of the old synchronous write (printed only: one timing sample is too noisy to fail a build on),
   and checks that 4 threads &times; 100,000 lines all reach the sink. <code>log_flush</code> checks that the line logged right before a SIGSEGV on the main thread

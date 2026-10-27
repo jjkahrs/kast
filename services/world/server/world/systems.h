@@ -60,9 +60,11 @@ const map::Area* set_area(entt::registry& reg, const Maps& maps, EventBus& bus, 
 // set_area for every player that moved this tick; returns those now in a portal area, with the portal, for the
 // caller to transfer.
 std::vector<std::pair<entt::entity, map::Portal>> area_system(entt::registry& reg, const Maps& maps, EventBus& bus);
-// Moves every entity that moved this tick (Moved) to its new grid cell. aoi_system runs it first; World runs it
-// again after Lua, whose NPC moves would otherwise miss the next tick's view diff.
+// Moves every entity that moved this tick (Moved) to its new grid cell and touches its cells (old and new, or the one
+// it moved within). aoi_system runs it first; World runs it again after Lua, whose NPC moves would otherwise miss the
+// next tick's view diff: the cells touched then stay touched until that pass.
 void aoi_rebucket(entt::registry& reg, AoiGrid& grid);
+// Diffs the view of each player near a touched grid cell (see systems.cpp); the others keep theirs, entered empty.
 void aoi_system(entt::registry& reg, AoiGrid& grid, const Send& send);
 void replication_system(entt::registry& reg, const Send& send);
 // Each player's Says: rate limited (ChatLimit), sanitized, dropped with ChatNotice{muted} while the character is muted
