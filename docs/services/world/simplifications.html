@@ -17,6 +17,11 @@
 <li><strong>One database writer per realm:</strong> character limits are checked with count-then-insert on the single DB thread. Several world processes per realm would need <code>SELECT … FOR UPDATE</code>.</li>
 <li><strong>AOI touched cells:</strong> the re-bucket after Lua touches the cells of that tick's player movers again, so their
   neighbours recompute once more on the next tick (with the same result). A separate Lua-moved tag if that shows in a profile.</li>
+<li><strong>Tiles never unload:</strong> a tile that has loaded its spawns keeps them for the life of the process, as in AzerothCore
+  master; sleeping NPCs cost memory, not ticks. Despawn idle tiles on a timer if memory ever matters.</li>
+<li><strong>Sleeping patrols are swept slowly:</strong> the sample <code>systems/npcs.lua</code> checks 8 patrol entries a tick for NPCs that are gone
+  (a sleeping one is just missing from <code>kast.query</code>), so a destroyed patrol's few bytes linger for a while. A destroy event
+  if that ever matters.</li>
 <li><strong>Migration splitter:</strong> splits on <code>;</code> at the end of a line.</li>
 <li><strong>Component replication diff:</strong> only components marked dirty by a writer (<code>kast.add</code>, <code>kast.set</code>, <code>kast.remove</code>, NPC creation, login restore) are compared with the last sent value, and each change is serialized once for all its recipients. A change is still sent as the component's full JSON; delta or binary encoding if bandwidth matters.</li>
 <li><strong>Move bytes:</strong> each player gets one <code>EntityMoves</code> a tick, but at 20 bytes per move the payload is still

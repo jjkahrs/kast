@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <optional>
+#include <utility>
 
 namespace kast::world {
 namespace {
@@ -262,8 +263,7 @@ void component_replication_system(entt::registry& reg, const lua::Defs& defs, co
             }
         sendMany(to, msg);
     };
-    for (auto [e, rep] : reg.view<ReplicatedState>().each()) {
-        if (rep.dirty.empty()) continue;
+    for (auto [e, rep] : reg.view<ReplicationDirty, ReplicatedState>().each()) {
         const auto* link = reg.try_get<SessionLink>(e);
         for (const auto& [def, pool] : types) {
             if (!rep.dirty.contains(def->name)) continue;
@@ -296,6 +296,7 @@ void component_replication_system(entt::registry& reg, const lua::Defs& defs, co
         }
         rep.dirty.clear();
     }
+    reg.clear<ReplicationDirty>();
     // Viewers that saw an entity come into view this tick (after its Spawn): every aoi component it has, as sent.
     for (auto [viewer, vis, link] : reg.view<Visible, SessionLink>().each()) {
         for (uint32_t id : vis.entered) {
@@ -351,16 +352,92 @@ void spawner_system(entt::registry& reg, Spawner& spawner, size_t maxNpcs, TimeP
                     const std::function<entt::entity(const SpawnRecord&)>& create) {
     size_t npcs = reg.view<Npc>().size();
     bool capped = false;
-    for (uint32_t i = 0; i < spawner.records.size(); ++i) {
-        SpawnRecord& r = spawner.records[i];
-        if (r.alive || now < r.respawnAt) continue;
+    for (size_t i = 0; i < spawner.pending.size();) {
+        const uint32_t record = spawner.pending[i];
+        SpawnRecord& r = spawner.records[record];
+        if (now < r.respawnAt) { ++i; continue; }
         if (npcs >= maxNpcs) { capped = true; break; }
-        reg.emplace<SpawnRef>(create(r), i);
+        spawner.pending.erase(spawner.pending.begin() + i); // before create: an FSM enter callback may destroy an NPC
+        reg.emplace<SpawnRef>(create(r), record);
         r.alive = true;
         ++npcs;
     }
     if (capped && !spawner.capped) log::warn("spawns deferred: MAX_NPCS reached", {{"max", maxNpcs}});
     spawner.capped = capped;
+}
+
+namespace {
+void set_awake(entt::registry& reg, entt::entity e, bool awake) {
+    if (awake) {
+        reg.remove<Asleep>(e);
+        reg.emplace_or_replace<Awake>(e);
+    } else {
+        reg.remove<Awake>(e);
+        reg.emplace_or_replace<Asleep>(e);
+    }
+}
+
+// Every NPC whose TileRef is (map, t), found through the grid cells over the tile.
+void set_tile_awake(entt::registry& reg, const AoiGrid& grid, uint16_t map, map::TileKey t, bool awake) {
+    const float x0 = t.x * map::kTileSize, z0 = t.z * map::kTileSize;
+    grid.for_each_in(map, x0, z0, x0 + map::kTileSize, z0 + map::kTileSize, [&](uint32_t id) {
+        const auto e = from_wire(id);
+        const auto* ref = reg.try_get<TileRef>(e);
+        if (ref && ref->map == map && ref->tile == t && reg.all_of<Npc>(e)) set_awake(reg, e, awake);
+    });
+}
+
+// One player more (+1) or less (-1) near every tile within radius of center.
+void add_near(entt::registry& reg, Activation& act, Spawner& spawner, const AoiGrid& grid, TileRef center, int delta) {
+    for (int32_t dx = -act.radius; dx <= act.radius; ++dx)
+        for (int32_t dz = -act.radius; dz <= act.radius; ++dz) {
+            const map::TileKey t{center.tile.x + dx, center.tile.z + dz};
+            const uint64_t key = Activation::key(center.map, t);
+            if (delta > 0) {
+                if (act.nearCount[key]++ > 0) continue;
+                if (auto it = act.unloaded.find(key); it != act.unloaded.end()) { // near for the first time: load
+                    spawner.pending.insert(spawner.pending.end(), it->second.begin(), it->second.end());
+                    act.unloaded.erase(it);
+                }
+                set_tile_awake(reg, grid, center.map, t, true);
+            } else if (auto it = act.nearCount.find(key); it != act.nearCount.end() && --it->second == 0) {
+                act.nearCount.erase(it);
+                set_tile_awake(reg, grid, center.map, t, false);
+            }
+        }
+}
+
+TileRef tile_now(const entt::registry& reg, entt::entity e) {
+    const auto& tf = reg.get<Transform>(e);
+    return {reg.get<MapRef>(e).map, map::tile_of(tf.pos.x, tf.pos.z)};
+}
+} // namespace
+
+void activation_enter(entt::registry& reg, Activation& act, Spawner& spawner, const AoiGrid& grid, entt::entity e) {
+    const TileRef ref = reg.emplace_or_replace<TileRef>(e, tile_now(reg, e));
+    if (reg.all_of<Npc>(e)) set_awake(reg, e, act.nearCount.contains(Activation::key(ref.map, ref.tile)));
+    else add_near(reg, act, spawner, grid, ref, +1);
+}
+
+void activation_leave(entt::registry& reg, Activation& act, Spawner& spawner, const AoiGrid& grid, entt::entity e) {
+    if (const auto* ref = reg.try_get<TileRef>(e); ref && !reg.all_of<Npc>(e)) add_near(reg, act, spawner, grid, *ref, -1);
+}
+
+void activation_move(entt::registry& reg, Activation& act, Spawner& spawner, const AoiGrid& grid, entt::entity e) {
+    auto& ref = reg.get<TileRef>(e);
+    const TileRef now = tile_now(reg, e);
+    if (now.map == ref.map && now.tile == ref.tile) return;
+    const TileRef old = std::exchange(ref, now);
+    if (reg.all_of<Npc>(e)) {
+        set_awake(reg, e, act.nearCount.contains(Activation::key(now.map, now.tile)));
+        return;
+    }
+    add_near(reg, act, spawner, grid, now, +1); // the new tiles first: one near before and after never sleeps
+    add_near(reg, act, spawner, grid, old, -1);
+}
+
+void activation_system(entt::registry& reg, Activation& act, Spawner& spawner, const AoiGrid& grid) {
+    for (auto e : reg.view<Moved, TileRef>()) activation_move(reg, act, spawner, grid, e);
 }
 
 void end_of_tick_system(entt::registry& reg) { reg.clear<Moved>(); }

@@ -47,7 +47,7 @@ int main() {
     }
     nlohmann::json loadedMaps = nlohmann::json::array();
     for (const auto& [id, m] : maps.all()) loadedMaps.push_back({{"id", id}, {"name", m.name}, {"tileRects", m.tiles.size()}, {"areas", m.areas.list.size()}, {"spawns", m.spawns.size()}});
-    log::info("maps loaded", {{"mapRoot", cfg.mapRoot}, {"startMap", cfg.startMap}, {"maps", loadedMaps}});
+    log::info("maps loaded", {{"mapRoot", cfg.mapRoot}, {"startMap", cfg.startMap}, {"activationTiles", cfg.activationTiles}, {"maps", loadedMaps}});
 
     // Lua component definitions: a broken one stops the start too.
     std::error_code ec;

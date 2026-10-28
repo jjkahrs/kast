@@ -14,6 +14,7 @@
 
 #include <functional>
 #include <span>
+#include <unordered_map>
 
 namespace kast::world {
 
@@ -44,14 +45,41 @@ struct SpawnRecord {
 };
 struct Spawner {
     std::vector<SpawnRecord> records;
+    // Records on loaded tiles whose NPC is not alive and may come back, in the order they got here: a tile's
+    // records when it loads (Activation), a destroyed NPC's when it has a respawnSec.
+    std::vector<uint32_t> pending;
     bool capped = false; // MAX_NPCS hit: warned once until spawning works again
 };
 
-// Creates the NPC of every due record (create, then SpawnRef{record}). At maxNpcs NPCs it creates nothing more this
-// tick and tries again the next.
-// ponytail: always-on spawns; activate per tile near players if NPC counts grow.
+// Creates the NPC of every due pending record (create, then SpawnRef{record}). At maxNpcs NPCs it creates nothing more
+// this tick and tries again the next.
 void spawner_system(entt::registry& reg, Spawner& spawner, size_t maxNpcs, TimePoint now,
                     const std::function<entt::entity(const SpawnRecord&)>& create);
+
+// Tile activation (docs/services/world/maps.html#tile-activation). A tile is near a player when it is within radius
+// tiles of the player's tile (Chebyshev) on its map. The first time a tile is near, it loads: its spawn records join
+// Spawner::pending, for good. An NPC is Awake while its tile is near, else Asleep. Kept per (map, tile), so it can
+// split per map. Nothing here runs for an entity that stays on its tile.
+// ponytail: tiles never unload (nor does AzerothCore master), so sleeping NPCs cost memory, not ticks; despawn idle
+// tiles on a timer if memory ever matters.
+struct Activation {
+    int radius = 1;                                               // ACTIVATION_TILES
+    std::unordered_map<uint64_t, uint32_t> nearCount;             // (map, tile) -> players it is near; absent: none
+    std::unordered_map<uint64_t, std::vector<uint32_t>> unloaded; // (map, tile) -> its spawn records, until it loads
+    static uint64_t key(uint16_t map, map::TileKey t) { // map:16 | tx:24 | tz:24, as AoiGrid packs cells
+        return (uint64_t(map) << 48) | (uint64_t(uint32_t(t.x) & 0xFFFFFF) << 24) | (uint32_t(t.z) & 0xFFFFFF);
+    }
+};
+// A player or NPC entered the world (Transform, MapRef, in the grid): gives it its TileRef. A player makes the tiles
+// around it near (loading and waking them as needed); an NPC starts Awake or Asleep.
+void activation_enter(entt::registry& reg, Activation& act, Spawner& spawner, const AoiGrid& grid, entt::entity e);
+// A player is about to leave the world: the tiles only it kept near fall asleep.
+void activation_leave(entt::registry& reg, Activation& act, Spawner& spawner, const AoiGrid& grid, entt::entity e);
+// e may be on another tile or map than its TileRef says (a move or a transfer; already in its new grid cell): a
+// player's near tiles follow it (those near both before and after never sleep), an NPC wakes or sleeps by its tile.
+void activation_move(entt::registry& reg, Activation& act, Spawner& spawner, const AoiGrid& grid, entt::entity e);
+// activation_move for every entity that moved this tick (Moved), once the grid holds their new cells.
+void activation_system(entt::registry& reg, Activation& act, Spawner& spawner, const AoiGrid& grid);
 // A move off the player's map (onto an undeclared tile) is rejected like a speedhack.
 void movement_system(entt::registry& reg, const MoveRules& rules, const Maps& maps, const Send& send, TimePoint now);
 // Updates player e's AreaRef from its map and position. On a change it publishes "area.leave" for the old area, then

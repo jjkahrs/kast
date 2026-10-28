@@ -18,6 +18,7 @@ world::WorldRules world_rules(const Config& c) {
     r.saveInterval = Millis(c.saveIntervalMs);
     r.tickSeconds = 1.0f / static_cast<float>(c.tickHz);
     r.maxNpcs = c.maxNpcs;
+    r.activationTiles = static_cast<int>(c.activationTiles);
     return r;
 }
 

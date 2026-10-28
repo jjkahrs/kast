@@ -55,6 +55,24 @@ joined only by transfers. Players and NPCs on different maps never see each othe
 <li><strong>Ownership:</strong> a transfer to a tile this process does not own is refused and logged. Every loaded tile is owned for
   now; the check is the seam for running maps in several processes later.</li>
 </ul>
+<h2 id="tile-activation">Tile activation</h2>
+<p>A tile is <em>near</em> a player when it is at most <code>ACTIVATION_TILES</code> (default 1: a 3&times;3 block) tiles from the player's tile,
+counted the long way round (Chebyshev: <code>max(|dx|, |dz|)</code>), on the player's map. Like AzerothCore's grids:</p>
+<ul>
+<li><strong>Loading:</strong> the first time a tile is near any player, its <a href="npcs.html#npc-spawns">spawn file</a> entries are spawned. The tile then stays
+  loaded for the life of the process: leaving it never despawns anything, and coming back spawns nothing twice. With
+  no player online a start spawns no spawn-file NPC; the files are still all parsed and checked at startup, and a bad
+  one still refuses the start. A login loads (and spawns) at once, so <code>onEnter</code> already sees the NPCs around the
+  character; a move or transfer onto a new tile loads it for the next tick's spawner.</li>
+<li><strong>Sleep:</strong> an NPC (spawn file or <code>kast.create</code>) whose tile is near no player is <a href="npcs.html#sleep">asleep</a>: Lua systems do
+  not see it in <code>kast.query</code>, so it does not patrol and its timers in Lua do not run.</li>
+<li><strong>When:</strong> only when a player or an NPC changes tile or map (a move, a transfer, a login, a logout, a creation), never
+  per tick for those that stay put. Keyed by (map, tile).</li>
+<li><strong>Visibility:</strong> unchanged. The view radius (<code>AOI_VIEW_RADIUS</code>, 128 m) is inside the 3&times;3 block whenever it is at most
+  256 m, so an NPC a player can see is always awake. A larger radius needs <code>ACTIVATION_TILES</code> of at least radius / 256
+  (rounded up), or a far NPC in view stands still until a player comes nearer.</li>
+<li><strong>Not unloaded:</strong> tiles never unload; ground, navmesh and objects are loaded for every tile at startup as before.</li>
+</ul>
 <h2 id="ground">Ground</h2>
 <p>The server has no physics engine; it knows the ground from the same heightmaps the client stands on.</p>
 <ul>

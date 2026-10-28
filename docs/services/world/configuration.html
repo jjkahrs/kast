@@ -228,6 +228,11 @@
 <td>NPCs in the world (all maps) at once, 0–100000. <code>kast.create</code> past it raises an error</td>
 </tr>
 <tr>
+<td><code>ACTIVATION_TILES</code></td>
+<td><code>1</code></td>
+<td>Tiles around a player's tile (Chebyshev distance, 1–32) whose spawn files load and whose NPCs stay awake (<a href="maps.html#tile-activation">tile activation</a>). 1 is a 3&times;3 block; 0, a negative or not a whole number refuses the start</td>
+</tr>
+<tr>
 <td><code>CHAT_MAX_BYTES</code></td>
 <td><code>256</code></td>
 <td>UTF-8 bytes per <code>Say</code></td>

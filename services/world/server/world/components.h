@@ -4,8 +4,11 @@
 #include "aoi_grid.h"
 #include "rules.h"
 
+#include <map.h>
 #include <messages.h>
 #include <nlohmann/json.hpp>
+
+#include <entt/entity/registry.hpp>
 
 #include <map>
 #include <set>
@@ -106,8 +109,16 @@ struct ReplicatedState {
     };
     std::map<std::string, Sent, std::less<>> sent;
     std::set<std::string, std::less<>> oversize; // too big for a frame: logged once until it fits again
-    std::set<std::string, std::less<>> dirty;    // replicated components written since the last run; every writer marks
+    std::set<std::string, std::less<>> dirty;    // replicated components written since the last run (mark_dirty)
 };
+struct ReplicationDirty {}; // tag: dirty is not empty, so component_replication_system only visits these
+// How every writer marks a replicated component of e (one with a ReplicatedState) for sending.
+inline void mark_dirty(entt::registry& reg, entt::entity e, const std::string& name) {
+    if (auto* rep = reg.try_get<ReplicatedState>(e)) {
+        rep->dirty.insert(name);
+        reg.emplace_or_replace<ReplicationDirty>(e);
+    }
+}
 
 struct ScriptsLeft {}; // tag: onLeave already ran (graceful shutdown runs it for everyone first)
 
@@ -130,6 +141,17 @@ struct Viewers {
     std::vector<uint32_t> ids;
 };
 
+// The tile a player or NPC is on, as tile activation last saw it (activation_system keeps it in step with Transform).
+struct TileRef {
+    uint16_t map = 0;
+    map::TileKey tile;
+};
+
+// Every NPC is Awake or Asleep: awake while its tile is within ACTIVATION_TILES of a player on its map. kast.query
+// skips Asleep NPCs, so Lua systems leave them be; AOI and replication treat both alike.
+struct Asleep {};
+struct Awake {};
+
 // Names no Lua component may take: the Lua built-ins (read-only Character, Npc and Spawn, Transform, writable
 // StateMachine)
 // and every C++ component here, in lua/components.h and in lua/state_machines.h.
@@ -138,6 +160,7 @@ inline constexpr const char* kReservedComponentNames[] = {
     "MoveState",    "PendingMoves",    "PendingSay",   "ChatLimit",           "PendingClientEvents", "ClientEventLimit", "PendingInteracts", "MoveLock",           "AoiCell",       "Visible",
     "Viewers",      "Moved",           "Dirty",        "SaveTimer",           "ReplicatedState", "ScriptsLeft",
     "PreservedComponents", "ComponentData", "StateMachineRuntime", "MapRef",
-    "AreaRef",      "Spawn",           "SpawnRef"};
+    "AreaRef",      "Spawn",           "SpawnRef",     "TileRef",             "Asleep",        "Awake",
+    "ReplicationDirty"};
 
 } // namespace kast::world

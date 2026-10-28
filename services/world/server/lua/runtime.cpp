@@ -444,7 +444,7 @@ struct Runtime::Impl {
 
     void changed(entt::entity e, const ComponentDef& def) {
         if (def.replicate != Replicate::none) // component_replication_system diffs only what is marked
-            if (auto* rep = reg.try_get<world::ReplicatedState>(e)) rep->dirty.insert(def.name);
+            world::mark_dirty(reg, e, def.name);
         // NPCs are never saved
         if (def.persist && reg.all_of<world::CharacterRef>(e)) reg.emplace_or_replace<world::Dirty>(e);
         if (def.name == kStateMachineComponent) fsm.syncEntity(e); // a new "machine" enters its initial state now
@@ -633,6 +633,7 @@ struct Runtime::Impl {
         api = lua.create_table();
 
         // Matches are captured when query is called, in wire id order: entities gone later in the loop are skipped.
+        // Asleep NPCs (World's tile activation) are never matched.
         api.set_function("query", [this](sol::this_state L, sol::variadic_args names) {
             std::vector<Type> types;
             for (const sol::object name : names) {
@@ -646,9 +647,23 @@ struct Runtime::Impl {
             for (const Type& t : types)
                 if (const auto* c = candidates(t); c && c->size() < walk->size()) walk = c;
             std::vector<uint32_t> matches;
-            for (auto e : *walk)
-                if (transforms.contains(e) && std::ranges::all_of(types, [&](const Type& t) { return has(e, t); }))
+            const auto& asleep = reg.storage<world::Asleep>();
+            const auto match = [&](entt::entity e) {
+                if (transforms.contains(e) && !asleep.contains(e) && std::ranges::all_of(types, [&](const Type& t) { return has(e, t); }))
                     matches.push_back(wire(e));
+            };
+            // With any NPC asleep, World tags every NPC Awake or Asleep: the players (none for an NPC-only type) and
+            // the Awake NPCs may be the fewest to walk, so sleeping NPCs cost a query nothing.
+            const bool npcOnly = std::ranges::any_of(types, [](const Type& t) { return t.builtin == Builtin::npc || t.builtin == Builtin::spawn; });
+            const entt::sparse_set& players = reg.storage<world::CharacterRef>();
+            const entt::sparse_set& awake = reg.storage<world::Awake>();
+            if (!asleep.empty() && (npcOnly ? 0 : players.size()) + awake.size() < walk->size()) {
+                if (!npcOnly)
+                    for (auto e : players) match(e);
+                for (auto e : awake) match(e);
+            } else {
+                for (auto e : *walk) match(e);
+            }
             std::ranges::sort(matches);
             // nil ends the generic for.
             return std::function<sol::object()>([this, matches = std::move(matches), next = size_t{0}]() mutable {

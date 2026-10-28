@@ -11,9 +11,8 @@ namespace kast::world {
 namespace {
 // Marks every replicated component e has, for component_replication_system to send (writers outside kast mark here).
 void mark_replicated(entt::registry& reg, entt::entity e, const lua::Defs& defs) {
-    auto& rep = reg.get<ReplicatedState>(e);
     for (const auto& def : defs)
-        if (def->replicate != lua::Replicate::none && lua::pool(reg, def->name).contains(e)) rep.dirty.insert(def->name);
+        if (def->replicate != lua::Replicate::none && lua::pool(reg, def->name).contains(e)) mark_dirty(reg, e, def->name);
 }
 } // namespace
 
@@ -34,8 +33,13 @@ World::World(WorldRules rules, const Maps& maps, Send send, SendMany sendMany, S
                                float heading) { return transfer(e, {map, pos, heading}); },
             .spawn = [this](uint32_t record) { return spawner_.records.at(record).spawn; },
             .max = rules.maxNpcs}) {
+    activation_.radius = rules.activationTiles;
     for (const auto& [id, info] : maps_.all())
-        for (const map::Spawn& s : info.spawns) spawner_.records.push_back({id, &s});
+        for (const map::Spawn& s : info.spawns) {
+            activation_.unloaded[Activation::key(id, map::tile_of(s.pos[0], s.pos[2]))].push_back(
+                uint32_t(spawner_.records.size()));
+            spawner_.records.push_back({id, &s});
+        }
 }
 
 std::vector<std::string> World::load_scripts(const std::filesystem::path& luaRoot, std::vector<std::string> gameMachines) {
@@ -95,6 +99,8 @@ entt::entity World::spawn(uint32_t sessionId, const db::CharRow& row, TimePoint 
     set_area(reg_, maps_, lua_.bus(), e);
     ++population_;
     send_(sessionId, proto::EnterWorldOk{wire_id(e), map, pos, heading});
+    activation_enter(reg_, activation_, spawner_, grid_, e);
+    spawn_due(now);
     lua::restore_components(reg_, e, defs_, row.components, [&](const std::string& fix) {
         log::warn("persisted component fixed on load", {{"char", row.id}, {"fix", fix}});
     });
@@ -115,6 +121,7 @@ void World::despawn(entt::entity e) {
         log::info("client events dropped", {{"char", ch.charId}, {"count", dropped}});
     save_({ch.charId, reg_.get<MapRef>(e).map, tf.pos, tf.heading, lua::components_column(reg_, e, defs_)});
     leave_views(e);
+    activation_leave(reg_, activation_, spawner_, grid_, e);
     grid_.remove(wire_id(e), reg_.get<AoiCell>(e).cell);
     reg_.destroy(e);
     --population_;
@@ -141,6 +148,7 @@ bool World::transfer(entt::entity e, const Destination& to) {
     grid_.remove(id, cell.cell);
     cell.cell = grid_.cell_of(to.map, pos.x, pos.z);
     grid_.insert(id, cell.cell);
+    activation_move(reg_, activation_, spawner_, grid_, e);
     // Moves in flight from the old place are of the old epoch: dropped without a Correction (MapChange tells the new one).
     uint32_t epoch = 0;
     if (auto* ms = reg_.try_get<MoveState>(e)) {
@@ -175,6 +183,7 @@ entt::entity World::create_npc(std::string name, std::string templateName, std::
     reg_.emplace<Viewers>(e);
     reg_.emplace<ReplicatedState>(e);
     grid_.insert(wire_id(e), cell);
+    activation_enter(reg_, activation_, spawner_, grid_, e);
     for (const auto& [type, value] : components.items()) lua::pool(reg_, type).emplace(e, lua::ComponentData{value});
     mark_replicated(reg_, e, defs_);
     if (components.contains(lua::kStateMachineComponent)) lua_.fsm().syncEntity(e); // as kast.add + kast.set would
@@ -188,6 +197,7 @@ void World::destroy_npc(entt::entity e) {
         r.respawnAt = r.spawn->respawnSec < 0
                           ? TimePoint::max()
                           : now_ + std::chrono::duration_cast<TimePoint::duration>(std::chrono::duration<double>(r.spawn->respawnSec));
+        if (r.spawn->respawnSec >= 0) spawner_.pending.push_back(ref->record);
     }
     leave_views(e);
     grid_.remove(wire_id(e), reg_.get<AoiCell>(e).cell);
@@ -214,6 +224,16 @@ void World::leave_views(entt::entity e) {
     }
     vis.ids.clear();
     vis.entered.clear();
+}
+
+void World::spawn_due(TimePoint now) {
+    spawner_system(reg_, spawner_, rules_.maxNpcs, now, [this](const SpawnRecord& r) {
+        const auto& s = *r.spawn;
+        const lua::NpcDef* def = lua_.npc(s.npc); // load_scripts refused the start without one
+        if (!def) throw std::logic_error("spawn \"" + s.id + "\": npc \"" + s.npc + "\" not loaded");
+        return create_npc(def->name, def->templateName, r.map, proto::Vec3{s.pos[0], s.pos[1], s.pos[2]}, s.heading,
+                          def->name, def->components); // fresh definition data on every respawn
+    });
 }
 
 void World::remove_npcs() {
@@ -243,6 +263,8 @@ void World::push_interact(entt::entity e, uint32_t objectId) {
 // diff already sends the Spawns on the new map (MapChange and the old Despawns went out in transfer).
 // The spawner runs right before Lua, so a system's update already sees (and can move) the NPCs due this tick; like the
 // ones Lua creates, players get their Spawn in the next tick's aoi diff.
+// Activation runs once, after Lua's NPC moves are re-bucketed: every player and NPC that changed tile this tick (a
+// tile loading now has its NPCs spawned by the next tick's spawner). Transfers and logins activate at once.
 // Lua runs after movement and chat (it sees this tick's positions) and before replication and save (its changes go
 // out and get saved this tick). aoi stays before both replications, so a Spawn always precedes component data; the
 // NPCs Lua creates or moves out of a view show up in the next tick's aoi diff. The events Lua published are delivered
@@ -257,16 +279,11 @@ void World::tick(TimePoint now) {
     chat_system(reg_, rules_.chat, mutes_, send_, sendMany_, now, std::chrono::system_clock::now());
     client_event_in_system(reg_, lua_.bus(), now); // delivered by the drain after this tick's Lua update
     interact_system(reg_, maps_, lua_.bus());      // likewise
-    spawner_system(reg_, spawner_, rules_.maxNpcs, now, [this](const SpawnRecord& r) {
-        const auto& s = *r.spawn;
-        const lua::NpcDef* def = lua_.npc(s.npc); // load_scripts refused the start without one
-        if (!def) throw std::logic_error("spawn \"" + s.id + "\": npc \"" + s.npc + "\" not loaded");
-        return create_npc(def->name, def->templateName, r.map, proto::Vec3{s.pos[0], s.pos[1], s.pos[2]}, s.heading,
-                          def->name, def->components); // fresh definition data on every respawn
-    });
+    spawn_due(now);
     lua_.update(rules_.tickSeconds);
     lua_.drain_events();
     aoi_rebucket(reg_, grid_); // NPCs Lua moved: in their new cell for the next tick's view diff
+    activation_system(reg_, activation_, spawner_, grid_);
     replication_system(reg_, send_);
     component_replication_system(reg_, defs_, send_, sendMany_);
     client_event_system(reg_, lua_.take_client_events(), send_, sendMany_);

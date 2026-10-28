@@ -18,7 +18,26 @@ local SPEED = 3 -- m/s, a walk
 
 local now = 0
 local patrols = {} -- entity -> {target = point index, step = +1 or -1, waited = seconds, route = corners, leg = index}
+local order, sweep = {}, 0 -- the entities in patrols, and where the gone-sweep is in that list
 local rootedUntil = {} -- entity -> time it may move again
+
+-- kast.query skips sleeping NPCs (far from every player: docs/services/world/npcs.html#sleep), so an NPC missing from
+-- it keeps its patrol and goes on from there when it wakes. A few patrols a tick are checked instead, and dropped
+-- once their NPC is gone.
+-- ponytail: 8 a tick, so a destroyed patrol's entry lingers a while; a destroy event if that ever matters.
+local function sweepGone()
+    for _ = 1, 8 do
+        if #order == 0 then return end
+        sweep = sweep % #order + 1
+        local e = order[sweep]
+        if not pcall(kast.has, e, "Spawn") then -- raises for ids that are not in the world
+            patrols[e] = nil
+            order[sweep] = order[#order]
+            order[#order] = nil
+            sweep = sweep - 1
+        end
+    end
+end
 
 -- The point after target, and the direction to go on in.
 local function advance(spawn, p)
@@ -82,16 +101,17 @@ return {
         for e, at in pairs(rootedUntil) do
             if at <= now then rootedUntil[e] = nil end
         end
-        local live = {}
         for e in kast.query("Spawn") do
             local spawn = kast.get(e, "Spawn")
             if spawn.path then
                 local p = patrols[e]
-                if not p then p = {target = 1, step = 1, waited = 0} end
-                live[e] = p
+                if not p then
+                    p = {target = 1, step = 1, waited = 0}
+                    patrols[e], order[#order + 1] = p, e
+                end
                 if not rootedUntil[e] then walk(e, spawn, p, dt) end
             end
         end
-        patrols = live -- drops the NPCs that are gone
+        sweepGone()
     end,
 }

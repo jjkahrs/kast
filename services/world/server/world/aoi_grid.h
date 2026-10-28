@@ -2,6 +2,7 @@
 // Maps share one grid; the map is part of every cell key, so entities on different maps never meet.
 #pragma once
 #include <algorithm>
+#include <cmath>
 #include <cstdint>
 #include <unordered_map>
 #include <utility>
@@ -27,6 +28,17 @@ public:
     // current positions. out keeps its capacity: no allocation once it is big enough.
     template <typename PosOf>
     void query(uint16_t map, float x, float z, uint32_t self, PosOf&& posOf, std::vector<uint32_t>& out) const;
+
+    // fn(id) for every id in the cells overlapping [x0, x1) x [z0, z1) on map; a cell straddling the edge may add ids
+    // just outside it.
+    template <typename Fn>
+    void for_each_in(uint16_t map, float x0, float z0, float x1, float z1, Fn&& fn) const {
+        const CellKey lo = cell_of(map, x0, z0), hi = cell_of(map, std::nextafter(x1, x0), std::nextafter(z1, z0));
+        for (int32_t cx = lo.cx; cx <= hi.cx; ++cx)
+            for (int32_t cz = lo.cz; cz <= hi.cz; ++cz)
+                if (auto it = cells_.find(pack({map, cx, cz})); it != cells_.end())
+                    for (uint32_t id : it->second) fn(id);
+    }
 
     // Touched cells: every cell an insert / remove / touch hit since the last clear_touched. A view query at (x, z)
     // can only change if a cell of its window was touched (or the viewer itself moved, which touches its own cell).
