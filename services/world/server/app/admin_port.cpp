@@ -17,9 +17,9 @@ bool same_secret(const std::string& a, const std::string& b) {
 } // namespace
 
 AdminPort::AdminPort(asio::io_context& io, asio::ssl::context& tls, const net::SessionLimits& limits, Options options,
-                     Online online, Kick kick)
+                     Online online, Kick kick, Instances instances)
     : tls_(tls), limits_(limits), opts_(std::move(options)), online_(std::move(online)), kick_(std::move(kick)),
-      acceptor_(io) {}
+      instances_(std::move(instances)), acceptor_(io) {}
 
 void AdminPort::start() {
     const asio::ip::tcp::endpoint ep(asio::ip::make_address(opts_.host), opts_.port);
@@ -68,7 +68,7 @@ void AdminPort::on_message(net::Session& s, proto::Message&& m) {
     if (!c.ok) {
         const auto* hello = std::get_if<proto::LinkHello>(&m);
         if (!hello) return s.disconnect(proto::Code::unexpected_message);
-        if (hello->protocolVersion != proto::kProtocolVersion) return s.disconnect(proto::Code::protocol_mismatch);
+        if (hello->protocolVersion != proto::kAdminProtocolVersion) return s.disconnect(proto::Code::protocol_mismatch);
         if (!same_secret(hello->secret, opts_.secret)) { // never log the secret
             log::warn("admin port refused: wrong secret", {{"session", s.id()}, {"remote", s.remote()}});
             return s.disconnect(proto::Code::invalid_token);
@@ -84,6 +84,16 @@ void AdminPort::on_message(net::Session& s, proto::Message&& m) {
         proto::AdminOnline chunk;
         for (size_t i = 0; i < all.size(); i += proto::AdminOnline::kMaxEntries) {
             const size_t end = std::min(all.size(), i + proto::AdminOnline::kMaxEntries);
+            chunk.entries.assign(all.begin() + i, all.begin() + end);
+            chunk.more = end < all.size();
+            s.send(chunk);
+        }
+        if (all.empty()) s.send(chunk);
+    } else if (std::holds_alternative<proto::AdminInstancesReq>(m)) {
+        const auto all = instances_();
+        proto::AdminInstances chunk;
+        for (size_t i = 0; i < all.size(); i += proto::AdminInstances::kMaxEntries) {
+            const size_t end = std::min(all.size(), i + proto::AdminInstances::kMaxEntries);
             chunk.entries.assign(all.begin() + i, all.begin() + end);
             chunk.more = end < all.size();
             s.send(chunk);

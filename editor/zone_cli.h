@@ -20,7 +20,8 @@ namespace zone_cli {
 constexpr const char* kUsage =
     "Zone edits (need --project or --scene), run in order: --map folder | --new-map folder[,W,H[,id]] --falloff F "
     "--sculpt x,z,radius,metres (negative lowers) --flatten x,z,radius,height[,fraction] --height-range min,max "
-    "--map-id N --material path --import-png tx,tz,file --export-png tx,tz,file "
+    "--map-id N --material path --instance maxPlayers,emptyTimeoutSec,exitMap,x,y,z[,heading] --world-map "
+    "--import-png tx,tz,file --export-png tx,tz,file "
     "--add-area id,priority,x0,z0,x1,z1 --add-polygon id,priority,x,z,x,z,x,z... --area-parent id,parent "
     "--area-portal id,map,x,y,z,heading --move-area-vertex id,i,x,z --delete-area id "
     "--add-spawn id,npc,x,z[,heading[,respawnSec]] --move-spawn id,x,z --delete-spawn id "

@@ -194,6 +194,19 @@ void checkCodecRoundTrip() {
     roundtrip(AdminKick{0, 9, ""}, "AdminKick by character");
     roundtrip(AdminKicked{2}, "AdminKicked");
     check(encode(Message{AdminKicked{0x01020304}}) == std::vector<uint8_t>{4, 0, 0x03, 0x03, 4, 3, 2, 1}, "AdminKicked bytes");
+    roundtrip(AdminInstancesReq{}, "AdminInstancesReq");
+    roundtrip(AdminInstances{}, "AdminInstances empty");
+    roundtrip(AdminInstances{true, {{1, "Start", 0, "", 3, 40, 1700000000123ull, 0}, {6, "Crypt", 77, "party-7", 2, 1, 5, 6}}},
+              "AdminInstances");
+    check(kAdminProtocolVersion == 10 && kProtocolVersion == 9, "admin protocol 10, game protocol still 9");
+    // map u16, name str, instance u32, key str, players u32, npcs u32, createdAtMs u64, emptySinceMs u64
+    check(encode(Message{AdminInstances{false, {{6, "C", 0x01020304, "k", 2, 3, 5, 6}}}}) ==
+              std::vector<uint8_t>{39, 0, 0x05, 0x03, 0, 1, 0, 6, 0, 1, 0, 'C', 4, 3, 2, 1, 1, 0, 'k', 2, 0, 0, 0, 3, 0, 0, 0,
+                                   5, 0, 0, 0, 0, 0, 0, 0, 6, 0, 0, 0, 0, 0, 0, 0},
+          "AdminInstances bytes");
+    check(std::string(opcode_name(Opcode::AdminInstancesReq)) == "AdminInstancesReq" &&
+              std::string(opcode_name(Opcode::AdminInstances)) == "AdminInstances",
+          "admin instances opcode names");
     Message adminOut;
     std::vector<uint8_t> kickNone(18, 0), kickBoth(18, 0);
     kickBoth[0] = kickBoth[8] = 1;
@@ -1422,13 +1435,15 @@ int aoi_bench() {
 namespace parallel_diff {
 using namespace kast::world;
 namespace fs = std::filesystem;
-constexpr uint16_t kMaps = 4;
-constexpr float kSide = 512; // 2 x 2 tiles per map
+constexpr uint16_t kMaps = 4;     // world maps 1..4
+constexpr uint16_t kInstance = 5; // an instance map: maxPlayers 3, emptyTimeoutSec 1, exit on map 1
+constexpr float kSide = 512;      // 2 x 2 tiles per map
 
 // The Lua root: an aoi + persisted component every character gets, a spawn NPC definition, a game machine, and one
 // system that, on its own seeded generator (Lua's math.random is not used), moves NPCs, creates them (here and on
 // other maps; past MAX_NPCS the error is caught), destroys and transfers NPCs and players, sets components, posts to
-// one map or "all", answers posts with a broadcast, sends client events and changes the game machine.
+// one map or "all", answers posts with a broadcast, sends client events and changes the game machine. Its instanceKey
+// picks one of 3 keys or none (a new copy), kast.transfer's instance = one of 3; instance.full goes back to the player.
 constexpr const char* kSystem = R"lua(
 local seed, tick = 0, 0
 local function rnd(n) seed = (seed * 16807) % 2147483647 ; return seed % n end
@@ -1440,6 +1455,13 @@ end
 return {
     init = function()
         kast.subscribe("ping", function(p) kast.broadcast("pinged", {from = p.from, n = p.data.n}) end)
+        kast.subscribe("instance.full", function(p) kast.sendTo(p.entity, "full", {key = p.key, map = p.map}) end)
+        local i = kast.map.instance()
+        if i then kast.broadcast("copy", {id = i.id, key = i.key}) end
+    end,
+    instanceKey = function(e, map)
+        local k = rnd(4)
+        if k > 0 then return "k" .. k end
     end,
     onEnter = function(e) kast.add(e, "Hp") end,
     update = function()
@@ -1461,6 +1483,10 @@ return {
         if #npcs > 8 and rnd(4) == 0 then pcall(kast.destroy, npcs[rnd(#npcs) + 1]) end -- maybe gone already
         if #npcs > 0 and rnd(6) == 0 then pcall(kast.transfer, npcs[rnd(#npcs) + 1], rnd(4) + 1, spot()) end
         if #players > 0 and rnd(25) == 0 then pcall(kast.transfer, players[rnd(#players) + 1], rnd(4) + 1, spot()) end
+        if #players > 0 and rnd(12) == 0 then
+            pcall(kast.transfer, players[rnd(#players) + 1], {map = 5, position = spot(), instance = "k" .. (rnd(3) + 1)})
+        end
+        if #npcs > 0 and rnd(40) == 0 then pcall(kast.transfer, npcs[rnd(#npcs) + 1], 5, spot()) end
         for i = 1, #players do
             if rnd(4) == 0 then pcall(kast.set, players[i], "Hp", {cur = rnd(100)}) end
         end
@@ -1473,21 +1499,29 @@ return {
 }
 )lua";
 
-// Map i: 2 x 2 tiles, 10 Mob spawns (respawn after 2 s) and a portal area at (400..410, 400..410) to map i % 4 + 1.
+// Map i: 2 x 2 tiles, 10 Mob spawns (respawn after 2 s) and a portal area at (400..410, 400..410) to map i % 4 + 1;
+// maps 1..4 also a "crypt" portal at (200..210, 200..210) into instance map 5, whose door leads to map 1.
 Maps diff_maps() {
     Maps maps;
-    for (uint16_t id = 1; id <= kMaps; ++id) {
+    for (uint16_t id = 1; id <= kInstance; ++id) {
         map::MapInfo m;
         m.id = id;
         m.name = "diff" + std::to_string(id);
         m.tiles = {{0, 0, 1, 1}};
         m.spawn = {kSide / 2, 0, kSide / 2};
+        if (id == kInstance) {
+            m.type = map::MapType::Instance;
+            m.maxPlayers = 3;
+            m.emptyTimeoutSec = 1;
+            m.exit = map::Portal{1, {kSide / 2, 0, kSide / 2}, 0};
+        }
         for (int i = 0; i < 10; ++i)
             m.spawns.push_back({"m" + std::to_string(i), "Mob", {float(30 + 45 * i), 0, float(480 - 40 * i)}, 0, 2, {}, ""});
         std::string err;
         const auto areas = map::parse_areas(nlohmann::json::parse(std::format(
-            R"({{"version":1,"areas":[{{"id":"door","rect":[400,400,410,410],"portal":{{"map":{},"pos":[100,0,100]}}}}]}})",
-            id % kMaps + 1)), err);
+            R"({{"version":1,"areas":[{{"id":"door","rect":[400,400,410,410],"portal":{{"map":{},"pos":[100,0,100]}}}}{}]}})",
+            id == kInstance ? 1 : id % kMaps + 1,
+            id == kInstance ? "" : R"(,{"id":"crypt","rect":[200,200,210,210],"portal":{"map":5,"pos":[100,0,100]}})")), err);
         if (areas) m.areas = *areas;
         maps.add(m);
     }
@@ -1530,8 +1564,8 @@ struct Run {
                     for (uint32_t sid : sids) sent[sid].push_back(proto::encode(m));
                 },
                 [this](const db::CharSave& s) {
-                    saves.push_back(std::format("{} {} {} {} {} {} {}", s.charId, s.mapId, s.pos.x, s.pos.y, s.pos.z,
-                                                s.heading, s.components.value_or("-")));
+                    saves.push_back(std::format("{} {}/{} {} {} {} {} {}", s.charId, s.mapId, s.instanceId, s.pos.x,
+                                                s.pos.y, s.pos.z, s.heading, s.components.value_or("-")));
                 },
                 lua::load_component_defs(lua.root, world::kReservedComponentNames).defs),
           rng(seed) {}
@@ -1546,7 +1580,8 @@ struct Run {
 
 struct Counts {
     int logins = 0, logouts = 0, moves = 0, corrections = 0, says = 0, transfers = 0, creates = 0, destroys = 0,
-        mapChanges = 0, spawns = 0, serverEvents = 0, componentUpdates = 0, saves = 0;
+        mapChanges = 0, spawns = 0, serverEvents = 0, componentUpdates = 0, saves = 0, copiesMade = 0,
+        copiesDestroyed = 0, fullRefusals = 0, copyLogins = 0;
 };
 
 // Between two ticks, as GameServer would: logins (some next to a portal), logouts, moves (now and then a speedhack),
@@ -1557,9 +1592,16 @@ void drive(Run& r, TimePoint now, Counts& n) {
     const auto map = [&] { return uint16_t(1 + r.rng() % kMaps); };
     if (r.players.size() < 60 && chance(0.4f)) {
         const uint32_t sid = r.nextSession++;
-        const uint16_t m = map();
-        const proto::Vec3 pos = chance(0.3f) ? proto::Vec3{398 + u(r.rng), 0, 398 + u(r.rng)} : proto::Vec3{spot(r.rng), 0, spot(r.rng)};
-        const db::CharRow row{sid, sid, "P" + std::to_string(sid), m, pos, 0, "", {}};
+        const uint16_t m = chance(0.15f) ? kInstance : map();
+        const float edge = chance(0.5f) ? 198.f : 398.f; // next to the crypt portal or the door
+        const proto::Vec3 pos = chance(0.3f) ? proto::Vec3{edge + u(r.rng), 0, edge + u(r.rng)} : proto::Vec3{spot(r.rng), 0, spot(r.rng)};
+        db::CharRow row{sid, sid, "P" + std::to_string(sid), m, pos, 0, "", {}};
+        if (m == kInstance) { // a saved copy: a live one (rejoined if it has room), or one long gone (the exit)
+            const auto live = r.world.contexts();
+            const auto& pick = live[r.rng() % live.size()];
+            row.instanceId = pick.map == kInstance && chance(0.8f) ? pick.instance : 999999;
+            n.copyLogins += row.instanceId != 999999;
+        }
         r.players.emplace_back(sid, r.world.spawn(sid, row, now));
         ++n.logins;
     }
@@ -1588,7 +1630,10 @@ void drive(Run& r, TimePoint now, Counts& n) {
         if (chance(0.02f)) r.world.push_client_event(e, "poke", nlohmann::json{{"n", sid}});
     }
     if (!r.players.empty() && chance(0.08f)) {
-        r.world.transfer(r.players[r.rng() % r.players.size()].second, {map(), {spot(r.rng), 0, spot(r.rng)}, 0});
+        const bool copy = chance(0.3f);
+        const std::optional<std::string> key = copy && chance(0.7f) ? std::optional("k" + std::to_string(1 + r.rng() % 3)) : std::nullopt;
+        r.world.transfer(r.players[r.rng() % r.players.size()].second,
+                         {copy ? kInstance : map(), {spot(r.rng), 0, spot(r.rng)}, 0, key});
         ++n.transfers;
     }
     if (chance(0.1f)) {
@@ -1620,6 +1665,13 @@ std::string mismatch(const Run& a, const Run& b) {
     if (a.sent.size() != b.sent.size()) return "MAP_THREADS=4 sent to a session MAP_THREADS=1 did not";
     if (a.saves != b.saves) return std::format("saves differ ({} vs {})", a.saves.size(), b.saves.size());
     if (a.world.population() != b.world.population()) return "population differs";
+    const auto live = [](const Run& r) {
+        std::string out;
+        for (const auto& c : r.world.contexts())
+            out += std::format("{}/{}/{}:{}:{} ", c.map, c.instance, c.key.value_or("-"), c.players, c.npcs);
+        return out;
+    };
+    if (live(a) != live(b)) return "live contexts differ: " + live(a) + "vs " + live(b);
     return "";
 }
 
@@ -1632,6 +1684,7 @@ std::string run(int seeds, int ticks, Counts& n, int& compared) {
         for (Run* r : {&one, &four})
             if (const auto errors = r->world.load_scripts(lua.root, {"cycle"}); !errors.empty()) return errors.front();
         TimePoint now = T0;
+        std::set<uint32_t> copies; // live in `one` after the last tick
         for (int t = 0; t < ticks; ++t, ++compared) {
             now += Millis(50);
             Counts ignored;
@@ -1649,7 +1702,16 @@ std::string run(int seeds, int ticks, Counts& n, int& compared) {
                     n.spawns += op == proto::Opcode::Spawn;
                     n.serverEvents += op == proto::Opcode::ServerEvent;
                     n.componentUpdates += op == proto::Opcode::ComponentUpdate;
+                    if (op == proto::Opcode::ServerEvent)
+                        if (const auto d = proto::decode_frame(m, proto::kMaxPayloadBytes); d.status == proto::DecodeStatus::ok)
+                            n.fullRefusals += std::get<proto::ServerEvent>(d.msg).name == "full";
                 }
+            std::set<uint32_t> alive;
+            for (const auto& c : one.world.contexts())
+                if (c.instance) alive.insert(c.instance);
+            for (uint32_t id : alive) n.copiesMade += !copies.contains(id);
+            for (uint32_t id : copies) n.copiesDestroyed += !alive.contains(id);
+            copies = std::move(alive);
             n.saves += int(one.saves.size());
             for (Run* r : {&one, &four}) {
                 r->sent.clear();
@@ -1665,15 +1727,19 @@ std::string run(int seeds, int ticks, Counts& n, int& compared) {
 void print(const Counts& n, int compared) {
     std::printf("parallel differential: %d ticks compared; logins %d / logouts %d, moves %d (%d Corrections), says %d, "
                 "C++ transfers %d, C++ NPC creates %d / destroys %d; %d MapChange, %d Spawn, %d ServerEvent, %d "
-                "ComponentUpdate, %d saves\n",
+                "ComponentUpdate, %d saves; instance copies made %d / destroyed %d, full refusals %d, logins into a "
+                "saved copy %d\n",
                 compared, n.logins, n.logouts, n.moves, n.corrections, n.says, n.transfers, n.creates, n.destroys,
-                n.mapChanges, n.spawns, n.serverEvents, n.componentUpdates, n.saves);
+                n.mapChanges, n.spawns, n.serverEvents, n.componentUpdates, n.saves, n.copiesMade, n.copiesDestroyed,
+                n.fullRefusals, n.copyLogins);
 }
 } // namespace parallel_diff
 
-// Seeded random worlds on 4 maps (players, spawn and Lua NPCs, moves, logins / logouts, NPC create / destroy, portal,
-// C++ and Lua transfers across maps, kast.world.post, broadcasts, chat, MAX_NPCS reached) run with MAP_THREADS=1 and
-// MAP_THREADS=4: after every tick each session's messages (encoded, in order) and the saves must be identical.
+// Seeded random worlds on 4 maps and an instance map (players, spawn and Lua NPCs, moves, logins / logouts, NPC create
+// / destroy, portals, C++ and Lua transfers across maps, instance copies made by key / hook / portal, refused when
+// full, rejoined on login and destroyed when empty, kast.world.post, broadcasts, chat, MAX_NPCS reached) run with
+// MAP_THREADS=1 and MAP_THREADS=4: after every tick each session's messages (encoded, in order), the saves and the live
+// contexts must be identical.
 void checkParallelDifferential() {
     log::set_level(log::Level::error); // Lua's NPC moves past a map edge and MAX_NPCS warn; not what is checked
     parallel_diff::Counts n;
@@ -1685,7 +1751,8 @@ void checkParallelDifferential() {
     parallel_diff::print(n, compared);
     check(n.logins > 100 && n.logouts > 100 && n.corrections > 100 && n.says > 100 && n.transfers > 100 &&
               n.creates > 100 && n.destroys > 100 && n.mapChanges > 1000 && n.spawns > 1000 && n.serverEvents > 1000 &&
-              n.componentUpdates > 1000 && n.saves > 100,
+              n.componentUpdates > 1000 && n.saves > 100 && n.copiesMade > 100 && n.copiesDestroyed > 100 &&
+              n.fullRefusals > 50 && n.copyLogins > 50,
           "parallel differential: every event kind ran many times");
 }
 
@@ -1864,6 +1931,7 @@ int log_crash(std::string_view how) {
 
 int lua_checks(int& checks); // lua_checks.cpp
 int activation_bench();        // lua_checks.cpp
+int instance_bench();          // lua_checks.cpp
 
 // A test never waits for a click: abort(), failed asserts, debug-CRT reports (STL debug checks) and crashes write to
 // stderr and end the process instead of opening a modal dialog. Same as engine/crash_dialogs.cpp, without its
@@ -1887,6 +1955,7 @@ int main(int argc, char** argv) {
     if (argc > 1 && std::string_view(argv[1]) == "--log-bench") return log_bench();
     if (argc > 1 && std::string_view(argv[1]) == "--aoi-bench") return aoi_bench();
     if (argc > 1 && std::string_view(argv[1]) == "--activation-bench") return activation_bench();
+    if (argc > 1 && std::string_view(argv[1]) == "--instance-bench") return instance_bench();
     if (argc > 1 && std::string_view(argv[1]) == "--map-threads-bench") return map_threads_bench();
     if (argc > 2 && std::string_view(argv[1]) == "--parallel-stress") return parallel_stress(std::atoi(argv[2]));
     if (argc > 2 && std::string_view(argv[1]) == "--log-crash") return log_crash(argv[2]);

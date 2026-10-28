@@ -1,6 +1,7 @@
-// The world: one MapContext per loaded map (maps.h), each with its own registry, AOI grid, Lua systems, NPC spawns and
-// tile activation, created the first time a map is used (START_MAP's when the scripts load), plus the realm context,
-// whose Lua state runs only the game state machines. Each tick updates the map contexts in steps, with a serial point
+// The world: one MapContext per loaded world map (maps.h), each with its own registry, AOI grid, Lua systems, NPC spawns
+// and tile activation, created the first time a map is used (START_MAP's when the scripts load), one per live copy of
+// an instance map (docs/services/world/instances.html: made on entry, by instance key, destroyed once empty for the
+// map's emptyTimeoutSec), plus the realm context, whose Lua state runs only the game state machines. Each tick updates the map contexts in steps, with a serial point
 // between the steps where the work the contexts queued for one another is done (docs/services/world/maps.html#map-contexts).
 // With rules.mapThreads > 1 the contexts of a step update at once on that many workers, with a barrier after each step;
 // they share nothing mutable meanwhile, so the result is the serial one (docs/services/world/maps.html#threading).
@@ -21,6 +22,16 @@ namespace kast::world {
 
 class World {
 public:
+    // A live context, for the admin port's instance list.
+    struct ContextInfo {
+        uint16_t map = 0;
+        uint32_t instance = 0;          // 0: a world map's context
+        std::optional<std::string> key; // a keyed copy's
+        size_t players = 0, npcs = 0;
+        SysTime createdAt{};
+        std::optional<SysTime> emptySince; // a copy's empty timer, running since then (wall clock)
+    };
+
     // maps must outlive the World and hold rules.startMap. defs: the Lua component types (lua/components.h); their
     // instances are restored, saved and replicated here.
     World(WorldRules rules, const Maps& maps, Send send, SendMany sendMany, Save save, lua::Defs defs = {});
@@ -42,13 +53,17 @@ public:
         return context(rules_.startMap).validate_character(name, options);
     }
     // A map context's event bus, state machines (its characters' and NPCs'; game machines mirrored) and registry, for
-    // server C++ and tests: START_MAP's, or map's (created on first use).
+    // server C++ and tests: START_MAP's, or a world map's (created on first use; an instance map has none: throws).
     EventBus& bus() { return bus(rules_.startMap); }
     EventBus& bus(uint16_t map) { return context(map).bus(); }
     lua::StateMachines& fsm() { return fsm(rules_.startMap); }
     lua::StateMachines& fsm(uint16_t map) { return context(map).fsm(); }
     entt::registry& registry() { return registry(rules_.startMap); }
     entt::registry& registry(uint16_t map) { return context(map).registry(); }
+    // A live copy of an instance map, or null (tests).
+    MapContext* copy(uint16_t map, uint32_t instance) const;
+    // Every live context, in map then instanceId order.
+    std::vector<ContextInfo> contexts() const;
     // The registry of the context e is in, or null if e is not in the world (tests).
     entt::registry* registry_of(entt::entity e) {
         MapContext* ctx = find(e);
@@ -59,7 +74,8 @@ public:
     lua::StateMachines& realm_fsm() { return realm_.fsm(); }
 
     // Places the character (at its saved map and position, lifted onto the ground if it is under it, or START_MAP's
-    // spawn if that map is not loaded or the position is off it) in that map's context, sends
+    // spawn if that map is not loaded or the position is off it) in that map's context (on an instance map: the saved
+    // copy if it is live and has room, else the map's exit, logged), sends
     // EnterWorldOk, wakes the tiles around it (spawning the NPCs of those loading now, so onEnter sees them), restores
     // its persisted Lua components and runs onEnter. Other players get Spawn on the next tick.
     entt::entity spawn(uint32_t sessionId, const db::CharRow& row, TimePoint now);
@@ -82,7 +98,9 @@ public:
     proto::Vec3 clamp_to_map(uint16_t map, proto::Vec3 pos) const { return world::clamp_to_map(maps_, rules_.move, map, pos); }
     // Every map change goes through here (player or NPC), and teleports within a map too; a context's own requests
     // (portals, kast.transfer onto another map) come here at the serial points. Refused (false, logged) if this
-    // process does not own the destination tile. Otherwise moves e at once onto the ground at the destination and
+    // process does not own the destination tile, or if a player's destination is a full instance copy (instance.full
+    // on the source context's bus; nothing moves). Onto an instance map, to.key picks the copy (Destination); a new
+    // one is created here. Otherwise moves e at once onto the ground at the destination and
     // takes it out of every view: the player gets MapChange, then a Despawn per old neighbour, who get its Despawn,
     // and its area is updated (area events). Onto another map, in this order: onMapLeave in the old context, the
     // MapChange, Despawns and area.leave there, every component moved to the new context, area.enter and onMapEnter
@@ -107,12 +125,23 @@ public:
     const std::vector<double>& context_update_ms() const { return contextMs_; }
 
 private:
-    // map's context, created (and its scripts loaded, once load_scripts has run) on first use.
+    using Key = std::pair<uint16_t, uint32_t>; // (map, instanceId); 0 for a world map
+    // A world map's context, created (and its scripts loaded, once load_scripts has run) on first use. An instance map
+    // has none: throws std::logic_error.
     MapContext& context(uint16_t map);
     MapContext& context(uint16_t map) const { return const_cast<World*>(this)->context(map); }
+    // Creates a context (a world map's, or a new copy with a fresh instanceId), its scripts loaded as context's.
+    MapContext& create(uint16_t map, uint32_t instance, std::optional<std::string> key);
+    // An instance map's copy for key: the live one registered under it, else a new one (always for nullopt).
+    MapContext& copy_for(uint16_t map, const std::optional<std::string>& key);
     // The context e is in, or null.
-    // ponytail: a scan over the contexts (one per map); an id -> context index once instances (phase 4) multiply them.
+    // ponytail: a scan over the contexts, a valid() check each; an id -> context index if thousands of copies live.
     MapContext* find(entt::entity e) const;
+    // The serial point's empty timers: every copy with no player starts (or keeps) its timer, one with a player stops
+    // it; one whose timer ran past its map's emptyTimeoutSec runs its systems' shutdown, loses its NPCs and its key
+    // and is returned, to be erased at the end of the serial point (after its outbox).
+    std::vector<Key> expire_copies();
+    void refresh_copies(); // Shared::copies' player counts
     bool move_to(entt::entity e, const Destination& to); // transfer, without the serial point after it
     // The serial point: what the contexts (and the realm) queued since the last one, in map order: transfers,
     // creates, respawns, game machine changes (applied in the realm, each distinct one once), the realm's client
@@ -135,7 +164,10 @@ private:
     Save save_;
     lua::Defs defs_;
     Shared shared_;
-    std::map<uint16_t, std::unique_ptr<MapContext>> contexts_; // by map id; after shared_ (they hold a reference)
+    std::map<Key, std::unique_ptr<MapContext>> contexts_; // after shared_ (they hold a reference)
+    uint32_t nextInstance_;
+    int64_t retiredNpcs_ = 0; // destroyed copies' npcs(): their net share of the NPC count
+    bool scriptsShutDown_ = false;
     entt::registry realmReg_; // empty: the realm has no entities
     lua::Runtime realm_;      // fsms/ and the game machines only
     EventBus::Subscription realmChanged_; // the game machines' fsm.changed, forwarded to every map context's bus

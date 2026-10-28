@@ -599,6 +599,11 @@ the terrain), headings radians, tiles <code>tx,tz</code>. The full list is also 
 <td>The map's material (a project-relative <code>.mat</code>; empty = the default material).</td>
 </tr>
 <tr>
+<td><code>--instance maxPlayers,emptyTimeoutSec,map,x,y,z[,heading]</code>, <code>--world-map</code></td>
+<td>Make the map an <a href="zone-builder.html#instance">instance map</a> (<code>maxPlayers</code> 0 = no limit; the exit on map <code>map</code> at
+(x, y, z)); make it a world map again (every instance field removed).</td>
+</tr>
+<tr>
 <td><code>--set-spawn x,z[,heading]</code></td>
 <td>The player spawn.</td>
 </tr>

@@ -47,6 +47,16 @@ void undoScope(zone::ZoneDoc& z)
         z.commit();
 }
 
+// A new instance map's exit: the first other world map of the project, at its spawn (map 0 at the origin if none:
+// the Problems section then says why).
+km::Portal defaultExit(const ZoneSession& zone, const std::string& folder)
+{
+    for (const zone::ProjectMap& m : zone.project().maps)
+        if (m.folder != folder && !m.info.instanced())
+            return {m.info.id, m.info.spawn, m.info.spawnHeading};
+    return {};
+}
+
 entt::entity firstTerrain(const Document& doc)
 {
     const auto terrains = doc.scene.registry().view<kast::Terrain>();
@@ -343,6 +353,15 @@ void ZonePanel::drawManifest(zone::ZoneDoc& z, const ZoneSession& zone)
         ImGui::EndCombo();
     }
 
+    // World (one context for everyone) or Instance (a copy per instance key): docs/services/world/instances.html.
+    const bool instance = m.value("type", std::string("world")) == "instance";
+    int type = instance ? 1 : 0;
+    constexpr const char* kTypes[] = {"World", "Instance"};
+    if (ImGui::Combo("Type", &type, kTypes, 2) && (type == 1) != instance)
+        z.edit([&](zone::ZoneState& s) { zone::set_instance(s, type == 1, defaultExit(zone, z.folder)); });
+    if (instance)
+        drawInstance(z, zone);
+
     std::string err;
     const auto info = z.info(err);
     if (!info) {
@@ -391,6 +410,65 @@ void ZonePanel::drawManifest(zone::ZoneDoc& z, const ZoneSession& zone)
 
     ImGui::SeparatorText("Tiles");
     drawTileGrid(z, *info);
+}
+
+void ZonePanel::drawInstance(zone::ZoneDoc& z, const ZoneSession& zone)
+{
+    zone::Json& m = z.state.manifest;
+    ImGui::SeparatorText("Instance");
+    bool unlimited = !m.contains("maxPlayers");
+    if (ImGui::Checkbox("Unlimited players", &unlimited))
+        z.edit([&](zone::ZoneState& s) { zone::set_max_players(s, unlimited ? std::nullopt : std::optional<uint32_t>(5)); });
+    if (!unlimited) {
+        int players = m["maxPlayers"].is_number_integer() ? m["maxPlayers"].get<int>() : 1;
+        if (ImGui::InputInt("Max players", &players))
+            m["maxPlayers"] = unsigned(std::max(players, 1));
+        undoScope(z);
+    }
+    int timeout = m.contains("emptyTimeoutSec") && m["emptyTimeoutSec"].is_number_integer() ? m["emptyTimeoutSec"].get<int>() : 300;
+    if (ImGui::InputInt("Empty timeout (s)", &timeout))
+        m["emptyTimeoutSec"] = unsigned(std::clamp(timeout, 0, 31536000));
+    undoScope(z);
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("An empty copy is destroyed this long after its last player left (0: at once)");
+
+    // Where a character goes when its copy is gone (a relog after the timeout or a restart): a world map's point.
+    ImGui::SeparatorText("Exit");
+    const zone::Json exit = m.value("exit", zone::Json::object());
+    km::Portal e;
+    e.map = exit.value("map", zone::Json()).is_number_unsigned() ? exit["map"].get<uint16_t>() : 0;
+    if (const zone::Json& p = exit.value("pos", zone::Json()); p.is_array() && p.size() == 3)
+        for (size_t i = 0; i < 3; ++i)
+            e.pos[i] = p[i].is_number() ? p[i].get<float>() : 0.0f;
+    e.heading = exit.value("heading", zone::Json()).is_number() ? exit["heading"].get<float>() : 0.0f;
+    const zone::ProjectMap* to = nullptr;
+    for (const zone::ProjectMap& pm : zone.project().maps)
+        if (pm.info.id == e.map && pm.folder != z.folder)
+            to = &pm;
+    const std::string preview = to ? std::format("{}  (id {})", to->folder, e.map) : std::format("map {}", e.map);
+    if (ImGui::BeginCombo("Exit map", preview.c_str())) {
+        for (const zone::ProjectMap& pm : zone.project().maps) {
+            if (pm.folder == z.folder || pm.info.instanced())
+                continue; // an exit is on a world map
+            const std::string label = std::format("{}  (id {}, {})", pm.folder, pm.info.id, pm.info.name);
+            if (ImGui::Selectable(label.c_str(), pm.info.id == e.map) && pm.info.id != e.map)
+                z.edit([&](zone::ZoneState& s) { zone::set_exit(s, {pm.info.id, pm.info.spawn, pm.info.spawnHeading}); });
+        }
+        ImGui::EndCombo();
+    }
+    if (ImGui::InputFloat3("Exit x, y, z", e.pos.data(), "%.1f"))
+        zone::set_exit(z.state, e);
+    undoScope(z);
+    float heading = e.heading * 180.0f / bx::kPi;
+    if (ImGui::SliderFloat("Exit heading", &heading, -180.0f, 180.0f, "%.0f deg")) {
+        e.heading = heading * bx::kPi / 180.0f;
+        zone::set_exit(z.state, e);
+    }
+    undoScope(z);
+    std::string err;
+    if (const auto info = z.info(err))
+        if (const auto problem = km::exit_error(*info, to ? &to->info : nullptr))
+            ImGui::TextColored(kErrorColor, "map.json: %s", problem->c_str());
 }
 
 void ZonePanel::drawTileGrid(zone::ZoneDoc& z, const km::MapInfo& info)

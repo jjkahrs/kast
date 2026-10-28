@@ -79,7 +79,7 @@ it, collapsing sections:</p>
 <td><strong>Map</strong></td>
 <td>the map picker (every <code>maps/*/map.json</code> of the project) and <strong>New Map...</strong> (folder: letters, digits, <code>_</code>,
 <code>-</code>; name; id, the lowest unused by default, a used one refused; 1-8 by 1-8 tiles; nothing is written until you save);
-id, name, material (a project <code>.mat</code>), player spawn (x, z on the ground, heading; <strong>Place on terrain</strong> then
+id, name, material (a project <code>.mat</code>), <strong>Type</strong> (World or Instance, <a href="#instance">below</a>), player spawn (x, z on the ground, heading; <strong>Place on terrain</strong> then
 click), own <code>nav</code> settings, and the <strong>tile grid</strong> (+z up): click a free cell to add a tile (its edges take its
 neighbours' heights, so no seam), a tile to remove it (a dialog lists the files that go and the spawns lost). Changing the id
 changes the Terrain entity's <code>map</code> too.</td>
@@ -139,6 +139,21 @@ then next to <code>kast_editor.exe</code></td>
 </table>
 <p>Everything the tab does is also logged to the <strong>Console</strong> (<code>Zone: ...</code> lines: loads, strokes, placements, saves,
 problems, Bake output).</p>
+<h3 id="instance">Instance maps</h3>
+<p>The Map section's <strong>Type</strong> combo makes the map a <a href="../services/world/instances.html">world server instance map</a>
+(<code>"type": "instance"</code>: a copy per group, destroyed once empty) or a world map again (every instance field removed). For Instance
+it shows:</p>
+<ul>
+<li><strong>Unlimited players</strong> / <strong>Max players</strong>: no <code>maxPlayers</code>, or players per copy (1 or more).</li>
+<li><strong>Empty timeout (s)</strong>: <code>emptyTimeoutSec</code>, 0 to 31536000 (default 300).</li>
+<li><strong>Exit</strong>: <strong>Exit map</strong> (the project's other world maps), <strong>Exit x, y, z</strong> typed and <strong>Exit heading</strong>: where a character
+  goes when its copy is gone. Picking a map puts the exit at that map's spawn. The exit is on another map, so it is typed rather than
+  clicked in this map's Scene view. Switching to Instance sets the exit to the first other world map's spawn.</li>
+</ul>
+<p>Each field is one undo step (<code>Edit Map</code>). The fields are read straight from <code>map.json</code>, so they stay editable while the
+manifest is invalid; a bad value shows on the <code>map.json:</code> error line (the server's message, such as <code>"maxPlayers" must be an
+integer &gt;= 1</code>), and an exit the server would refuse (an unknown or instance map, off its tiles, inside one of its portal areas) as
+<code>map.json: "exit": ...</code> under the fields and in <strong>Problems</strong>; either blocks the save.</p>
 
 <h2 id="objects">Objects</h2>
 <p>Zone objects are prefabs placed on the map's tiles (formats: <a href="../services/world/maps.html#objects">World

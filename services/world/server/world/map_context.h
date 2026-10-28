@@ -1,5 +1,6 @@
 // One loaded map's runtime (docs/services/world/maps.html#map-contexts): its own registry, AOI grid, Lua state (npcs/
-// and systems/), spawner, tile activation and event bus, updated by World. A context reads only the immutable Maps
+// and systems/), spawner, tile activation and event bus, updated by World. A world map has one; an instance map one per
+// live copy (docs/services/world/instances.html), each with its instanceId and key. A context reads only the immutable Maps
 // and the process-wide Shared; whatever reaches past its map (a transfer, kast.create or a respawn on another map,
 // kast.world.post, a game machine change, a broadcast) goes into its Outbox, which World drains at the serial points.
 #pragma once
@@ -10,8 +11,10 @@
 #include <lua/runtime.h>
 
 #include <filesystem>
+#include <map>
 #include <mutex>
 #include <optional>
+#include <tuple>
 
 #include <entt/entity/registry.hpp>
 
@@ -31,25 +34,44 @@ struct WorldRules {
     size_t maxNpcs = 10000;    // kast.create raises past this
     int activationTiles = 1;   // ACTIVATION_TILES: tiles around a player's that load and stay awake (Activation)
     int mapThreads = 1;        // MAP_THREADS: workers updating the map contexts; 1: all on the calling thread
+    uint32_t firstInstanceId = 1; // the first instance copy's id, then one up per copy (GameServer: from the clock)
 };
 
-// Where a transfer puts an entity.
+// Where a transfer puts an entity. Onto an instance map, key picks the copy: the live one with that key, or a new one
+// registered under it; nullopt: a new keyless copy. Within the same copy (same map, same key) it is a teleport.
 struct Destination {
     uint16_t map = 0;
     proto::Vec3 pos;
     float heading = 0;
+    std::optional<std::string> key = std::nullopt; // instance maps only
 };
 
-// What every context shares, owned by World: the process-wide entity index space, handed out in blocks (IdPool).
+// What every context shares, owned by World: the process-wide entity index space, handed out in blocks (IdPool), and
+// the live instance copies by key.
 struct Shared {
     static constexpr uint32_t kIdBlock = 4096;
-    // The next unused block of entity indices. Locked: a context past its spare block takes one mid-update.
+    // The next unused block of entity indices: one a destroyed context gave back first, else a new one. Locked: a
+    // context past its spare block takes one mid-update.
     // ponytail: one mutex, taken once per 4096 new ids; never contended in practice.
     std::pair<uint32_t, uint32_t> block();
+    // A destroyed context's ids, for those made after it (IdPool::retire): the ones it freed, and its blocks' rest.
+    void give_back(std::vector<entt::entity> freed, std::pair<uint32_t, uint32_t> a, std::pair<uint32_t, uint32_t> b);
+    // Up to kIdBlock of the freed ids given back, for a new context (IdPool::adopt).
+    std::vector<entt::entity> take_freed();
+
+    // Every live keyed copy by (map, key): its instanceId and players as of the last serial point. Written by World at
+    // the serial points only, so a context reads it during an update without a lock (a transfer's full check).
+    struct Copy {
+        uint32_t instance = 0;
+        size_t players = 0;
+    };
+    std::map<std::pair<uint16_t, std::string>, Copy> copies;
 
 private:
     std::mutex mu_;
     uint32_t next_ = 0;
+    std::vector<std::pair<uint32_t, uint32_t>> ranges_; // given back: handed out before new blocks
+    std::vector<entt::entity> freed_;                   // given back, versions bumped
 };
 
 // A context's entity ids. Each entity is created with one (registry::create(hint)), so an entt::entity, and the wire id
@@ -66,6 +88,12 @@ public:
     void reserve(Shared& shared) {
         if (spare_.first == spare_.second) spare_ = shared.block();
     }
+    // A destroyed instance copy's ids go back to Shared (World, at the serial point), so making and destroying copies
+    // never runs out of entity indices; a new copy adopts freed ones first.
+    void retire(Shared& shared) {
+        shared.give_back(std::exchange(freed_, {}), std::exchange(block_, {}), std::exchange(spare_, {}));
+    }
+    void adopt(Shared& shared) { freed_ = shared.take_freed(); }
 
 private:
     std::vector<entt::entity> freed_;
@@ -87,7 +115,7 @@ public:
     struct Outbox {
         std::vector<std::pair<entt::entity, Destination>> transfers; // onto another map (a portal, kast.transfer)
         std::vector<Create> creates;
-        std::vector<std::pair<uint16_t, uint32_t>> respawns; // (map, record): its spawn's NPC was destroyed here
+        std::vector<std::tuple<uint16_t, uint32_t, uint32_t>> respawns; // (map, instance, record): its NPC died here
         std::vector<std::pair<std::string, std::string>> gameChanges; // (machine, to): kast.fsm.change on a game machine
         std::vector<lua::ClientEvent> broadcasts; // kast.broadcast: sent here already, for the other contexts' players
         std::vector<lua::Post> posts;
@@ -97,11 +125,19 @@ public:
         }
     };
 
-    // rules, maps (which holds map) and shared must outlive the context. now: the current tick's time.
-    MapContext(uint16_t map, const WorldRules& rules, const Maps& maps, Shared& shared, Send send, SendMany sendMany,
-               Save save, lua::Defs defs, TimePoint now);
+    // rules, maps (which holds map) and shared must outlive the context. now: the current tick's time. instance: the
+    // copy's instanceId (0: a world map's context), key its instance key (nullopt: keyless or a world map).
+    MapContext(uint16_t map, uint32_t instance, std::optional<std::string> key, const WorldRules& rules, const Maps& maps,
+               Shared& shared, Send send, SendMany sendMany, Save save, lua::Defs defs, TimePoint now);
 
     uint16_t map() const { return map_; }
+    uint32_t instance() const { return instance_; }
+    const std::optional<std::string>& key() const { return key_; }
+    // World's empty timer on a copy: since when it has had no player (nullopt while it has one, or not looked at yet).
+    std::optional<TimePoint> empty_since() const { return emptySince_; }
+    void set_empty_since(std::optional<TimePoint> t) { emptySince_ = t; }
+    SysTime created_at() const { return createdAt_; } // wall clock (the admin list)
+    size_t npcs_here() const; // the NPCs in this context's registry now
     // lua::Runtime::load, with the game machines' states (the realm's) mirrored first, so an init already reads them;
     // then every spawn file entry's "npc" must have a definition. Every error.
     std::vector<std::string> load_scripts(const std::filesystem::path& luaRoot, std::vector<std::string> gameMachines,
@@ -153,6 +189,9 @@ public:
     void transfer(entt::entity e, const Destination& to);
     // The NPC of this map's spawn record died in another context: it respawns as if destroyed here.
     void spawn_destroyed(uint32_t record);
+    // A player's transfer into the full copy of map with key is refused: logged, and instance.full {entity, map, key}
+    // published on this context's bus (by World too, when the copy filled up after the request).
+    void refuse_full(entt::entity e, uint16_t map, const std::string& key);
 
     // Moving e to another context, in this order (World::transfer): leave_map runs onMapLeave (and sends the client
     // events queued so far, while e can still be seen); depart takes e out of this map (MapChange, Despawns,
@@ -182,8 +221,12 @@ public:
 
 private:
     // A transfer from Lua or a portal: refused (false, logged) if this process does not own the destination tile;
-    // within this map at once, onto another queued.
-    bool request_transfer(entt::entity e, const Destination& to);
+    // within this map (on a copy: without a key, or with this copy's) at once, onto another queued. Onto an instance map
+    // the key is key (kast.transfer's instance =), else what the systems' instanceKey(e, map) returns; a player's into a
+    // copy that was full at the last serial point (with the players this context queued for it since) is refused
+    // (refuse_full).
+    bool request_transfer(entt::entity e, Destination to, std::optional<std::string> key = std::nullopt);
+    bool full(uint16_t map, const std::string& key) const;
     entt::entity lua_create(std::string name, std::string templateName, std::optional<uint16_t> map,
                             std::optional<proto::Vec3> pos, float heading, std::string npc, const lua::Json& components);
     void leave_views(entt::entity e);
@@ -207,6 +250,10 @@ private:
     };
 
     uint16_t map_;
+    uint32_t instance_;
+    std::optional<std::string> key_;
+    SysTime createdAt_ = std::chrono::system_clock::now();
+    std::optional<TimePoint> emptySince_;
     const WorldRules& rules_;
     const Maps& maps_;
     Shared& shared_;

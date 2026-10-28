@@ -75,6 +75,8 @@ const char* opcode_name(Opcode op) {
     case Opcode::AdminOnline: return "AdminOnline";
     case Opcode::AdminKick: return "AdminKick";
     case Opcode::AdminKicked: return "AdminKicked";
+    case Opcode::AdminInstancesReq: return "AdminInstancesReq";
+    case Opcode::AdminInstances: return "AdminInstances";
     }
     return "unknown";
 }

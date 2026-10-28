@@ -6,7 +6,7 @@ import type { Audited } from '../audited.js';
 import { parse, requireRole, sessionOf } from '../middleware.js';
 import { idParams, kickBody, realmBody } from '../schemas.js';
 
-/** Realm CRUD goes to auth (admin only); online and kick talk to each realm's world admin port. */
+/** Realm CRUD goes to auth (admin only); online, instances and kick talk to each realm's world admin port. */
 export function realmRoutes(deps: { auth: AuthClient; realms: RealmService; audited: Audited }): Router {
   const { auth, realms, audited } = deps;
   const proxy = <T>(ctx: SessionContext, path: string, method: 'GET' | 'POST' | 'PUT' | 'DELETE' = 'GET', body?: unknown) =>
@@ -29,6 +29,10 @@ export function realmRoutes(deps: { auth: AuthClient; realms: RealmService; audi
 
   r.get('/:id/online', requireRole('admin', 'gm'), async (req, res) => {
     res.json({ online: await realms.online(sessionOf(res), parse(idParams, req.params).id) });
+  });
+
+  r.get('/:id/instances', requireRole('admin', 'gm'), async (req, res) => {
+    res.json({ instances: await realms.instances(sessionOf(res), parse(idParams, req.params).id) });
   });
 
   r.post(

@@ -20,6 +20,11 @@ world::WorldRules world_rules(const Config& c) {
     r.maxNpcs = c.maxNpcs;
     r.activationTiles = static_cast<int>(c.activationTiles);
     r.mapThreads = static_cast<int>(c.mapThreads);
+    // Instance ids from an earlier run (saved with a character) must name no copy of this one: start from 16 x the Unix
+    // time in seconds. ponytail: a run that made more than 16 copies a second for its whole uptime could reach the next
+    // run's first ids; a run counter in the database if that is ever plausible.
+    const auto unixSec = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+    r.firstInstanceId = static_cast<uint32_t>(unixSec * 16);
     return r;
 }
 
@@ -75,7 +80,8 @@ GameServer::GameServer(asio::io_context& io, const Config& cfg, const world::Map
         adminLimits.simLatency = adminLimits.simJitter = Millis(0); // the lag simulator is for game clients
         adminPort_ = std::make_unique<AdminPort>(
             io, tls, adminLimits, AdminPort::Options{cfg.adminHost, cfg.adminPort, cfg.adminSecret},
-            [this] { return admin_online(); }, [this](const proto::AdminKick& k) { return admin_kick(k); });
+            [this] { return admin_online(); }, [this](const proto::AdminKick& k) { return admin_kick(k); },
+            [this] { return admin_instances(); });
     }
     if (cfg.chatLinkHost.empty()) return;
     // The dev setup's chat service presents this server's own certificate (they share TLS_DEV_CERT_DIR).
@@ -350,6 +356,17 @@ std::vector<proto::AdminOnlineEntry> GameServer::admin_online() const {
         else
             out.push_back({c.accountId, 0, "", 0, id, static_cast<uint64_t>(ms)});
     }
+    return out;
+}
+
+std::vector<proto::AdminInstanceEntry> GameServer::admin_instances() const {
+    const auto ms = [](SysTime t) {
+        return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(t.time_since_epoch()).count());
+    };
+    std::vector<proto::AdminInstanceEntry> out;
+    for (const auto& c : world_.contexts())
+        out.push_back({c.map, maps_.info(c.map).name, c.instance, c.key.value_or(""), static_cast<uint32_t>(c.players),
+                       static_cast<uint32_t>(c.npcs), ms(c.createdAt), c.emptySince ? ms(*c.emptySince) : 0});
     return out;
 }
 

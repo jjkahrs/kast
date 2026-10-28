@@ -95,14 +95,7 @@ StateMachineDef parse_definition(sol::state& lua, const std::filesystem::path& f
 StateMachineDefinitions parse_state_machine_definitions(sol::state& lua, const std::filesystem::path& root,
                                                         const std::function<sol::environment()>& environment,
                                                         const CallbackBinder& bind) {
-    std::vector<std::filesystem::path> files;
-    std::error_code ec;
-    const std::filesystem::path dir = root / kStateMachinesDir;
-    if (std::filesystem::is_directory(dir, ec))
-        for (auto it = std::filesystem::recursive_directory_iterator(dir, ec);
-             !ec && it != std::filesystem::recursive_directory_iterator(); it.increment(ec))
-            if (it->is_regular_file(ec) && it->path().extension() == ".lua") files.push_back(it->path());
-    std::ranges::sort(files);
+    const std::vector<std::filesystem::path> files = lua_files(root / kStateMachinesDir, true);
 
     struct Parsed {
         std::string path, name, error; // name: as declared, even if the file was rejected later
@@ -111,7 +104,7 @@ StateMachineDefinitions parse_state_machine_definitions(sol::state& lua, const s
     std::vector<Parsed> parsed;
     for (const auto& file : files) {
         Parsed p;
-        p.path = std::filesystem::relative(file, root, ec).generic_string();
+        p.path = lua_path(file, root);
         try {
             p.def = parse_definition(lua, file, p.path, environment(), bind, p.name);
         } catch (const Invalid& e) {

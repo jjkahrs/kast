@@ -13,6 +13,7 @@
 #include <map>
 #include <mutex>
 #include <random>
+#include <set>
 #include <thread>
 
 namespace kast::bot {
@@ -37,6 +38,8 @@ struct Stats {
 struct BotMap {
     float x0 = 0, z0 = 0, x1 = 0, z1 = 0;
     std::vector<map::Area> portals;
+    bool instanced = false;
+    uint32_t maxPlayers = 0; // an instance map's; 0: no limit
     // Within 5 m of a portal's bounds: a wanderer turns back there.
     bool near_portal(const proto::Vec3& p) const {
         for (const auto& a : portals)
@@ -67,6 +70,8 @@ BotMaps load_bot_maps(const std::string& root, std::string& error) {
             return {};
         }
         BotMap& m = maps[info->id];
+        m.instanced = info->instanced();
+        m.maxPlayers = info->maxPlayers.value_or(0);
         m.x0 = m.z0 = 1e9f;
         m.x1 = m.z1 = -1e9f;
         for (const auto& t : info->tiles) {
@@ -130,9 +135,10 @@ struct Wander {
 };
 
 // target: with --maps, the map this bot walks to through the portals and then wanders on (maps: --map-root's).
+// instanceKey: for an instance map target, the key its copy is picked by (sent to the sample test_hooks.lua first).
 asio::awaitable<void> run_bot(const Options& o, asio::ssl::context& tls, Stats& st, std::string token,
                               Millis startDelay, std::chrono::steady_clock::time_point end, const BotMaps& maps,
-                              std::optional<uint16_t> target) {
+                              std::optional<uint16_t> target, std::optional<std::string> instanceKey) {
     co_await sleep_for(startDelay);
     std::string err;
     auto c = co_await connect_and_login(o, tls, token, err);
@@ -154,6 +160,7 @@ asio::awaitable<void> run_bot(const Options& o, asio::ssl::context& tls, Stats& 
         co_return;
     }
     ++st.entered;
+    if (instanceKey) c->send(proto::ClientEvent{"test.instance_key", nlohmann::json{{"key", *instanceKey}}.dump()});
 
     auto pos = std::make_shared<proto::Vec3>(ok.pos);
     // A wanderer that walks into a portal (docs/services/world/areas.html) is parked on the other map: it stops moving, and the
@@ -257,7 +264,8 @@ asio::awaitable<void> run_bot(const Options& o, asio::ssl::context& tls, Stats& 
 
 int run_load(const Options& o) {
     Stats st;
-    // --maps: bot i heads for the i-th listed map (round robin) through the portals of --map-root's maps.
+    // --maps: bot i heads for the i-th listed map (round robin) through the portals of --map-root's maps. Onto an
+    // instance map, every --instance-size bots (default: its maxPlayers, else 10) share an instance key: one copy each.
     std::vector<uint16_t> targets;
     BotMaps maps;
     if (const auto it = o.extra.find("maps"); it != o.extra.end()) {
@@ -274,6 +282,18 @@ int run_load(const Options& o) {
             std::fprintf(stderr, "--maps: %s\n", err.empty() ? "no map ids" : err.c_str());
             return 2;
         }
+    }
+    std::vector<std::optional<std::string>> keys(o.count);
+    std::map<uint16_t, int> onInstance; // bots so far per instance map target
+    std::set<std::string> copies;
+    for (int i = 0; i < o.count && !targets.empty(); ++i) {
+        const uint16_t t = targets[i % targets.size()];
+        const BotMap& m = maps.at(t);
+        if (!m.instanced) continue;
+        const int size = o.extra.count("instance-size") ? std::max(1, std::stoi(o.extra.at("instance-size")))
+                                                        : m.maxPlayers ? int(m.maxPlayers) : 10;
+        keys[i] = "load-" + o.runId + "-" + std::to_string(t) + "-" + std::to_string(onInstance[t]++ / size);
+        copies.insert(*keys[i]);
     }
     // 1. Real tokens from auth, in parallel (register + Mailpit verify on first run, then just login).
     std::vector<std::string> tokens(o.count);
@@ -309,7 +329,7 @@ int run_load(const Options& o) {
         if (tokens[i].empty()) continue;
         const Millis delay(1000LL * i / std::max(1, o.connectRatePerSec));
         const auto target = targets.empty() ? std::nullopt : std::optional(targets[i % targets.size()]);
-        asio::co_spawn(*ios[i % o.threads], run_bot(o, tls, st, tokens[i], delay, end, maps, target), [&st](std::exception_ptr e) {
+        asio::co_spawn(*ios[i % o.threads], run_bot(o, tls, st, tokens[i], delay, end, maps, target, keys[i]), [&st](std::exception_ptr e) {
             if (!e) return;
             try { std::rethrow_exception(e); } catch (const std::exception& ex) { st.error(ex.what()); }
         });
@@ -353,6 +373,7 @@ int run_load(const Options& o) {
                               {"map_changes_recv", st.mapChanges.load()},
                               {"maps", o.extra.count("maps") ? o.extra.at("maps") : ""},
                               {"on_target_map", st.onTarget.load()},
+                              {"instance_keys", copies.size()}, // the instance copies the bots spread over
                               {"says_sent", st.says.load()},
                               {"chat_recv", st.chats.load()},
                               {"component_updates_recv", st.componentUpdates.load()},

@@ -14,6 +14,17 @@ namespace zone {
 
 using Point = std::array<float, 2>; // x, z
 
+// --- the manifest's instance fields (map.json "type", "maxPlayers", "emptyTimeoutSec", "exit";
+// docs/services/world/instances.html) ---
+
+// Makes the map an instance map, with exit as its "exit" unless it has one already, or a world map again: "type" and
+// every instance field removed ("world" is the default, so it is not written).
+void set_instance(ZoneState& state, bool instance, const kast::map::Portal& exit = {});
+// "maxPlayers": nullopt removes it (no limit).
+void set_max_players(ZoneState& state, std::optional<uint32_t> players);
+void set_empty_timeout(ZoneState& state, uint32_t seconds);
+void set_exit(ZoneState& state, const kast::map::Portal& exit);
+
 // --- areas (areas.json "areas") ---
 
 // The areas list, creating {"version": 1, "areas": []} if the map has no areas.json yet.

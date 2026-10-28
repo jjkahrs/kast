@@ -96,6 +96,8 @@ private:
     void drawTerrainEntity(Document& doc, const ZoneSession& zone);
     void drawMap(Document& doc, ZoneSession& zone);
     void drawManifest(zone::ZoneDoc& z, const ZoneSession& zone);
+    // An instance map's fields (map.json maxPlayers, emptyTimeoutSec, exit), from the JSON: editable while invalid.
+    void drawInstance(zone::ZoneDoc& z, const ZoneSession& zone);
     void drawTileGrid(zone::ZoneDoc& z, const kast::map::MapInfo& info);
     void drawProblems(const ZoneSession& zone);
     void drawUnsavedPrompt(Document& doc, ZoneSession& zone);

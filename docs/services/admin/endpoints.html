@@ -73,6 +73,7 @@
 <tr><td><code>PUT</code></td><td><code>/api/realms/:id</code></td><td>A</td><td>Same body</td></tr>
 <tr><td><code>DELETE</code></td><td><code>/api/realms/:id</code></td><td>A</td><td>→ 204</td></tr>
 <tr><td><code>GET</code></td><td><code>/api/realms/:id/online</code></td><td>A, G</td><td><code>{online: [{accountId, characterId, characterName, mapId, sessionId, connectedAt}]}</code>; lobby sessions have <code>characterId</code> 0</td></tr>
+<tr><td><code>GET</code></td><td><code>/api/realms/:id/instances</code></td><td>A, G</td><td><code>{instances: [{mapId, mapName, instanceId, key, players, npcs, createdAt, emptySince}]}</code>: the realm's live map contexts (<a href="../world/protocol.html#admin"><code>AdminInstancesReq</code></a>); <code>instanceId</code> 0 for a world map, <code>key</code> <code>''</code> when keyless, <code>emptySince</code> <code>null</code> unless an empty copy's timer runs. 503 <code>realm_unreachable</code> like online</td></tr>
 <tr><td><code>POST</code></td><td><code>/api/realms/:id/kick</code></td><td>A, G</td><td><code>{accountId | characterId, reason (1-200)}</code> → <code>{kicked}</code></td></tr>
 </tbody>
 </table>

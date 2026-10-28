@@ -37,6 +37,8 @@ int main() {
     const world::Maps maps = world::Maps::load(cfg.mapRoot, mapErrors);
     if (mapErrors.empty() && !maps.by_id(cfg.startMap))
         mapErrors.push_back("START_MAP " + std::to_string(cfg.startMap) + ": no such map under MAP_ROOT");
+    else if (mapErrors.empty() && maps.info(cfg.startMap).instanced())
+        mapErrors.push_back("START_MAP " + std::to_string(cfg.startMap) + ": an instance map; START_MAP must be a world map");
     for (const auto& [id, m] : maps.all())
         if (m.spawn[1] < cfg.minY || m.spawn[1] > cfg.maxY)
             mapErrors.push_back("map " + std::to_string(id) + ": spawn y outside [MIN_Y, MAX_Y]");
@@ -46,12 +48,13 @@ int main() {
         return 1;
     }
     nlohmann::json loadedMaps = nlohmann::json::array();
-    for (const auto& [id, m] : maps.all()) loadedMaps.push_back({{"id", id}, {"name", m.name}, {"tileRects", m.tiles.size()}, {"areas", m.areas.list.size()}, {"spawns", m.spawns.size()}});
+    for (const auto& [id, m] : maps.all()) loadedMaps.push_back({{"id", id}, {"name", m.name}, {"tileRects", m.tiles.size()}, {"areas", m.areas.list.size()}, {"spawns", m.spawns.size()}, {"type", m.instanced() ? "instance" : "world"}});
     log::info("maps loaded", {{"mapRoot", cfg.mapRoot}, {"startMap", cfg.startMap}, {"activationTiles", cfg.activationTiles}, {"maps", loadedMaps}});
 
     // Lua component definitions: a broken one stops the start too.
     std::error_code ec;
     const bool haveLua = std::filesystem::is_directory(cfg.luaRoot, ec);
+    lua::cache_lua_files(); // every map context and instance copy loads the same LUA_ROOT
     lua::DefsResult defs;
     if (haveLua) defs = lua::load_component_defs(cfg.luaRoot, world::kReservedComponentNames);
     else log::info("no Lua components or systems (LUA_ROOT is not a folder)", {{"luaRoot", cfg.luaRoot}});

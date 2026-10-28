@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Load test: COUNT bots (default 500) running BEHAVIOUR (default wander) in one zone for DURATION seconds
 # (default 300) against the compose stack. MAPS=1,2,4,5 spreads the bots evenly over those maps instead (each walks
-# there through the portals: kast_bot --maps). MAP_THREADS (default 1) is the world's. Recreates the world first so
+# there through the portals: kast_bot --maps; an instance map among them, e.g. MAPS=1,4,5,6, spreads its share over
+# instance copies, INSTANCE_SIZE bots each, default the map's maxPlayers: the crypt's 2). MAP_THREADS (default 1) is
+# the world's. Recreates the world first so
 # its run totals cover this test only (and it runs with this MAP_THREADS), and stops it gracefully afterwards to get
 # the "tick stats total" line.
 # Pass: bot summary PASS, every 10 s window's tick p99 < 25 ms, run p99 < 25 ms, zero failed save attempts.
@@ -14,6 +16,7 @@ DURATION="${DURATION:-300}"
 BEHAVIOUR="${BEHAVIOUR:-wander}"
 THREADS="${THREADS:-8}"
 MAPS="${MAPS:-}"
+INSTANCE_SIZE="${INSTANCE_SIZE:-}"
 export MAP_THREADS="${MAP_THREADS:-1}" # read by docker-compose.yml
 RUN="${RUN_ID:-load$(date +%s)}"
 LOG="build/load-$RUN.log"
@@ -30,7 +33,7 @@ since=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
 echo "load: $COUNT x $BEHAVIOUR for ${DURATION}s on maps ${MAPS:-START_MAP}, MAP_THREADS=$MAP_THREADS (run $RUN)"
 docker compose run --rm -T bot --run-id "$RUN" --mode load --count "$COUNT" --behaviour "$BEHAVIOUR" \
-    --duration "$DURATION" --threads "$THREADS" ${MAPS:+--maps "$MAPS"} 2>&1 | grep -v -E '^ *(Container|Network) ' | tee "$LOG"
+    --duration "$DURATION" --threads "$THREADS" ${MAPS:+--maps "$MAPS"} ${INSTANCE_SIZE:+--instance-size "$INSTANCE_SIZE"} 2>&1 | grep -v -E '^ *(Container|Network) ' | tee "$LOG"
 botrc=${PIPESTATUS[0]}
 
 docker compose stop -t 15 world >/dev/null 2>&1 # emits "tick stats total"

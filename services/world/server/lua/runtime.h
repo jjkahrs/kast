@@ -1,7 +1,7 @@
 // Server Lua systems: LUA_ROOT/systems/*.lua, run in alphabetical filename order on the tick thread, one Lua state per
 // map context (and one for the realm's game machines), each file in its own sandboxed environment. A file returns
 // { init?, update(dt), shutdown?, onEnter?(e), onLeave?(e), onMapLeave?(e), onMapEnter?(e, carried),
-// validateCharacter?(name, options) }
+// validateCharacter?(name, options), instanceKey?(e, map) }
 // and reaches the world only through kast.* over its context's registry, event bus and state machines
 // (docs/services/world/lua.html). sol2 stays inside runtime.cpp: World holds a Runtime without seeing Lua types.
 #pragma once
@@ -64,6 +64,14 @@ struct Post {
 // What each system's onMapLeave returned (plain data), by system path, for its onMapEnter in the next context.
 using Carried = std::map<std::string, nlohmann::json>;
 
+// kast.map.instance(): the instance copy a context runs (docs/services/world/instances.html).
+struct InstanceInfo {
+    uint32_t id = 0;
+    std::optional<std::string> key; // nullopt: a keyless copy
+    uint16_t map = 0;
+};
+constexpr size_t kMaxInstanceKeyBytes = 255; // an instance key: a non-empty string of at most this many bytes
+
 // How kast.create / kast.destroy / kast.transfer / an NPC Transform set reach the world, which owns the maps, the AOI
 // grid and the sends.
 // Runtime checks every argument first; these only run for valid ones.
@@ -77,13 +85,23 @@ struct NpcHooks {
     std::function<const map::MapInfo*(uint16_t id)> map;      // nullptr: not loaded
     std::function<std::optional<float>(uint16_t map, float x, float z)> ground; // Maps::ground; nullopt: off the map
     std::function<std::vector<proto::Vec3>(uint16_t map, proto::Vec3 from, proto::Vec3 to)> path; // Nav::path
-    // Within the map at once, onto another at the serial point (World::transfer); false: not owned (logged).
-    std::function<bool(entt::entity, uint16_t map, proto::Vec3 pos, float heading)> transfer;
+    // Within the map at once, onto another at the serial point (World::transfer); false: not owned, or into a full
+    // instance copy (logged). instance: kast.transfer's instance = key (nullopt: none given).
+    std::function<bool(entt::entity, uint16_t map, proto::Vec3 pos, float heading, std::optional<std::string> instance)>
+        transfer;
+    std::function<std::optional<InstanceInfo>()> instance;    // kast.map.instance; unset or nullopt: not a copy
     std::function<const map::Spawn*(uint32_t record)> spawn;  // a SpawnRef's spawn file entry
     std::function<size_t()> count;                            // NPCs in every context (unset: this registry's)
     std::function<void(Post)> post;                           // kast.world.post
     size_t max = 0;                                           // MAX_NPCS
 };
+
+// From now on every Lua file and folder listing read under LUA_ROOT stays in memory for the life of the process, so the
+// next map context or instance copy loads without touching the disk (a Docker Desktop bind mount takes ~30 ms a
+// context to read the sample lua/; from memory under 1 ms). kast_world turns it on at startup: Lua edits need a restart
+// anyway. Tests leave it off (they rewrite their files); off also forgets what was kept.
+// ponytail: never invalidated; key it by mtime if Lua hot reload ever comes.
+void cache_lua_files(bool on = true);
 
 class Runtime {
 public:
@@ -111,6 +129,11 @@ public:
     // onMapEnter(e, carried): e just moved here from another map's context; carried is what this system's onMapLeave
     // returned there (nil for none).
     void enter_map(entt::entity e, const Carried& carried);
+    // The instance key for e's transfer onto instance map `map`: the first string a system's instanceKey(e, map)
+    // returns, in system order; nullopt if none does (or none has one). Returning anything else, or a string that is
+    // empty or longer than kMaxInstanceKeyBytes, disables that system like any callback error. Callable from inside
+    // another system's callback (kast.transfer).
+    std::optional<std::string> instance_key(entt::entity e, uint16_t map);
     // Whether a character may be created with these (C++-checked) options: every system with a validateCharacter must
     // return true for (name, {key = value, ...}). No system has one: only empty options pass. An error rejects, and
     // disables that system like any callback's.

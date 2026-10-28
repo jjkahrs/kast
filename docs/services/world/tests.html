@@ -9,7 +9,7 @@
 <body>
 <header class="top"><a class="brand" href="../../index.html">Kast Docs</a><nav><a href="../../editor/index.html">Editor</a><a href="../../engine/index.html">Engine</a><a href="../auth/index.html">Auth Server</a><a href="index.html">World Server</a><a href="../chat/index.html">Chat Server</a><a href="../admin/index.html">Admin App</a><a href="../../development/tests.html">Development</a></nav></header>
 <div class="layout">
-<nav class="side"><h2>World Server</h2><ul><li><a href="index.html">Overview</a></li><li><a href="setup.html">Setup and commands</a></li><li><a href="configuration.html">Configuration</a></li><li><a href="security.html">Security behaviour</a></li><li><a href="maps.html">Maps</a></li><li><a href="areas.html">Areas</a></li><li><a href="persistence.html">Persistence</a></li><li><a href="lua.html">Lua components and systems</a></li><li><a href="npcs.html">NPCs</a></li><li><a href="events.html">Events</a></li><li><a href="state-machines.html">State machines</a></li><li><a href="operations.html">Operations</a></li><li><a href="tests.html" class="active">Tests</a></li><li><a href="simplifications.html">Deliberate simplifications</a></li><li><a href="protocol.html">Protocol</a></li></ul></nav>
+<nav class="side"><h2>World Server</h2><ul><li><a href="index.html">Overview</a></li><li><a href="setup.html">Setup and commands</a></li><li><a href="configuration.html">Configuration</a></li><li><a href="security.html">Security behaviour</a></li><li><a href="maps.html">Maps</a></li><li><a href="areas.html">Areas</a></li><li><a href="instances.html">Instances</a></li><li><a href="persistence.html">Persistence</a></li><li><a href="lua.html">Lua components and systems</a></li><li><a href="npcs.html">NPCs</a></li><li><a href="events.html">Events</a></li><li><a href="state-machines.html">State machines</a></li><li><a href="operations.html">Operations</a></li><li><a href="tests.html" class="active">Tests</a></li><li><a href="simplifications.html">Deliberate simplifications</a></li><li><a href="protocol.html">Protocol</a></li></ul></nav>
 <main>
 <h1 id="tests">Tests</h1>
 <ul>
@@ -26,6 +26,15 @@
   <code>aoi_system</code>, which skips players with no touched cell near. After every tick each session's messages (encoded, in order),
   every <code>Visible.ids</code> / <code>Visible.entered</code> and every NPC's <code>Viewers</code> must be identical; it prints how often each event
   kind ran and fails if any ran 100 times or fewer. Leaving out any touch (for example the one for a move within a cell) fails it.</li>
+<li><strong>Instance checks</strong> (<code>lua_checks.cpp</code>, <code>checkInstanceManifests</code>, <code>checkInstances</code>, <code>checkInstanceKeyErrors</code>;
+  <a href="instances.html">Instances</a>): the <code>map.json</code> fields and every refusal (field and file named), the exit checks in
+  <code>Maps::load</code>; no copy at startup; same key one copy, another key or none a new one, each with its own Bat and Lua
+  (<code>init</code> / <code>shutdown</code>, <code>kast.map.instance()</code>); <code>instance =</code> skipping the hook; a full copy refused (<code>kast.transfer</code>
+  false, <code>instance.full</code>, no <code>MapChange</code>) and the C++ transfer too; relog into a live copy, a full one, a gone one and an old row;
+  the empty timer with the injected clock (cancelled by re-entry, firing at 10 s, <code>emptyTimeoutSec</code> 0 at the next serial point); the Lua
+  refusals (<code>kast.world.post</code> to an instance map, <code>kast.create</code> onto one, bad keys); 600 copies made and destroyed in a row (their
+  entity ids recycled); <code>instanceKey</code> errors disabling only that system. <code>world_self_check --instance-bench</code> prints the median
+  cost to make and destroy a copy with the sample <code>lua/</code>.</li>
 <li><strong>Parallel differential check</strong> (<code>self_check.cpp</code>, <code>checkParallelDifferential</code>;
   <a href="maps.html#threading">Threading</a>): seeded random worlds (20 seeds &times; 400 ticks) on 4 maps, each run in two
   <code>World</code>s, one with <code>MAP_THREADS=1</code> and one with 4, driven alike: logins (some next to a map's portal) and logouts,
@@ -33,7 +42,11 @@
   ticks, spawn-file NPCs that respawn, and a Lua system on its own seeded generator moving, creating (on its map and on others),
   destroying and transferring NPCs and players, setting an aoi component, posting to a map and to <code>"all"</code> (answered with a
   <code>kast.broadcast</code>), sending client events and changing a game machine, with <code>MAX_NPCS</code> 150 so the shares run out now
-  and then. After every tick each session's messages (encoded, in order) and the saves must be byte-identical; it prints how often
+  and then. Map 5 is an <a href="instances.html">instance map</a> (<code>maxPlayers</code> 3, <code>emptyTimeoutSec</code> 1, a portal into it on
+  every world map): the Lua system's <code>instanceKey</code> picks one of 3 keys or none, its <code>kast.transfer</code> passes <code>instance =</code>, the
+  C++ transfers key copies too, logins come back saved in a live or long-gone copy, and <code>instance.full</code> is answered with a
+  client event, so copies are made, filled, refused, rejoined and destroyed (hundreds of each). After every tick each session's
+  messages (encoded, in order), the saves and the live contexts (map, instanceId, key, players, NPCs) must be byte-identical; it prints how often
   each kind ran and fails if any ran too rarely, or if the Lua system got disabled. <code>world_self_check --parallel-stress N</code>
   runs it over N seeds (the long race run). Two mutations were checked to fail it: entity ids from one pool behind a lock (a
   different session message at tick 17) and <code>MAX_NPCS</code> counted live across contexts (tick 136). <code>checkConfig</code> refuses
@@ -179,6 +192,16 @@
 <li>Scenario 18 (<code>respawn</code>) uses the sample <code>systems/test_hooks.lua</code>. Bot A sees the Guard; bot B enters as
   <code>Respawntest...</code>, and A gets the Guard's <code>Despawn</code>, then 4.5–6.5 s later a <code>Spawn</code> for a new Guard (new id, template
   <code>Guard</code>) at its spawn point.</li>
+<li>Scenario 41 (<code>instances</code>) uses the sample crypt (<code>tests/project/maps/crypt</code>: map 6, an <a href="instances.html">instance map</a>,
+  <code>maxPlayers</code> 2, <code>emptyTimeoutSec</code> 5, a Bat, exit on Start at (1030, 0, 1060)), Start's <code>crypt_gate</code> portal into it and the sample
+  <code>systems/test_hooks.lua</code>'s <code>instanceKey</code>, which returns the key a bot sent in <code>client.test.instance_key</code>. Bots A and B (key x) and
+  C (key y) walk into the gate: all get <code>MapChange{6}</code>; A and B see each other and the same Bat, C neither of them and another Bat. D
+  (key x) gets no <code>MapChange</code> and <code>test.instance_full</code> <code>{map 6, key x}</code>. The admin port's instance list (when
+  <code>WORLD_ADMIN_SECRET</code> is set) has Start's context and both copies (x: 2 players, 1 NPC; y: 1). A relogs: back in its copy (map 6,
+  its position, B in view). Everyone leaves; 7 s later neither copy is listed and A relogs at the crypt's exit on map 1.
+  Scenario 42 (<code>instance-restart</code>, <code>instance-restart-verify</code>): a bot logs out inside a copy (saved with its instance id),
+  the script restarts <code>world</code>, and the character enters at the crypt's exit: copies are memory-only.
+  <code>tests/integration.sh --instances</code> runs only 17, 41 and 42 (export <code>MAP_THREADS</code> to run them at that setting).</li>
 <li>Scenario 0 runs <code>kast_mapbake</code> in the image on the mounted hills (into <code>/tmp</code>; the maps are read-only) and logs
   the fresh and stored navtiles' checksums.</li>
 <li>Scenario 19 (<code>terrain</code>) reads <code>maps/hills</code> itself (<code>--map-root</code>, the maps mounted into the bot). Bots A and B take
@@ -225,6 +248,10 @@
   off). The gates are far from the spawn point, and at different distances, because a map's context starts on its first use and
   its Lua load takes one tick about 30 ms: gates next to the spawn would start every context in the login ramp's first 10 s window. The summary's <code>on_target_map</code> counts the
   bots that got there; every one must. Example: <code>COUNT=400 MAPS=1,2,4,5 MAP_THREADS=4 bash tests/load.sh</code>.</li>
+<li><strong>Across instance copies:</strong> an <a href="instances.html">instance map</a> in <code>MAPS</code> (the crypt, 6) spreads its bots over copies:
+  every <code>INSTANCE_SIZE</code> of them (default the map's <code>maxPlayers</code>: 2) send the same instance key (the sample
+  <code>test_hooks.lua</code>'s <code>client.test.instance_key</code>) before walking to Start's <code>crypt_gate</code>, so each group gets its own copy; the
+  summary's <code>instance_keys</code> counts the copies. Example: <code>COUNT=200 MAPS=1,4,5,6 MAP_THREADS=4 bash tests/load.sh</code> (25 copies).</li>
 <li><strong>Pass criteria:</strong><ul>
 <li>Bot summary PASS: every bot entered the world (and, with <code>MAPS</code>, reached its map), with no errors, no unexpected
   disconnects and no <code>Correction</code> for honest movers. Without <code>MAPS</code> a wanderer that walks into the sample portal

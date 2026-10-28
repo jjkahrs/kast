@@ -51,7 +51,7 @@ struct System {
     std::string path; // "systems/regen.lua"
     std::filesystem::path file;
     sol::environment env;
-    sol::protected_function update, shutdown, onEnter, onLeave, onMapLeave, onMapEnter, validateCharacter;
+    sol::protected_function update, shutdown, onEnter, onLeave, onMapLeave, onMapEnter, validateCharacter, instanceKey;
     std::vector<EventBus::Subscription> subscriptions; // kast.subscribe; cleared when the system is disabled
     bool ok = false;
     std::string error;
@@ -185,7 +185,8 @@ struct Runtime::Impl {
                                   std::pair{"shutdown", &system.shutdown}, std::pair{"onEnter", &system.onEnter},
                                   std::pair{"onLeave", &system.onLeave}, std::pair{"onMapLeave", &system.onMapLeave},
                                   std::pair{"onMapEnter", &system.onMapEnter},
-                                  std::pair{"validateCharacter", &system.validateCharacter}}) {
+                                  std::pair{"validateCharacter", &system.validateCharacter},
+                                  std::pair{"instanceKey", &system.instanceKey}}) {
             sol::object fn = table[name];
             if (fn.get_type() == sol::type::lua_nil) continue;
             if (fn.get_type() != sol::type::function) return std::format("{}: \"{}\" must be a function", system.path, name);
@@ -554,7 +555,12 @@ struct Runtime::Impl {
                              [this](const std::string& n) { return machine_exists(n); }, error);
         if (!components) raise(L, "kast.create: " + error);
         std::optional<uint16_t> map;
-        if (const sol::object m = table["map"]; m.get_type() != sol::type::lua_nil) map = map_id(L, "kast.create: ", m);
+        if (const sol::object m = table["map"]; m.get_type() != sol::type::lua_nil) {
+            map = map_id(L, "kast.create: ", m);
+            const auto own = own_instance();
+            if (npcs.map(*map)->instanced() && !(own && own->map == *map))
+                raise(L, std::format("kast.create: map {} is an instance map; create its NPCs from inside the copy", *map));
+        }
         std::optional<proto::Vec3> pos;
         if (const sol::object p = table["position"]; p.get_type() != sol::type::lua_nil)
             pos = position(L, "kast.create: ", p);
@@ -568,19 +574,79 @@ struct Runtime::Impl {
                                 *components));
     }
 
-    // kast.transfer(e, map, position, heading?): a player or NPC to a point on a declared tile of a loaded map (the same
-    // map too). heading defaults to the current one. false: this process does not own the destination (logged).
+    // An instance key: a non-empty string of at most kMaxInstanceKeyBytes, or raises "<prefix>...".
+    static std::string instance_key(lua_State* L, std::string_view prefix, const sol::object& value) {
+        if (value.get_type() != sol::type::string || value.as<std::string>().empty() ||
+            value.as<std::string>().size() > kMaxInstanceKeyBytes)
+            raise(L, std::format("{}\"instance\" must be a non-empty string of at most {} bytes, got {}", prefix,
+                                 kMaxInstanceKeyBytes, to_string(L, value)));
+        return value.as<std::string>();
+    }
+
+    // kast.transfer(e, map, position, heading?) or kast.transfer(e, {map =, position =, heading =?, instance =?}): a
+    // player or NPC to a point on a declared tile of a loaded map (the same map too). heading defaults to the current
+    // one. instance: the instance key, onto an instance map (the instanceKey hooks are not asked). false: this process
+    // does not own the destination, or the instance copy is full (logged).
     bool transfer(lua_State* L, const sol::object& id, const sol::object& mapValue, const sol::object& posValue,
                   const sol::object& headingValue) {
         const entt::entity e = entity(L, id, "kast.transfer");
-        const uint16_t map = map_id(L, "kast.transfer: ", mapValue);
-        const proto::Vec3 pos = position(L, "kast.transfer: ", posValue);
+        sol::object mapArg = mapValue, posArg = posValue, headingArg = headingValue;
+        std::optional<std::string> key;
+        if (mapValue.get_type() == sol::type::table) {
+            const sol::table opts = mapValue.as<sol::table>();
+            for (const auto& [k, unused] : opts) {
+                const std::string name = k.get_type() == sol::type::string ? k.as<std::string>() : "";
+                if (name != "map" && name != "position" && name != "heading" && name != "instance")
+                    raise(L, std::format("kast.transfer: unknown option {}", to_string(L, k)));
+            }
+            mapArg = opts["map"];
+            posArg = opts["position"];
+            headingArg = opts["heading"];
+            if (const sol::object k = opts["instance"]; k.get_type() != sol::type::lua_nil)
+                key = instance_key(L, "kast.transfer: ", k);
+        }
+        const uint16_t map = map_id(L, "kast.transfer: ", mapArg);
+        const proto::Vec3 pos = position(L, "kast.transfer: ", posArg);
         if (!npcs.map(map)->contains(pos.x, pos.z))
             raise(L, std::format("kast.transfer: position ({}, {}) is not on a declared tile of map {}", pos.x, pos.z, map));
-        const float heading = headingValue.get_type() == sol::type::lua_nil
+        if (key && !npcs.map(map)->instanced())
+            raise(L, std::format("kast.transfer: \"instance\" is only for instance maps; map {} is a world map", map));
+        const float heading = headingArg.get_type() == sol::type::lua_nil
                                   ? reg.get<world::Transform>(e).heading
-                                  : finite(L, "kast.transfer: ", "heading", headingValue);
-        return npcs.transfer(e, map, pos, heading);
+                                  : finite(L, "kast.transfer: ", "heading", headingArg);
+        return npcs.transfer(e, map, pos, heading, std::move(key));
+    }
+
+    // This context's instance copy (NpcHooks::instance), or nullopt.
+    std::optional<InstanceInfo> own_instance() const { return npcs.instance ? npcs.instance() : std::nullopt; }
+
+    std::optional<std::string> instance_key(entt::entity e, uint16_t map) {
+        // Possibly inside another callback (kast.transfer in an update): call()'s state is put back afterwards.
+        System* caller = current;
+        const bool keep = std::exchange(keepResult, true);
+        sol::object outerKept = std::exchange(kept, sol::object());
+        const bool outerTrue = returnedTrue;
+        std::optional<std::string> key;
+        for (System& s : systems) {
+            if (key) break;
+            if (!s.ok || !s.instanceKey.valid()) continue;
+            run(s, s.instanceKey, "instanceKey", wire(e), map);
+            const sol::object result = std::exchange(kept, sol::object());
+            if (!s.ok || !result.valid() || result.get_type() == sol::type::lua_nil) continue;
+            if (result.get_type() == sol::type::string && !result.as<std::string>().empty() &&
+                result.as<std::string>().size() <= kMaxInstanceKeyBytes) {
+                key = result.as<std::string>();
+                continue;
+            }
+            disable(s, std::format("{}: instanceKey must return nil or a non-empty string of at most {} bytes, got {}",
+                                   s.path, kMaxInstanceKeyBytes, to_string(lua.lua_state(), result)));
+            log::error("Lua system disabled", {{"system", s.path}, {"callback", "instanceKey"}, {"error", s.error}});
+        }
+        current = caller;
+        keepResult = keep;
+        kept = std::move(outerKept);
+        returnedTrue = outerTrue;
+        return key;
     }
 
     // kast.map.area(e) / kast.map.areaAt(map, x, y, z): {id, name, flags, music} of the highest-priority area there
@@ -611,6 +677,15 @@ struct Runtime::Impl {
             return area_table(id, finite(L, "kast.map.areaAt: ", "x", x), finite(L, "kast.map.areaAt: ", "y", y),
                               finite(L, "kast.map.areaAt: ", "z", z));
         });
+        // kast.map.instance(): {id, key, map} of the instance copy this context runs (key nil for a keyless copy), or
+        // nil on a world map.
+        mapApi.set_function("instance", [this]() -> sol::object {
+            const auto info = own_instance();
+            if (!info) return sol::make_object(lua, sol::lua_nil);
+            sol::table t = lua.create_table_with("id", info->id, "map", info->map);
+            if (info->key) t["key"] = *info->key;
+            return t;
+        });
         // kast.map.spawn(map): {position = {x, y, z}, heading} of the map's spawn point (map.json "spawn").
         mapApi.set_function("spawn", [this](sol::this_state L, const sol::object& map) {
             const map::MapInfo* info = npcs.map(map_id(L, "kast.map.spawn: ", map));
@@ -639,7 +714,8 @@ struct Runtime::Impl {
         });
     }
 
-    // kast.world.post(target, event, data): target a loaded map's id, "realm" or "all"; event and data as kast.publish's.
+    // kast.world.post(target, event, data): target a loaded world map's id, "realm" or "all"; event and data as
+    // kast.publish's. An instance map has no single context to post to.
     void bind_world_api() {
         worldApi = lua.create_table();
         worldApi.set_function("post", [this](sol::this_state L, const sol::object& target, const sol::object& name,
@@ -648,9 +724,12 @@ struct Runtime::Impl {
             const double id = target.get_type() == sol::type::number ? target.as<double>() : NAN;
             if (target.get_type() == sol::type::string && target.as<std::string>() == "realm") post.to = Post::To::realm;
             else if (target.get_type() == sol::type::string && target.as<std::string>() == "all") post.to = Post::To::all;
-            else if (id >= 0 && id <= 65535 && id == std::floor(id) && npcs.map(static_cast<uint16_t>(id)))
+            else if (id >= 0 && id <= 65535 && id == std::floor(id) && npcs.map(static_cast<uint16_t>(id))) {
                 post.map = static_cast<uint16_t>(id);
-            else
+                if (npcs.map(post.map)->instanced())
+                    raise(L, std::format("kast.world.post: map {} is an instance map, with no single context to post to; "
+                                         "post to \"realm\" or \"all\"", post.map));
+            } else
                 raise(L, std::format("kast.world.post: target must be a loaded map's id, \"realm\" or \"all\", got {}",
                                      to_string(L, target)));
             post.event = event_name(L, "kast.world.post", name);
@@ -735,9 +814,8 @@ struct Runtime::Impl {
             auto it = definitions.find(name);
             if (it == definitions.end()) {
                 Definitions loaded;
-                std::error_code ec;
                 for (const auto& file : definition_files(luaRoot, name.c_str())) {
-                    const std::string path = std::filesystem::relative(file, luaRoot, ec).generic_string();
+                    const std::string path = lua_path(file, luaRoot);
                     nlohmann::json json;
                     std::string error;
                     try {
@@ -962,11 +1040,7 @@ std::vector<std::string> Runtime::load(const std::filesystem::path& root, std::v
     std::vector<std::string> errors = impl_->load_machines(root, std::move(gameMachines));
     for (std::string& e : impl_->load_items(root)) errors.push_back(std::move(e)); // before the NPCs: loot names items
     for (std::string& e : impl_->load_npcs(root)) errors.push_back(std::move(e)); // before init: it may kast.create one
-    std::vector<std::filesystem::path> files;
-    std::error_code ec;
-    for (auto it = std::filesystem::directory_iterator(root / "systems", ec);
-         !ec && it != std::filesystem::directory_iterator(); it.increment(ec))
-        if (it->is_regular_file(ec) && it->path().extension() == ".lua") files.push_back(it->path());
+    std::vector<std::filesystem::path> files = lua_files(root / "systems", false);
     std::ranges::sort(files, {}, [](const auto& f) { return f.filename(); });
 
     impl_->systems.reserve(files.size()); // subscriptions point at their System
@@ -1029,6 +1103,8 @@ void Runtime::enter_map(entt::entity e, const Carried& carried) {
                    it == carried.end() ? sol::make_object(impl_->lua, sol::lua_nil) : json_to_lua(impl_->lua, it->second));
     }
 }
+
+std::optional<std::string> Runtime::instance_key(entt::entity e, uint16_t map) { return impl_->instance_key(e, map); }
 
 bool Runtime::validate_character(const std::string& name, const proto::CharOptions& options) {
     bool hooked = false;

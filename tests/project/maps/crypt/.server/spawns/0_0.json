@@ -1,0 +1,6 @@
+{
+  "version": 2,
+  "spawns": [
+    {"id": "crypt_bat", "npc": "Bat", "pos": [140, 0, 128], "respawnSec": -1}
+  ]
+}

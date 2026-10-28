@@ -9,7 +9,7 @@
 <body>
 <header class="top"><a class="brand" href="../../index.html">Kast Docs</a><nav><a href="../../editor/index.html">Editor</a><a href="../../engine/index.html">Engine</a><a href="../auth/index.html">Auth Server</a><a href="index.html">World Server</a><a href="../chat/index.html">Chat Server</a><a href="../admin/index.html">Admin App</a><a href="../../development/tests.html">Development</a></nav></header>
 <div class="layout">
-<nav class="side"><h2>World Server</h2><ul><li><a href="index.html">Overview</a></li><li><a href="setup.html">Setup and commands</a></li><li><a href="configuration.html">Configuration</a></li><li><a href="security.html">Security behaviour</a></li><li><a href="maps.html">Maps</a></li><li><a href="areas.html">Areas</a></li><li><a href="persistence.html">Persistence</a></li><li><a href="lua.html">Lua components and systems</a></li><li><a href="npcs.html">NPCs</a></li><li><a href="events.html">Events</a></li><li><a href="state-machines.html">State machines</a></li><li><a href="operations.html">Operations</a></li><li><a href="tests.html">Tests</a></li><li><a href="simplifications.html" class="active">Deliberate simplifications</a></li><li><a href="protocol.html">Protocol</a></li></ul></nav>
+<nav class="side"><h2>World Server</h2><ul><li><a href="index.html">Overview</a></li><li><a href="setup.html">Setup and commands</a></li><li><a href="configuration.html">Configuration</a></li><li><a href="security.html">Security behaviour</a></li><li><a href="maps.html">Maps</a></li><li><a href="areas.html">Areas</a></li><li><a href="instances.html">Instances</a></li><li><a href="persistence.html">Persistence</a></li><li><a href="lua.html">Lua components and systems</a></li><li><a href="npcs.html">NPCs</a></li><li><a href="events.html">Events</a></li><li><a href="state-machines.html">State machines</a></li><li><a href="operations.html">Operations</a></li><li><a href="tests.html">Tests</a></li><li><a href="simplifications.html" class="active">Deliberate simplifications</a></li><li><a href="protocol.html">Protocol</a></li></ul></nav>
 <main>
 <h1 id="deliberate-simplifications">Deliberate simplifications</h1>
 <p>Each is marked <code>// ponytail:</code> in the code with its limit and upgrade path:</p>
@@ -33,9 +33,21 @@
   ids stay with it.</li>
 <li><strong>One lock per navmesh:</strong> a path search takes its map's lock (Detour's query keeps its search state); only a
   <code>kast.map.path</code> for another map can wait on it. A query object per context if that shows.</li>
-<li><strong>Finding an entity's context is a scan:</strong> <code>World</code> asks each map context in turn (one per map in use) which holds an id,
-  for a session's messages and C++ calls. An id-to-context index once instanced maps multiply the contexts.</li>
-<li><strong>Map contexts never stop:</strong> a world map's context, once started, stays for the life of the process, like its tiles.</li>
+<li><strong>Finding an entity's context is a scan:</strong> <code>World</code> asks each map context in turn (one per world map in use and one per
+  instance copy) which holds an id, for a session's messages and C++ calls: a hash lookup each. An id-to-context index if thousands of
+  copies live at once.</li>
+<li><strong>Instances live in memory only:</strong> no binds, saved instance state, scheduled resets, difficulties, groups or lockouts
+  (AzerothCore's). A copy is found by its Lua instance key while it lives; a restart (or its empty timeout) loses it, and its players
+  enter at the map's <code>exit</code>. Save the copies' state if a game needs raids that outlive a restart.</li>
+<li><strong>A full copy is checked twice:</strong> <code>kast.transfer</code> can return <code>false</code> only for a copy that was full at the last
+  serial point (counting the context's own queued players); one filled since by another context or a login is refused when the
+  transfer is done, after <code>kast.transfer</code> returned <code>true</code> (<code>instance.full</code> both times). Reserve the place at the request if
+  a game needs the return value exact.</li>
+<li><strong>Instance ids from the clock:</strong> each run's copies count up from 16 &times; the Unix time in seconds, so a saved instance id
+  from an earlier run names no copy of this one. A run that made more than 16 copies a second for its whole uptime could reach the
+  next run's ids; a run counter in the database if that is ever plausible.</li>
+<li><strong>Map contexts never stop:</strong> a world map's context, once started, stays for the life of the process, like its tiles.
+  An instance copy is destroyed once empty for its map's <code>emptyTimeoutSec</code>; its entity ids go back to the pool.</li>
 <li><strong>Every context keeps every spawn record:</strong> each map context has the full list of spawn file entries (a pointer and a
   timer each), so a spawn index means the same in all of them; it only spawns its own map's.</li>
 <li><strong>Sleeping patrols are swept slowly:</strong> the sample <code>systems/npcs.lua</code> checks 8 patrol entries a tick for NPCs that are gone

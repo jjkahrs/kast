@@ -348,7 +348,7 @@ void save_system(entt::registry& reg, const lua::Defs& defs, const Save& save, M
     std::vector<entt::entity> saved;
     for (auto [e, timer, ch, tf, mr] : reg.view<Dirty, SaveTimer, CharacterRef, Transform, MapRef>().each()) {
         if (now - timer.lastSave < interval) continue;
-        save({ch.charId, mr.map, tf.pos, tf.heading, lua::components_column(reg, e, defs)});
+        save({ch.charId, mr.map, tf.pos, tf.heading, lua::components_column(reg, e, defs), mr.instance});
         timer.lastSave = now;
         saved.push_back(e);
     }
@@ -356,7 +356,7 @@ void save_system(entt::registry& reg, const lua::Defs& defs, const Save& save, M
 }
 
 void spawner_system(entt::registry& reg, Spawner& spawner, const std::function<size_t()>& npcs, size_t maxNpcs, TimePoint now,
-                    const std::function<entt::entity(const SpawnRecord&)>& create) {
+                    const std::function<entt::entity(const SpawnRecord&)>& create, uint32_t instance) {
     bool capped = false;
     for (size_t i = 0; i < spawner.pending.size();) {
         const uint32_t record = spawner.pending[i];
@@ -364,7 +364,7 @@ void spawner_system(entt::registry& reg, Spawner& spawner, const std::function<s
         if (now < r.respawnAt) { ++i; continue; }
         if (npcs() >= maxNpcs) { capped = true; break; }
         spawner.pending.erase(spawner.pending.begin() + i); // before create: an FSM enter callback may destroy an NPC
-        reg.emplace<SpawnRef>(create(r), record);
+        reg.emplace<SpawnRef>(create(r), record, instance);
         r.alive = true;
     }
     if (capped && !spawner.capped) log::warn("spawns deferred: MAX_NPCS reached", {{"max", maxNpcs}});

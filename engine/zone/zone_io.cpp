@@ -227,6 +227,13 @@ std::vector<ZoneError> validate(const Project& project, const ZoneDoc& doc) {
             if (fs::exists(project.root / u8path(file)))
                 errors.push_back({file, "already exists and was not generated for this map; rename or delete it"});
 
+    if (info->exit) { // as the server checks it once every map is loaded (maps.cpp, map::exit_error)
+        const km::MapInfo* to = info->exit->map == info->id ? &*info : nullptr;
+        for (const ProjectMap& m : project.maps)
+            if (!to && m.folder != doc.folder && m.info.id == info->exit->map) to = &m.info;
+        if (const auto e = km::exit_error(*info, to)) errors.push_back({where(doc.folder, "map.json"), *e});
+    }
+
     if (!doc.state.areas.is_null()) {
         if (const auto areas = km::parse_areas(nlohmann::json(doc.state.areas), err)) {
             // Portals as the server checks them once every map is loaded (maps.cpp portal_error).

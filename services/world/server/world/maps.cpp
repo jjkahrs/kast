@@ -194,6 +194,10 @@ Maps Maps::load(const std::filesystem::path& root, std::vector<std::string>& err
             if (area.portal)
                 if (auto err = portal_error(maps, area))
                     errors.push_back("maps/" + folderOf.at(id) + "/areas.json: " + *err);
+    // Instance exits likewise (map::exit_error).
+    for (const auto& [id, info] : maps.maps_)
+        if (auto err = map::exit_error(info, maps.by_id(info.exit ? info.exit->map : 0)))
+            errors.push_back("maps/" + folderOf.at(id) + "/map.json: " + *err);
     if (maps.maps_.empty() && errors.empty()) errors.push_back("MAP_ROOT " + root.string() + ": no maps");
     return maps;
 }

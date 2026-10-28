@@ -6,6 +6,7 @@
 #include <zone/zone_edit.h>
 #include <zone/zone_io.h>
 
+
 #include <asset_ref.h>
 #include <event_bus.h>
 #include <files.h>
@@ -97,7 +98,8 @@ void check_round_trip(const fs::path& project, const std::string& name, const st
     kast::readAssetRefs(manifest); // its {id, path} refs: saved below without the editor's ids, as plain paths
     const Json areas = fs::exists(dir / "areas.json") ? json_file(dir / "areas.json") : Json();
     std::map<std::string, std::string> heightBytes;
-    for (const auto& entry : fs::directory_iterator(dir / "heights"))
+    std::error_code noHeights; // a flat map (the crypt) has no heights/ folder
+    for (const auto& entry : fs::directory_iterator(dir / "heights", noHeights))
         if (entry.path().extension() != ".meta") heightBytes[entry.path().filename().string()] = bytes(entry.path()); // not the editor's asset ids
 
     doc->saved = {}; // everything differs from "disk": every file is rewritten
@@ -407,6 +409,81 @@ bool has_error(const std::vector<ZoneError>& errors, const std::string& file, co
         if (e.file == file && e.message.find(text) != std::string::npos) return true;
     print_errors(errors);
     return false;
+}
+
+// The instance fields (docs/editor/zone-builder.html#instance): a world map made an instance map, its fields set, saved
+// and read back; undo returns it to the world map it was; validation as the server's, the exit against the project.
+void check_instance() {
+    const fs::path root = copy_project(kSource / "tests" / "project", "instance");
+    Project p = scan_project(root);
+    std::string err;
+    auto loaded = load_map(p, "cave", err);
+    CHECK(loaded.has_value());
+    if (!loaded) return;
+    ZoneDoc& doc = *loaded;
+    const Json before = doc.state.manifest;
+    const std::string file = "maps/cave/map.json";
+
+    doc.edit([](ZoneState& s) { set_instance(s, true, {1, {1030, 0, 1060}, 3.14f}); });
+    doc.edit([](ZoneState& s) { set_max_players(s, 4); });
+    doc.edit([](ZoneState& s) { set_empty_timeout(s, 60); });
+    CHECK(doc.state.manifest["type"] == "instance" && doc.state.manifest["maxPlayers"] == 4 &&
+          doc.state.manifest["emptyTimeoutSec"] == 60 && doc.state.manifest["exit"]["map"] == 1);
+    print_errors(validate(p, doc));
+    CHECK(validate(p, doc).empty());
+    CHECK(doc.history().undoName() == "Edit Map");
+    CHECK(save_map(p, doc, false).empty());
+    auto again = load_map(p, "cave", err);
+    const auto info = again ? again->info(err) : std::nullopt;
+    CHECK(info && info->instanced() && info->maxPlayers == 4u && info->emptyTimeoutSec == 60 && info->exit &&
+          info->exit->map == 1 && info->exit->pos == (std::array<float, 3>{1030, 0, 1060}) && info->exit->heading == 3.14f);
+    CHECK(again && again->state.manifest == doc.state.manifest); // round trip: what the panel wrote is what loads
+    // A second save with no edits writes nothing; set_instance on an instance map keeps its exit.
+    CHECK(again && !again->dirty());
+    doc.edit([](ZoneState& s) { set_instance(s, true, {9, {0, 0, 0}, 0}); });
+    CHECK(doc.state.manifest["exit"]["map"] == 1);
+
+    // Undo back to the world map, field by field; redo again.
+    for (int i = 0; i < 3; ++i) doc.undo();
+    CHECK(doc.state.manifest == before && !doc.state.manifest.contains("type"));
+    for (int i = 0; i < 3; ++i) doc.redo();
+    CHECK(doc.state.manifest["maxPlayers"] == 4);
+    doc.edit([](ZoneState& s) { set_max_players(s, std::nullopt); });
+    CHECK(!doc.state.manifest.contains("maxPlayers") && validate(p, doc).empty()); // unlimited
+
+    // The exit as the server checks it: unknown map, off its tiles, inside a portal there, on an instance map.
+    const std::pair<km::Portal, const char*> exits[] = {
+        {{99, {10, 0, 10}, 0}, "\"exit\": to unknown map 99"},
+        {{1, {5000, 0, 10}, 0}, "\"exit\": position is not on a tile of map 1"},
+        {{1, {1045, 0, 995}, 0}, "\"exit\": position is inside portal area \"cave_mouth\" of map 1"},
+        {{6, {128, 0, 128}, 0}, "\"exit\": map 6 is an instance map; an exit must be on a world map"},
+        {{2, {10, 0, 10}, 0}, "\"exit\": map 2 is an instance map"}, // itself
+    };
+    for (const auto& [exit, want] : exits) {
+        doc.edit([&](ZoneState& s) { set_exit(s, exit); });
+        CHECK(has_error(validate(p, doc), file, want));
+    }
+    doc.edit([](ZoneState& s) { set_exit(s, {1, {1030, 0, 1060}, 0}); });
+    CHECK(validate(p, doc).empty());
+
+    // Bad values and misplaced fields: the manifest's parse error, file and field named (the panel's map.json: line).
+    doc.edit([](ZoneState& s) { s.manifest["maxPlayers"] = 0; });
+    CHECK(has_error(validate(p, doc), file, "\"maxPlayers\" must be an integer >= 1"));
+    CHECK(save_map(p, doc, false).size() == 1); // blocked: nothing written
+    doc.undo();
+    doc.edit([](ZoneState& s) { s.manifest.erase("exit"); });
+    CHECK(has_error(validate(p, doc), file, "\"exit\" must be {"));
+    doc.undo();
+    doc.edit([](ZoneState& s) { set_instance(s, false); });
+    CHECK(!doc.state.manifest.contains("exit") && !doc.state.manifest.contains("emptyTimeoutSec") && validate(p, doc).empty());
+    doc.edit([](ZoneState& s) { s.manifest["emptyTimeoutSec"] = 5; });
+    CHECK(has_error(validate(p, doc), file, "\"emptyTimeoutSec\" is only for instance maps"));
+
+    // The sample crypt (an instance map) and the start map's portal into it validate.
+    auto crypt = load_map(p, "crypt", err);
+    CHECK(crypt && crypt->info(err)->instanced() && validate(p, *crypt).empty());
+    auto start = load_map(p, "start", err);
+    CHECK(start && validate(p, *start).empty());
 }
 
 void check_areas() {
@@ -1119,6 +1196,8 @@ int main(int argc, char** argv) {
     check_round_trip(kSource / "samples" / "starter-mmo", "rt_meadow", "meadow");
     check_round_trip(kSource / "samples" / "starter-mmo", "rt_cavern", "cavern");
     check_round_trip(kSource / "tests" / "project", "rt_hills", "hills");
+    check_round_trip(kSource / "tests" / "project", "rt_crypt", "crypt");
+    check_instance();
     check_new_map();
     check_undo();
     check_raycast();

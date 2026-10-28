@@ -66,6 +66,7 @@ private:
     void report_maps();                                   // map changes since the last tick, to the chat link
     std::vector<proto::AdminOnlineEntry> admin_online() const; // every authenticated session, for the admin port
     uint32_t admin_kick(const proto::AdminKick& k);
+    std::vector<proto::AdminInstanceEntry> admin_instances() const; // every live map context, for the admin port
 
     void schedule_tick();
     void tick();
