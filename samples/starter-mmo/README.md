@@ -351,7 +351,8 @@ of the client project, in dot-folders or elsewhere.
   - `starter_mmo_live_camera`, `_camera_zoom`, `_camera_orbit`: `scripts/player.lua`'s camera behind the character,
     zoomed out and orbited by a left drag (the editor's `--sim-mouse`).
   - `starter_mmo_live_rock`: real W presses (`--sim-key`) walk the character into a Meadow rock; it stops 1.65 m from
-    the rock's centre (its 1.2 m radius and the character's 0.45 m), or up to a frame's step short of that.
+    the rock's centre (its 1.2 m radius and the character's 0.45 m) at any frame rate: `scripts/player.lua` moves a
+    blocked step up to the obstacle.
   - `starter_mmo_live_shrine`: at the Meadow Shrine, `[E] Use the Meadow Shrine`, a real E press, and the server's
     blessing in the chat box.
   - `starter_mmo_live_combat_target`: a left click selects the Bat (target frame and marker).
