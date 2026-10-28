@@ -1,6 +1,7 @@
 // kast_bot: headless test client for the world server.
 //   kast_bot --scenario <name> [options]                       one integration scenario, prints PASS/FAIL
 //   kast_bot --mode load --count 500 --behaviour wander [...]  many sessions in one process
+#include "crash_dialogs.h"
 #include "load.h"
 #include "scenarios.h"
 
@@ -49,6 +50,7 @@ void usage() {
 } // namespace
 
 int main(int argc, char** argv) {
+    kast::disableCrashDialogsIfRequested();
     Options o;
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];

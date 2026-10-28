@@ -6,6 +6,7 @@
 #include <zone/zone_edit.h>
 #include <zone/zone_io.h>
 
+#include <crash_dialogs.h>
 
 #include <asset_ref.h>
 #include <event_bus.h>
@@ -1187,6 +1188,7 @@ void check_terrain_gen() {
 }
 
 int main(int argc, char** argv) {
+    kast::disableCrashDialogsIfRequested();
     if (argc == 3 && std::string(argv[1]) == "--child") { // check_process_runner's child: stdout, stderr, exit code
         std::printf("child: %s\n", argv[2]);
         std::fflush(stdout);

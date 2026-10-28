@@ -2,6 +2,7 @@
 // persistence.
 // Threads: io (network + tick), DB worker, token verifier.
 #include "app/game_server.h"
+#include "crash_dialogs.h"
 #include "auth/token_service.h"
 #include "core/config.h"
 #include "core/log.h"
@@ -20,6 +21,7 @@
 using namespace kast;
 
 int main() {
+    disableCrashDialogsIfRequested();
     const ConfigResult loaded = load_config(process_env);
     if (!loaded.errors.empty()) {
         std::fprintf(stderr, "Invalid configuration:\n");

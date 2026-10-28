@@ -2,6 +2,7 @@
 // bakes a navtile per declared tile into <mapDir>/.server/nav (or --out), with its obstacles and interactables cut out.
 // Exit 0: all baked; 1: lint or bake errors (nothing written); 2: usage.
 #include "bake.h"
+#include "crash_dialogs.h"
 
 #include <chrono>
 #include <cstdio>
@@ -173,6 +174,7 @@ int run(const fs::path& dir, fs::path out) {
 } // namespace
 
 int main(int argc, char** argv) {
+    kast::disableCrashDialogsIfRequested();
     fs::path dir, out;
     bool usage = false;
     for (int i = 1; i < argc; ++i) {

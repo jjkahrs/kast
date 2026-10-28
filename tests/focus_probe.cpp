@@ -4,6 +4,8 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
+#include <crash_dialogs.h>
+
 #include <cstdio>
 #include <cwchar>
 #include <string>
@@ -45,6 +47,7 @@ BOOL CALLBACK checkWindow(HWND window, LPARAM param)
 
 int main()
 {
+    kast::disableCrashDialogsIfRequested();
     std::wstring command = childCommandLine();
     if (command.empty()) {
         std::fprintf(stderr, "Usage: kast_focus_probe <exe> [args...]\n");
