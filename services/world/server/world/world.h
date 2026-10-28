@@ -1,6 +1,6 @@
 // The world: every loaded map (maps.h) in one ECS registry and one AOI grid, plus the Lua systems and the NPCs of the
-// maps' spawn files (spawner_system); runs the systems in
-// a fixed order each tick. Talks to the outside only through Send (to a session), SendMany (one message to several) and Save (to the DB worker).
+// maps' spawn files (spawner_system), spawned per tile as players come near and asleep away from them (Activation);
+// runs the systems in a fixed order each tick. Talks to the outside only through Send (to a session), SendMany (one message to several) and Save (to the DB worker).
 // Each player and NPC is on one map (MapRef); only transfer() changes it.
 #pragma once
 #include "maps.h"
@@ -29,6 +29,7 @@ struct WorldRules {
     Millis saveInterval{60000};
     float tickSeconds = 0.05f; // dt passed to Lua update
     size_t maxNpcs = 10000;    // kast.create raises past this
+    int activationTiles = 1;   // ACTIVATION_TILES: tiles around a player's that load and stay awake (Activation)
 };
 
 // Where a transfer puts an entity.
@@ -61,7 +62,8 @@ public:
 
     // Places the character (at its saved map and position, lifted onto the ground if it is under it, or START_MAP's
     // spawn if that map is not loaded or the position is off it), sends
-    // EnterWorldOk, restores its persisted Lua components and runs onEnter. Other players get Spawn on the next tick.
+    // EnterWorldOk, wakes the tiles around it (spawning the NPCs of those loading now, so onEnter sees them), restores
+    // its persisted Lua components and runs onEnter. Other players get Spawn on the next tick.
     entt::entity spawn(uint32_t sessionId, const db::CharRow& row, TimePoint now);
     // Runs onLeave and sends the client events it queued, saves the character, sends Despawn to everyone who could
     // see it, removes it.
@@ -74,7 +76,7 @@ public:
                             std::optional<proto::Vec3> pos, float heading, std::string npc = "",
                             const lua::Json& components = lua::Json::object());
     // Sends Despawn to every player who sees the NPC, removes it. One from a spawn file (SpawnRef) comes back
-    // respawnSec after this (never for -1).
+    // respawnSec after this (never for -1), asleep or not.
     void destroy_npc(entt::entity e);
     // Graceful shutdown, after the players are gone: removes every NPC; nothing to send, nothing to save.
     void remove_npcs();
@@ -105,6 +107,8 @@ public:
 private:
     // Takes e out of every view, both ways: Despawn to each player that sees it, e's own view links emptied.
     void leave_views(entt::entity e);
+    // spawner_system: creates the NPCs of the due spawn records.
+    void spawn_due(TimePoint now);
 
     WorldRules rules_;
     const Maps& maps_;
@@ -117,6 +121,7 @@ private:
     lua::Runtime lua_; // after reg_ and grid_: it holds a reference and creates NPCs through this World
     Mutes mutes_;
     Spawner spawner_; // every loaded spawn file entry, in Maps order; SpawnRef indexes it
+    Activation activation_;
     size_t population_ = 0;
     TimePoint now_{}; // the current tick's time (transfer resets move budgets to it)
 };

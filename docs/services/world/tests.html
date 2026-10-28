@@ -28,6 +28,19 @@
   kind ran and fails if any ran 100 times or fewer. Leaving out any touch (for example the one for a move within a cell) fails it.</li>
 <li><strong>AOI cost</strong> (ctest <code>aoi_bench</code>, <code>world_self_check --aoi-bench</code>): ns per <code>aoi_system</code> call with 500 and
   2000 players (plus a fifth as many NPCs) on a 2 km map, all idle, 10% and 100% moving a short step each tick. Printed, not checked.</li>
+<li><strong>Tile activation</strong> (<code>checkTileActivation</code> in <code>lua_checks.cpp</code>, the sample <code>lua/</code> plus a probe system logging what
+  <code>kast.query("Npc")</code> returns): no spawn-file NPC however long a world runs with no player; a login spawns its tile's and
+  the neighbours' NPCs at once and no farther; a transfer away puts them to sleep without despawning them (absent from
+  <code>kast.query</code>, the Guard's position and patrol state frozen) and loads the destination; a destroyed sleeping NPC respawns
+  exactly <code>respawnSec</code> later, asleep; coming back wakes the same Guard, which walks on to the point it was heading for;
+  nothing spawns twice; <code>kast.create</code> NPCs sleep, and wake when moved onto a near tile; a logout puts the tiles to sleep;
+  <code>ACTIVATION_TILES</code> 2 loads tiles two off. <code>checkConfig</code> refuses <code>ACTIVATION_TILES</code> 0, -1, abc, 1.5 and 33. Checks written for
+  always-on spawns put a watcher player on every spawn spot first (<code>watch_spawns</code>).</li>
+<li><strong>Activation cost</strong> (ctest <code>activation_bench</code>, <code>world_self_check --activation-bench</code>): the median <code>World::tick</code> over 200
+  ticks (after 50 to warm up) on the injected clock, the sample <code>lua/</code> running, 100 idle players on one tile of a 32&times;32
+  tile map, (a) alone and (b) with 10,000 patrolling spawn-file Guards on 100 tiles 9 or more tiles away. Before (b) a
+  scout logs in on each Guard tile and out again, so the 10,000 exist and sleep. Fails if (b) is more than 110% of (a).
+  Before tile activation (b) was about 270 times (a) (26 ms against 0.1 ms, Release).</li>
 <li><strong>Logging</strong> (ctest <code>log_bench</code> and <code>log_flush</code>): <code>log_bench</code> (<code>world_self_check --log-bench</code>, stdout to the null device)
   prints the caller-side ns per line of <code>log::info</code> and of the old synchronous write (printed only: one timing sample is too noisy to fail a build on),
   and checks that 4 threads &times; 100,000 lines all reach the sink. <code>log_flush</code> checks that the line logged right before a SIGSEGV on the main thread

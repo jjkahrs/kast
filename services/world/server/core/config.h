@@ -55,6 +55,7 @@ struct Config {
     float aoiCellSize = 64, aoiViewRadius = 128;
     uint32_t maxCharsPerAccount = 10;
     uint32_t maxNpcs = 10000;
+    uint32_t activationTiles = 1; // tiles around a player's (Chebyshev) whose spawns load and whose NPCs stay awake
     uint32_t chatMaxBytes = 256;
     uint32_t chatRateCount = 5;
     uint32_t chatRateWindowMs = 10000;

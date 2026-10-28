@@ -49,6 +49,14 @@ kast.destroy(guard)                                                 -- Despawn t
   it. <code>onEnter</code> and <code>onLeave</code> never run for NPCs.</li>
 <li><strong>Ephemeral:</strong> NPCs are never saved and need no database. A restart starts without them: the spawn files and the
   systems' <code>init</code> create them again. A graceful shutdown removes them silently, after the players.</li>
+<li id="sleep"><strong>Sleep:</strong> an NPC on a tile no player is near (<a href="maps.html#tile-activation">tile activation</a>) is asleep, whether it came from a spawn file
+  or <code>kast.create</code>. <code>kast.query</code> never returns a sleeping NPC, so the systems that walk their NPCs with it leave it alone:
+  no patrol, no AI, no state machine changes. It keeps its components, state and position, and every other <code>kast.*</code>
+  works on it by id (<code>kast.get</code>, <code>kast.set</code>, <code>kast.fsm.change</code>, <code>kast.destroy</code>). It wakes, where it was, when a player
+  comes near. A system that keeps per-NPC state must not drop it when an NPC is missing from the query: the sample
+  <code>systems/npcs.lua</code> keeps a sleeping NPC's patrol (target, waited seconds) and checks a few entries a tick for NPCs that
+  are gone, so a Guard that falls asleep mid-walk goes on to the same point when it wakes, and a wait goes on where it
+  stopped instead of ending at once. Players still see a sleeping NPC; one they can see is never asleep anyway.</li>
 </ul>
 <p><strong>NPCs cost bandwidth like players.</strong> Each move is one 20-byte entry per tick in the <code>EntityMoves</code> of each
 player in view. A player gets one such message a tick however many movers it sees, but a crowd of walking NPCs around a
@@ -123,16 +131,18 @@ server only (the editor's Build leaves dot-folders out of <code>game.pak</code>)
   every NPC that has one, along <code>kast.map.path</code> between its points on a map with a <a href="maps.html#navmesh">navmesh</a>. <code>Spawn</code> also holds the file's <code>pos</code> (<code>{x, y, z}</code>, y as written, not clamped to the ground) and
   <code>heading</code>, so a system can send an NPC home (the starter-mmo sample's <code>systems/combat.lua</code> walks a leashed NPC back to
   it and heals it there).</li>
-<li><strong>Loading:</strong> at startup, the spawn files of every tile this process owns (every tile, for now). A file name that is
+<li><strong>Loading:</strong> at startup, the spawn files of every tile this process owns (every tile, for now) are read and checked
+  (the <code>maps loaded</code> log line counts each map's spawns); their NPCs come later, per tile. A file name that is
   not <code>&lt;tx&gt;_&lt;tz&gt;.json</code>, a tile not on the map, an invalid file (each problem named, such as
   <code>maps/start/.server/spawns/4_4.json: spawn "guard_1": "pos" is outside tile 4_4</code>), an unknown <code>path</code> or an <code>id</code> used
   twice on a map refuses the start, and so does an <code>npc</code> with no definition, once <code>LUA_ROOT</code> is loaded
   (<code>maps/start/.server/spawns/4_4.json: spawn "guard_1": unknown npc "Gaurd" (no definition in npcs/)</code>).
   <code>map::parse_spawns</code> (the <code>kast_map</code> library) checks one file's shape without the server or Lua.</li>
-<li><strong>Spawning:</strong> every spawn is placed on the first tick, and each tick the spawner places the ones due, before the Lua
-  <code>update</code>, so systems see them that tick; players get the <code>Spawn</code> on the next. They count toward <code>MAX_NPCS</code>: at the
-  cap the due spawns wait (one warning, <code>spawns deferred: MAX_NPCS reached</code>) and go in once there is room. Every spawn
-  is always active, near players or not.</li>
+<li><strong>Spawning:</strong> a tile's spawns are placed the first time a player comes near it (<a href="maps.html#tile-activation">tile
+  activation</a>; at once for a login), and each tick the spawner places the ones due, before the Lua <code>update</code>, so
+  systems see them that tick; players get the <code>Spawn</code> on the next. They count toward <code>MAX_NPCS</code>: at the cap the due
+  spawns wait (one warning, <code>spawns deferred: MAX_NPCS reached</code>) and go in once there is room. A destroyed NPC's
+  respawn timer runs while its tile sleeps, and the new NPC starts asleep there.</li>
 </ul>
 </main>
 </div>

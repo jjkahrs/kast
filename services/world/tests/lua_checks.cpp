@@ -3,7 +3,7 @@
 // event bus (kast.publish/subscribe/unsubscribe), client events (kast.sendTo/sendNearby/broadcast) and state machines
 // (definitions, rules, queueing, callback errors, kast.fsm, the StateMachine built-in, C++ / Lua parity) and NPCs
 // (kast.create / kast.destroy, Transform rules, AOI and replication routing, shutdown, the sample lua/), NPC spawns
-// (parse_spawns, spawn file loading errors, respawn timing, MAX_NPCS, the Spawn built-in) and maps (tile math,
+// (parse_spawns, spawn file loading errors, respawn timing, MAX_NPCS, the Spawn built-in, tile activation) and maps (tile math,
 // manifests and Maps::load errors, bounds, per-map AOI, World::transfer, kast.transfer / Transform.map), ground and the
 // navmesh (an in-memory bake, Nav::path / on_mesh, navtile load errors, off_mesh moves, kast.map.path).
 // Lua files are written to a temp folder; the World runs with captured Send/Save, so there is no network or database.
@@ -277,6 +277,17 @@ struct TestWorld {
 };
 
 uint32_t wire(entt::entity e) { return entt::to_integral(e); }
+
+// A watcher player (session 900 + i) on every spawn file entry's spot: the tiles load and stay awake, as every spawn
+// did before tile activation, for checks about something else.
+void watch_spawns(TestWorld& w) {
+    uint32_t i = 0;
+    for (const auto& [id, info] : w.maps.all())
+        for (const auto& s : info.spawns) {
+            w.spawn(900 + i, 900 + i, "Watcher" + std::to_string(i), s.pos[0], s.pos[2], "", id);
+            ++i;
+        }
+}
 
 constexpr const char* kStats = R"(return { name = "Stats", fields = {
     { name = "hp", type = "int", default = 10, min = 0, max = 100 },
@@ -585,7 +596,7 @@ void checkReplication() {
         auto& p = lua::pool(reg, name);
         if (p.contains(e)) p.get(e).value = Json::parse(json);
         else p.emplace(e, lua::ComponentData{Json::parse(json)});
-        reg.get<world::ReplicatedState>(e).dirty.insert(name);
+        world::mark_dirty(reg, e, name);
     };
     const auto a = w.spawn(1, 51, "Alice", 1000, 1000);
     const auto b = w.spawn(2, 52, "Bob", 1050, 1000);
@@ -615,7 +626,7 @@ void checkReplication() {
     w.sent.clear();
     set(a, "Health", R"({"hp":6})");
     lua::pool(reg, "Wallet").remove(a);
-    reg.get<world::ReplicatedState>(a).dirty.insert("Wallet");
+    world::mark_dirty(reg, a, "Wallet");
     w.world.tick(T0 + std::chrono::milliseconds(100));
     check(w.sent.updates(1, A).size() == 1 && w.sent.updates(2, A).size() == 1 && w.sent.updates(2, A)[0].json == R"({"hp":6})",
           "a change goes to owner + observers once");
@@ -2324,7 +2335,9 @@ void checkNpcApi() {
     LuaRoot r;
     r.write("components/stats.lua", kStats).write("fsms/plain.lua", kPlain);
     r.write("systems/npc.lua", std::string(kLuaExpect) + kNpcApiSystem);
-    TestWorld w(r.defs().defs);
+    world::WorldRules rules;
+    rules.activationTiles = 8; // "Far" is 4 tiles from Alice: awake too, so kast.query sees it
+    TestWorld w(r.defs().defs, rules);
     check(w.world.load_scripts(r.root).empty(), "npc api: loads");
     w.spawn(1, 101, "Alice", 1000, 1000);
     w.sent.clear();
@@ -2462,6 +2475,7 @@ end, update = function() end })lua");
     world::WorldRules rules;
     rules.maxNpcs = 2;
     TestWorld w({}, rules);
+    w.spawn(1, 1, "Watcher", 1024, 1024); // the NPCs init creates at the spawn point are awake: kast.query sees them
     check(w.world.load_scripts(r.root).empty(), "npc cap: loads (create works from init)");
     check_lua_expectations("npc cap", "cap done");
 
@@ -2716,6 +2730,7 @@ void checkNpcSample() {
     check(errors.empty(), "sample systems load: " + (errors.empty() ? "" : errors[0]));
     auto& reg = w.world.registry();
     check(reg.view<world::Npc>().empty(), "no NPC before the first tick (no Lua creates any)");
+    watch_spawns(w);
     const auto npc = [&](const std::string& name) {
         for (auto [e, n] : reg.view<world::Npc>().each())
             if (n.name == name) return e;
@@ -2955,6 +2970,7 @@ void checkRespawn() {
         return entt::entity{entt::null};
     };
     check(reg.view<world::Npc>().empty(), "respawn: nothing before the first tick");
+    watch_spawns(w);
     w.world.tick(T0);
     const auto a = find("Guard"), b = find("Bat");
     check(a != entt::null && b != entt::null, "respawn: every spawn is created on the first tick");
@@ -2984,6 +3000,7 @@ void checkRespawn() {
     rules.maxNpcs = 1;
     TestWorld capped({}, rules, spawn_maps());
     capped.world.load_scripts(r.root);
+    watch_spawns(capped);
     capped.world.tick(T0);
     capped.world.tick(T0 + std::chrono::milliseconds(50));
     auto& creg = capped.world.registry();
@@ -3035,9 +3052,140 @@ void checkSpawnLua() {
     write_spawn_npcs(r);
     TestWorld w({}, {}, spawn_maps());
     check(w.world.load_scripts(r.root).empty(), "spawn lua: loads");
+    watch_spawns(w);
     w.world.tick(T0);
     check_lua_expectations("spawn lua", "spawn lua done");
     for (const auto& s : w.world.script_status()) check(s.ok, "spawn lua: system still enabled " + s.error);
+}
+
+// --- tile activation (docs/services/world/maps.html#tile-activation) ---
+
+// The sample lua/ (Guard patrols, Sentry and Bat stand) plus a probe that logs the NPC names kast.query("Npc") returns
+// whenever they change. Map 1 (tiles 0..7): the Guard on tile 4_4 patrols north from (1100, 1100) to (1100, 1180), the
+// Sentry stands on 5_4 (respawnSec 2), a Bat on 7_7; map 2: a Bat on tile 0_0.
+constexpr const char* kAwakeProbe = R"(local last
+return { update = function()
+    local names = {}
+    for e in kast.query("Npc") do names[#names + 1] = kast.get(e, "Npc").name end
+    table.sort(names)
+    local now = table.concat(names, ",")
+    if now ~= last then kast.log("awake npcs: " .. now .. "|") ; last = now end
+end })";
+
+world::Maps activation_maps() {
+    world::Maps maps = test_maps();
+    map::MapInfo start = maps.info(1);
+    start.spawns = {
+        {"guard", "Guard", {1100, 0, 1100}, 0, 30, map::PatrolPath{{{1100, 0, 1100}, {1100, 0, 1180}}, 1, true}, ""},
+        {"sentry", "Sentry", {1300, 0, 1100}, 0, 2, std::nullopt, ""},
+        {"far", "Bat", {1900, 0, 1900}, 0, 30, std::nullopt, ""},
+    };
+    maps.add(start);
+    map::MapInfo cave = maps.info(2);
+    cave.spawns = {{"cave", "Bat", {100, 0, 100}, 0, 30, std::nullopt, ""}};
+    maps.add(cave);
+    return maps;
+}
+
+void checkTileActivation() {
+    LogCapture capture;
+    LuaRoot r;
+    const fs::path sample = KAST_WORLD_LUA_SAMPLE;
+    for (const char* dir : {"components", "fsms", "npcs", "systems"}) fs::copy(sample / dir, r.root / dir, fs::copy_options::recursive);
+    r.write("systems/zz_probe.lua", kAwakeProbe);
+    const auto defs = lua::load_component_defs(r.root, world::kReservedComponentNames);
+    TestWorld w(defs.defs, {}, activation_maps());
+    check(defs.errors.empty() && w.world.load_scripts(r.root).empty(), "activation: loads");
+    auto& reg = w.world.registry();
+    TimePoint t = T0;
+    const auto run = [&](double seconds) {
+        for (int i = 0; i < static_cast<int>(std::lround(seconds * 20)); ++i) w.world.tick(t += std::chrono::milliseconds(50));
+    };
+    // The NPC of a spawn record (Maps order: map 1's guard 0, sentry 1, far 2, then the cave's 3), or null.
+    const auto npc = [&](uint32_t record) {
+        for (auto [e, ref] : reg.view<world::SpawnRef>().each())
+            if (ref.record == record) return e;
+        return entt::entity{entt::null};
+    };
+    const auto count = [&](uint32_t record) {
+        size_t n = 0;
+        for (auto [e, ref] : reg.view<world::SpawnRef>().each()) n += ref.record == record;
+        return n;
+    };
+    const auto asleep = [&](entt::entity e) { return reg.all_of<world::Asleep>(e) && !reg.all_of<world::Awake>(e); };
+    const auto awake = [&](entt::entity e) { return reg.all_of<world::Awake>(e) && !reg.all_of<world::Asleep>(e); };
+
+    run(5);
+    check(reg.view<world::Npc>().empty(), "activation: no player online: no spawn-file NPC, however long it runs");
+
+    // Alice on tile 4_4: the Guard's tile and the Sentry's (5_4, a neighbour) load at her login; the Bat on 7_7 (3
+    // tiles off) and the cave's do not.
+    const auto alice = w.spawn(1, 61, "Alice", 1100, 1150);
+    const auto guard = npc(0), sentry = npc(1);
+    check(guard != entt::null && sentry != entt::null && npc(2) == entt::null && npc(3) == entt::null &&
+              reg.view<world::Npc>().size() == 2,
+          "activation: a login spawns its tile's and the neighbours' NPCs at once, no farther");
+    if (guard == entt::null || sentry == entt::null) return;
+    check(awake(guard) && awake(sentry), "activation: NPCs near a player are awake");
+    run(3);
+    check(logged("awake npcs: Guard,Sentry|"), "activation: kast.query returns the awake NPCs");
+    const proto::Vec3 walked = reg.get<world::Transform>(guard).pos;
+    check(walked.z > 1100.5f && w.world.fsm().state(lua::EntityId{wire(guard)}) == "walking",
+          "activation: the awake Guard patrols (waited 1 s at its first point, now walking north)");
+
+    // Alice goes to the cave: map 1's tiles sleep. Nothing despawns; the cave's Bat loads.
+    clear_log();
+    check(w.world.transfer(alice, {2, {100, 0, 120}, 0}), "activation: transfer to the cave");
+    const proto::Vec3 slept = reg.get<world::Transform>(guard).pos;
+    run(3);
+    const auto caveBat = npc(3);
+    check(caveBat != entt::null && awake(caveBat) && asleep(guard) && asleep(sentry) && reg.view<world::Npc>().size() == 3,
+          "activation: the tiles left behind sleep (nothing despawns); the cave's tile loads");
+    check(logged("awake npcs: Bat|") && !logged("awake npcs: Bat,Guard"), "activation: kast.query skips sleeping NPCs");
+    check(reg.get<world::Transform>(guard).pos == slept && w.world.fsm().state(lua::EntityId{wire(guard)}) == "walking",
+          "activation: a sleeping Guard does not patrol; its state machine stays where it was");
+
+    // The sleeping Sentry is destroyed: it comes back respawnSec (2 s) later, asleep, still on a sleeping tile.
+    w.world.destroy_npc(sentry);
+    run(1.95);
+    check(npc(1) == entt::null, "activation: a destroyed sleeping NPC is not back before respawnSec");
+    run(0.05);
+    const auto sentry2 = npc(1);
+    check(sentry2 != entt::null && asleep(sentry2), "activation: it respawns on schedule while its tile sleeps, asleep");
+
+    // Back on map 1: the same Guard wakes and walks on north from where it stopped; nothing spawns twice.
+    clear_log();
+    check(w.world.transfer(alice, {1, {1100, 0, 1150}, 0}), "activation: transfer back");
+    run(0.05);
+    check(awake(guard) && awake(sentry2) && asleep(caveBat), "activation: coming back wakes the tiles; the cave sleeps");
+    run(1);
+    const proto::Vec3 woke = reg.get<world::Transform>(guard).pos;
+    check(woke.z > slept.z + 2 && std::fabs(woke.x - 1100) < 0.01f && w.world.fsm().state(lua::EntityId{wire(guard)}) == "walking",
+          "activation: the Guard goes on from where it was (still north, not back to its first point)");
+    check(logged("awake npcs: Guard,Sentry|"), "activation: kast.query sees them again");
+    check(count(0) == 1 && count(1) == 1 && count(2) == 0 && count(3) == 1 && reg.view<world::Npc>().size() == 3,
+          "activation: leaving and coming back spawns nothing twice");
+
+    // kast.create NPCs sleep and wake the same way.
+    const auto far = w.world.create_npc("Far", "T", 1, proto::Vec3{1900, 0, 1900}, 0);
+    const auto close = w.world.create_npc("Close", "T", 1, proto::Vec3{1150, 0, 1150}, 0);
+    check(asleep(far) && awake(close), "activation: a script NPC far from players sleeps, one near is awake");
+    reg.get<world::Transform>(far).pos = {1200, 0, 1150};
+    reg.emplace_or_replace<world::Moved>(far);
+    run(0.05);
+    check(awake(far), "activation: an NPC moved onto a near tile wakes");
+
+    // Logout: every tile around Alice sleeps.
+    w.world.despawn(alice);
+    check(asleep(guard) && asleep(sentry2) && asleep(close) && asleep(far), "activation: the last player leaving puts its tiles to sleep");
+
+    // ACTIVATION_TILES 2: two tiles out load too.
+    world::WorldRules two;
+    two.activationTiles = 2;
+    TestWorld w2(defs.defs, two, activation_maps());
+    check(w2.world.load_scripts(r.root).empty(), "activation 2: loads");
+    w2.spawn(1, 62, "Bob", 1300, 1300); // tile 5_5: the Bat on 7_7 is 2 tiles off
+    check(w2.world.registry().view<world::Npc>().size() == 3, "activation 2: ACTIVATION_TILES 2 loads tiles 2 off");
 }
 
 // ClientEvent in (kast.world.send): "client.<name>" {entity, data} on the bus after this tick's update, in arrival
@@ -3180,6 +3328,7 @@ void checkStarterMmoCombat() {
     check(errors.empty(), "starter-mmo: systems load " + (errors.empty() ? "" : errors[0]));
     if (!errors.empty()) return;
     auto& reg = w.world.registry();
+    watch_spawns(w);
     TimePoint t = T0;
     w.world.tick(t);
     const auto npc = [&](const std::string& name) {
@@ -3588,6 +3737,7 @@ void checkStarterMmoQuests() {
     if (!errors.empty()) return;
     check(said("quests loaded"), "starter-mmo quests: the server logs its quests loaded");
     auto& reg = w.world.registry();
+    watch_spawns(w);
     TimePoint t = T0;
     w.world.tick(t);
     const auto run = [&](double seconds) {
@@ -5714,6 +5864,7 @@ void checkNpcSpawnDefinitions() {
     const auto errors = w.world.load_scripts(lua.root);
     check(mapErrors.empty() && errors.empty(), "npc spawn: loads " + joined(mapErrors) + joined(errors));
     auto& reg = w.world.registry();
+    watch_spawns(w);
     w.world.tick(T0);
     const auto first = [&] { return reg.view<world::Npc>().empty() ? entt::entity{entt::null} : reg.view<world::Npc>().front(); };
     const auto g = first();
@@ -5797,8 +5948,9 @@ void checkStarterMmoShrine() {
     const auto errors = w.world.load_scripts(root);
     check(errors.empty(), "starter-mmo shrine: systems load " + joined(errors));
     if (!errors.empty()) return;
-    const auto pilgrim = w.spawn(1, 51, "Pilgrim", shrine->pos[0], shrine->pos[2] - 3, "", 10);
+    // Faraway first: its login spawns the meadow's NPCs, so its regen phase (entity id % 20) stays clear of the check.
     const auto faraway = w.spawn(2, 52, "Faraway", shrine->pos[0] + 20, shrine->pos[2], "", 10);
+    const auto pilgrim = w.spawn(1, 51, "Pilgrim", shrine->pos[0], shrine->pos[2] - 3, "", 10);
     check(map::footprint_distance(shrine->shape, shrine->pos, shrine->yaw, shrine->pos[0], shrine->pos[2] - 3) < shrine->range,
           "starter-mmo shrine: the Pilgrim stands within range of its edge");
     TimePoint t = T0;
@@ -6151,6 +6303,7 @@ int lua_checks(int& checks) {
     checkSpawnLoading();
     checkRespawn();
     checkSpawnLua();
+    checkTileActivation();
     checkClientEventsIn();
     checkMoveEpochs();
     checkMovableAndMapSpawn();
@@ -6194,4 +6347,69 @@ int lua_checks(int& checks) {
 #endif
     checks += g_checks;
     return g_failures;
+}
+
+// --- tile activation cost (ctest activation_bench): median World::tick ms, 100 idle players on one tile of a 32x32
+// tile map running the sample lua/, (a) alone and (b) with 10,000 patrolling spawn-file Guards on 100 tiles no player
+// is near. A scout logs in on every Guard tile first (spawning its NPCs) and leaves, so (b) measures 10,000 NPCs that
+// exist and sleep, not tiles that never loaded. -1 if the setup is wrong.
+namespace {
+double activation_tick_ms(int npcs) {
+    world::Maps maps;
+    map::MapInfo big;
+    big.id = 1;
+    big.name = "big";
+    big.tiles = {{0, 0, 31, 31}};
+    big.spawn = {300, 0, 300};
+    std::mt19937 rng(11);
+    std::uniform_real_distribution<float> in(8, 248);
+    for (int i = 0; i < npcs; ++i) {
+        const float x0 = (10 + i % 10) * map::kTileSize, z0 = (10 + i / 10 % 10) * map::kTileSize; // tiles 10..19
+        const float x = x0 + in(rng), z = z0 + in(rng);
+        big.spawns.push_back({"g" + std::to_string(i), "Guard", {x, 0, z}, 0, 30,
+                              map::PatrolPath{{{x, 0, z}, {x0 + in(rng), 0, z0 + in(rng)}}, 1, true}, ""});
+    }
+    maps.add(big);
+    world::WorldRules rules;
+    rules.maxNpcs = 20000;
+    TestWorld w(lua::load_component_defs(KAST_WORLD_LUA_SAMPLE, world::kReservedComponentNames).defs, rules, std::move(maps));
+    if (const auto errors = w.world.load_scripts(KAST_WORLD_LUA_SAMPLE); !errors.empty()) {
+        std::fprintf(stderr, "activation bench: %s\n", errors.front().c_str());
+        return -1;
+    }
+    for (int t = 0; t < 100 && npcs > 0; ++t) // the scout: its login spawns the tiles' NPCs, its logout puts them to sleep
+        w.world.despawn(w.spawn(9999, 9999, "Scout", (10 + t % 10) * map::kTileSize + 128, (10 + t / 10) * map::kTileSize + 128));
+    auto& reg = w.world.registry();
+    if (reg.view<world::Npc>().size() != size_t(npcs) || reg.view<world::Asleep>().size() != size_t(npcs)) {
+        std::fprintf(stderr, "activation bench: %zu NPCs, %zu asleep; wanted %d of each\n", reg.view<world::Npc>().size(),
+                     reg.view<world::Asleep>().size(), npcs);
+        return -1;
+    }
+    std::uniform_real_distribution<float> home(260, 500); // tile (1, 1)
+    for (uint32_t p = 1; p <= 100; ++p) w.spawn(p, p, "P" + std::to_string(p), home(rng), home(rng));
+    TimePoint now = T0;
+    const auto tick = [&] {
+        now += std::chrono::milliseconds(50);
+        const auto start = std::chrono::steady_clock::now();
+        w.world.tick(now);
+        return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+    };
+    for (int i = 0; i < 50; ++i) tick(); // warm up
+    std::vector<double> ms;
+    for (int i = 0; i < 200; ++i) ms.push_back(tick());
+    std::ranges::nth_element(ms, ms.begin() + ms.size() / 2);
+    return ms[ms.size() / 2];
+}
+} // namespace
+
+int activation_bench() {
+    log::set_level(log::Level::error); // the sample's per-entity warnings are not what is measured
+    const double a = activation_tick_ms(0), b = activation_tick_ms(10000);
+    std::fprintf(stderr, "activation bench: median tick (a) 100 players: %.4f ms, (b) + 10000 NPCs on far tiles: %.4f ms, "
+                         "b/a = %.1f%%\n", a, b, 100 * b / a);
+    if (a < 0 || b < 0 || b > a * 1.10) {
+        std::fprintf(stderr, "activation bench: FAIL, (b) must be at most 110%% of (a)\n");
+        return 1;
+    }
+    return 0;
 }

@@ -815,6 +815,16 @@ void checkConfig() {
     env["AOI_CELL_SIZE"] = "128";
     check(load_config(lookup).errors.empty(), "AOI_CELL_SIZE 128 divides 256");
     env.erase("AOI_CELL_SIZE");
+    check(ok.config.activationTiles == 1, "ACTIVATION_TILES defaults to 1");
+    for (const char* bad : {"0", "-1", "abc", "1.5", "33"}) {
+        env["ACTIVATION_TILES"] = bad;
+        const auto r = load_config(lookup);
+        check(r.errors.size() == 1 && r.errors[0] == std::string("ACTIVATION_TILES: must be a number in [1, 32], got \"") + bad + "\"",
+              (std::string("ACTIVATION_TILES ") + bad + " refused with a clear error").c_str());
+    }
+    env["ACTIVATION_TILES"] = "2";
+    check(load_config(lookup).errors.empty() && load_config(lookup).config.activationTiles == 2, "ACTIVATION_TILES 2 read");
+    env.erase("ACTIVATION_TILES");
     env["START_MAP"] = "65536";
     check(load_config(lookup).errors.size() == 1, "START_MAP above 65535 refused");
     env["START_MAP"] = "2";
@@ -1436,6 +1446,7 @@ int log_crash(std::string_view how) {
 } // namespace
 
 int lua_checks(int& checks); // lua_checks.cpp
+int activation_bench();        // lua_checks.cpp
 
 // A test never waits for a click: abort(), failed asserts, debug-CRT reports (STL debug checks) and crashes write to
 // stderr and end the process instead of opening a modal dialog. Same as engine/crash_dialogs.cpp, without its
@@ -1458,6 +1469,7 @@ int main(int argc, char** argv) {
     disable_crash_dialogs();
     if (argc > 1 && std::string_view(argv[1]) == "--log-bench") return log_bench();
     if (argc > 1 && std::string_view(argv[1]) == "--aoi-bench") return aoi_bench();
+    if (argc > 1 && std::string_view(argv[1]) == "--activation-bench") return activation_bench();
     if (argc > 2 && std::string_view(argv[1]) == "--log-crash") return log_crash(argv[2]);
     checkCodecRoundTrip();
     checkFrameRejection();

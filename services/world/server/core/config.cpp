@@ -69,6 +69,7 @@ ConfigResult load_config(const EnvLookup& env) {
     l.num("AOI_VIEW_RADIUS", c.aoiViewRadius, 1, 1e5);
     l.num("MAX_CHARS_PER_ACCOUNT", c.maxCharsPerAccount, 1, 255);
     l.num("MAX_NPCS", c.maxNpcs, 0, 100000);
+    l.num("ACTIVATION_TILES", c.activationTiles, 1, 32);
     l.num("CHAT_MAX_BYTES", c.chatMaxBytes, 1, 4000);
     l.num("CHAT_RATE_COUNT", c.chatRateCount, 1, 1000);
     l.num("CHAT_RATE_WINDOW_MS", c.chatRateWindowMs, 1, u32max);
