@@ -59,7 +59,8 @@ joined only by transfers. Players and NPCs on different maps never see each othe
 </ul>
 <h2 id="map-contexts">Map contexts</h2>
 <p>Like AzerothCore's one <code>Map</code> object per map, each map in use runs in its own context, and one realm context runs what
-belongs to no map. Contexts are updated one after another on the tick thread, and meet only at serial points.</p>
+belongs to no map. Contexts are updated one after another on the tick thread, or at once on <code>MAP_THREADS</code> workers
+(<a href="#threading">Threading</a>), and meet only at serial points.</p>
 <ul>
 <li><strong>A map context owns:</strong> a registry (every player and NPC on the map), an AOI grid, a Lua state (<code>npcs/</code> and
   <code>systems/</code>, every <code>init</code> run when the context starts), the spawner and <a href="#tile-activation">tile activation</a>, an event bus,
@@ -88,12 +89,46 @@ belongs to no map. Contexts are updated one after another on the tick thread, an
   not; a <code>StateMachine</code> keeps its current state; the entity id stays); <code>area.enter</code> on the new map's bus;
   <code>onMapEnter(e, carried)</code> in the new context's systems (<a href="lua.html#systems">Lua</a>). A portal's <code>Spawn</code>s and area events
   come in the portal tick, a <code>kast.transfer</code>'s in the next. Within a map a transfer is done at once, as before.</li>
-<li><strong>Entity ids:</strong> one process-wide pool hands each context its ids (the entity ids on the wire and in Lua), in the order a
-  single registry would, so an id is unique across contexts and an entity keeps it when it changes context. <code>MAX_NPCS</code> counts the
-  NPCs of every context.</li>
+<li><strong>Entity ids:</strong> one process-wide index space, handed to the contexts in blocks of 4096; a context hands out the ids it freed
+  first (the last freed first, its version bumped) and then new ones from its block, so an id (the entity id on the wire and in Lua) is
+  unique across contexts and an entity keeps it when it changes context. The ids a context gets depend only on what it did itself.
+  With one context they are those a single registry would give. <code>MAX_NPCS</code> counts the NPCs of every context
+  (<a href="#threading">Threading</a>: how it is shared).</li>
 <li><strong>Sessions:</strong> a player's <code>Move</code>, <code>Say</code>, <code>ClientEvent</code> and <code>Interact</code> go to the context its character is
   in now.</li>
 </ul>
+<h3 id="threading">Threading</h3>
+<p>Like AzerothCore's <code>MapUpdater</code> (<code>CONFIG_NUMTHREADS</code>), <code>MAP_THREADS</code> (default 1,
+<a href="configuration.html">Configuration</a>) workers update the map contexts at once.</p>
+<ul>
+<li><strong><code>MAP_THREADS=1</code>:</strong> no workers; every context updates on the tick thread, one after another in map id order.</li>
+<li><strong><code>MAP_THREADS=N</code>, N &gt; 1:</strong> N workers start with the server and stop at shutdown. Each tick has two update steps
+  (movement and areas; the rest of the tick). In each, every map context is one job; the workers take the jobs in turn and the tick
+  thread waits for all of them (a barrier) before the serial point that follows. The serial points, the realm context, logins, logouts
+  and everything else outside the two steps stay on the tick thread. One map never splits across workers: a single busy map is no faster
+  than with one thread.</li>
+<li><strong>Same result:</strong> with any <code>MAP_THREADS</code> the server sends every session the same messages, in the same order, and
+  saves the same, as with 1 (<code>checkParallelDifferential</code>, <a href="tests.html">Tests</a>). During a step a context touches only its own
+  data:
+  <ul>
+  <li>Its sends and saves wait in the context; after the barrier they go out context by context in map id order. A session is in one
+  context, so it gets its messages in the serial order; the network and the DB worker only ever see the tick thread.</li>
+  <li>Entity ids come from the context's own freed ids and block (above). Each context gets a spare block before each step, in map id
+  order, so a step can make 4096 new ids without asking anyone; past that it takes a block mid-step (unique ids still, but then which
+  block may vary with timing).</li>
+  <li><code>MAX_NPCS</code>: before each step what is left under the limit is split evenly among the contexts (map id order takes the
+  remainder). A context may create up to its share; it never takes another's, so the limit holds and what a context may create does not
+  depend on the others' timing. With one map that is exactly the old count. With several, a map can be refused an NPC while the
+  others' shares are unused; the shares are recomputed before every step.</li>
+  <li>Logging is thread-safe, the Lua script deadline is per thread, the maps' data is read only, and a navmesh path search
+  (<code>kast.map.path</code> may ask for another map's) takes that map's lock.</li>
+  </ul></li>
+<li><strong>C++ subscribers</strong> on a map's bus (<code>World::bus(map)</code>) run on whichever worker updates that map; the realm's bus stays on the
+  tick thread.</li>
+<li><strong>Cost:</strong> the tick stats lines show each context's update time (<a href="operations.html#tick-stats">Operations</a>). The bench
+  <code>map_threads_bench</code> (4 maps of 100 moving players and 100 Guards) runs a tick in under 40% of the 1-thread time with 4.</li>
+</ul>
+
 <h2 id="tile-activation">Tile activation</h2>
 <p>A tile is <em>near</em> a player when it is at most <code>ACTIVATION_TILES</code> (default 1: a 3&times;3 block) tiles from the player's tile,
 counted the long way round (Chebyshev: <code>max(|dx|, |dz|)</code>), on the player's map. Like AzerothCore's grids:</p>

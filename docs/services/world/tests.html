@@ -26,6 +26,24 @@
   <code>aoi_system</code>, which skips players with no touched cell near. After every tick each session's messages (encoded, in order),
   every <code>Visible.ids</code> / <code>Visible.entered</code> and every NPC's <code>Viewers</code> must be identical; it prints how often each event
   kind ran and fails if any ran 100 times or fewer. Leaving out any touch (for example the one for a move within a cell) fails it.</li>
+<li><strong>Parallel differential check</strong> (<code>self_check.cpp</code>, <code>checkParallelDifferential</code>;
+  <a href="maps.html#threading">Threading</a>): seeded random worlds (20 seeds &times; 400 ticks) on 4 maps, each run in two
+  <code>World</code>s, one with <code>MAP_THREADS=1</code> and one with 4, driven alike: logins (some next to a map's portal) and logouts,
+  moves (a few speedhacks, so <code>Correction</code>s), says and yells, client events, C++ transfers and NPC creates / destroys between
+  ticks, spawn-file NPCs that respawn, and a Lua system on its own seeded generator moving, creating (on its map and on others),
+  destroying and transferring NPCs and players, setting an aoi component, posting to a map and to <code>"all"</code> (answered with a
+  <code>kast.broadcast</code>), sending client events and changing a game machine, with <code>MAX_NPCS</code> 150 so the shares run out now
+  and then. After every tick each session's messages (encoded, in order) and the saves must be byte-identical; it prints how often
+  each kind ran and fails if any ran too rarely, or if the Lua system got disabled. <code>world_self_check --parallel-stress N</code>
+  runs it over N seeds (the long race run). Two mutations were checked to fail it: entity ids from one pool behind a lock (a
+  different session message at tick 17) and <code>MAX_NPCS</code> counted live across contexts (tick 136). <code>checkConfig</code> refuses
+  <code>MAP_THREADS</code> 0, -1, -4, abc, 1.5, " 4" and 257.</li>
+<li><strong>Parallel cost</strong> (ctest <code>map_threads_bench</code>, <code>world_self_check --map-threads-bench</code>): p50 and p95
+  <code>World::tick</code> ms over 300 ticks (after 50 to warm up) on the injected clock, the sample <code>lua/</code> running, 4 maps of 4&times;4
+  tiles, each with 100 players moving 8 m/s and 100 patrolling spawn-file Guards, with <code>MAP_THREADS=1</code> and 4. Prints the
+  hardware thread count; fails if the 4-thread p95 is above 40% of the 1-thread p95. With fewer than 4 hardware threads, or in a
+  Debug build (MSVC's checked STL and debug heap take process-wide locks: 4 threads measured at 140-230% of 1), it prints
+  that the threshold was skipped instead; the Release and Docker (Linux release) builds check it.</li>
 <li><strong>AOI cost</strong> (ctest <code>aoi_bench</code>, <code>world_self_check --aoi-bench</code>): ns per <code>aoi_system</code> call with 500 and
   2000 players (plus a fifth as many NPCs) on a 2 km map, all idle, 10% and 100% moving a short step each tick. Printed, not checked.</li>
 <li><strong>Tile activation</strong> (<code>checkTileActivation</code> in <code>lua_checks.cpp</code>, the sample <code>lua/</code> plus a probe system logging what
@@ -197,11 +215,20 @@
 </ul>
 </li>
 <li><strong>Load</strong> (<code>tests/load.sh</code>):<ul>
-<li><strong>Setup:</strong> restarts <code>world</code> so its totals cover only the test. It then runs <code>COUNT</code> bots in one process (8 io threads, 50 new connections per second) for <code>DURATION</code> s.</li>
+<li><strong>Setup:</strong> recreates <code>world</code> (with the shell's <code>MAP_THREADS</code>, default 1) so its totals cover only the test. It then runs <code>COUNT</code> bots in one process (8 io threads, 50 new connections per second) for <code>DURATION</code> s.</li>
+<li><strong>Across maps:</strong> <code>MAPS=1,2,4,5</code> passes <code>--maps</code> to the bot: bot <em>i</em> heads for the <em>i</em>-th listed map (round
+  robin, so <code>COUNT</code> spreads evenly). It enters on its saved map (<code>START_MAP</code> for a new character), walks at 9 m/s to the middle of
+  the next portal on the shortest portal route there (read from <code>--map-root</code>'s <code>map.json</code> and <code>areas.json</code> files),
+  and once on its map wanders within the map's bounds, turning back 5 m before any portal area. <code>tests/project/maps</code> gives
+  4 flat maps for it: Start (1), Cave (2) and the test maps Plains (4) and Marsh (5), reached through Start's <code>plains_gate</code> and
+  <code>marsh_gate</code>, about 320 m and 420 m west of the spawn point (Hills, 3, has terrain and a navmesh a wanderer would stray
+  off). The gates are far from the spawn point, and at different distances, because a map's context starts on its first use and
+  its Lua load takes one tick about 30 ms: gates next to the spawn would start every context in the login ramp's first 10 s window. The summary's <code>on_target_map</code> counts the
+  bots that got there; every one must. Example: <code>COUNT=400 MAPS=1,2,4,5 MAP_THREADS=4 bash tests/load.sh</code>.</li>
 <li><strong>Pass criteria:</strong><ul>
-<li>Bot summary PASS: every bot entered the world, with no errors, no unexpected disconnects and no <code>Correction</code> for honest movers.
-  A wanderer that walks into the sample portal stops on the other map (<code>map_changes_recv</code>); the corrections for
-  its moves still in flight are not counted.</li>
+<li>Bot summary PASS: every bot entered the world (and, with <code>MAPS</code>, reached its map), with no errors, no unexpected
+  disconnects and no <code>Correction</code> for honest movers. Without <code>MAPS</code> a wanderer that walks into the sample portal
+  stops on the other map (<code>map_changes_recv</code>); the corrections for its moves still in flight are not counted.</li>
 <li>Every 10 s window's tick p99 is under 25 ms, and so is the run total.</li>
 <li>Zero failed save attempts.</li>
 </ul>

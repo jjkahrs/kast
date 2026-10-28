@@ -21,14 +21,15 @@ World::World(WorldRules rules, const Maps& maps, Send send, SendMany sendMany, S
               .path = [this](uint16_t map, proto::Vec3 from, proto::Vec3 to) { return maps_.nav().path(map, from, to); },
               .transfer = {},
               .spawn = {},
-              .count = [this] { return shared_.npcs; },
+              .count = [this] { return size_t(std::max<int64_t>(0, npcs())); },
               .post = [this](lua::Post post) { realmPosts_.push_back(std::move(post)); },
               .max = rules.maxNpcs}) {
     // Delivered on each map's bus at its next drain, as when every Lua system shared the game machines' bus.
     realmChanged_ = realm_.bus().subscribe(lua::kStateChangedEvent, [this](const nlohmann::json& p) {
         for (auto& [id, ctx] : contexts_) ctx->bus().publish(lua::kStateChangedEvent, p, "realm");
     });
-    log::debug("realm context started");
+    if (rules_.mapThreads > 1) pool_ = std::make_unique<WorkerPool>(size_t(rules_.mapThreads));
+    log::debug("realm context started", {{"mapThreads", rules_.mapThreads}});
 }
 
 World::~World() = default;
@@ -39,6 +40,7 @@ MapContext& World::context(uint16_t map) {
                            .emplace(map, std::make_unique<MapContext>(map, rules_, maps_, shared_, send_, sendMany_,
                                                                       save_, defs_, now_))
                            .first->second;
+    share_npcs(); // before its scripts' init can create any
     if (luaRoot_) // the same files every context loaded: any error was a startup error already
         for (const std::string& e : ctx.load_scripts(*luaRoot_, gameMachines_, realm_.fsm().game_states()))
             log::error("Lua error", {{"map", map}, {"error", e}});
@@ -189,6 +191,50 @@ void World::serial(bool endOfTick) {
     if (endOfTick)
         for (const auto& [from, post] : std::exchange(posts_, {})) deliver(from, post);
     for (auto& [id, ctx] : contexts_) ctx->mirror_game_machines(realm_.fsm().game_states());
+    share_npcs();
+}
+
+int64_t World::npcs() const {
+    int64_t n = 0;
+    for (const auto& [id, ctx] : contexts_) n += ctx->npcs();
+    return n;
+}
+
+void World::share_npcs() {
+    if (contexts_.empty()) return;
+    const int64_t total = npcs();
+    const size_t left = total < int64_t(rules_.maxNpcs) ? rules_.maxNpcs - size_t(total) : 0, n = contexts_.size();
+    size_t i = 0;
+    for (auto& [id, ctx] : contexts_) ctx->set_npc_share(total, left, left / n + (i++ < left % n));
+}
+
+void World::update(const std::function<void(MapContext&)>& step) {
+    stepContexts_.clear();
+    for (auto& [id, ctx] : contexts_) {
+        ctx->ids().reserve(shared_);
+        stepContexts_.push_back(ctx.get());
+    }
+    share_npcs();
+    const auto timed = [&](MapContext& ctx) {
+        const auto start = SteadyClock::now();
+        step(ctx);
+        ctx.add_update_ms(std::chrono::duration<double, std::milli>(SteadyClock::now() - start).count());
+    };
+    if (!pool_) {
+        for (MapContext* ctx : stepContexts_) timed(*ctx);
+        return;
+    }
+    std::exception_ptr error; // a job's exception (rethrown by run) comes out here as from the serial loop
+    try {
+        pool_->run(stepContexts_.size(), [&](size_t i) {
+            stepContexts_[i]->hold();
+            timed(*stepContexts_[i]);
+        });
+    } catch (...) {
+        error = std::current_exception();
+    }
+    for (MapContext* ctx : stepContexts_) ctx->release_held();
+    if (error) std::rethrow_exception(error);
 }
 
 void World::deliver(const nlohmann::json& from, const lua::Post& post) {
@@ -228,8 +274,8 @@ size_t World::population() const {
     return n;
 }
 
-// The contexts run one after another, each step for every context before the next step, with a serial point between
-// (the parallel map update, phase 3, runs each step's contexts on worker threads instead):
+// Each step runs for every context before the next step starts (update: one after another, or at once on the
+// workers), with a serial point between:
 // - the realm's bus first: C++ subscribers, and the game machines' fsm.changed for every map's drain this tick;
 // - movement and areas: a portal onto another map is queued, and moved at the serial point right after, so the
 //   destination's aoi pass sends its Spawns this tick (and its area events reach both buses this tick);
@@ -239,10 +285,13 @@ void World::tick(TimePoint now) {
     now_ = now;
     realm_.drain_events();
     serial(false); // work C++ calls queued since the last tick
-    for (auto& [id, ctx] : contexts_) ctx->tick_move(now);
+    update([&](MapContext& ctx) { ctx.tick_move(now); });
     serial(false);
-    for (auto& [id, ctx] : contexts_) ctx->tick_rest(now, mutes_);
+    const SysTime wallNow = std::chrono::system_clock::now(); // one for every context: a mute ends for all alike
+    update([&](MapContext& ctx) { ctx.tick_rest(now, mutes_, wallNow); });
     serial(true);
+    contextMs_.clear();
+    for (auto& [id, ctx] : contexts_) contextMs_.push_back(ctx->take_update_ms());
 }
 
 } // namespace kast::world

@@ -1,11 +1,15 @@
 // The world: one MapContext per loaded map (maps.h), each with its own registry, AOI grid, Lua systems, NPC spawns and
 // tile activation, created the first time a map is used (START_MAP's when the scripts load), plus the realm context,
-// whose Lua state runs only the game state machines. Updates them serially on the tick thread, with a serial point
+// whose Lua state runs only the game state machines. Each tick updates the map contexts in steps, with a serial point
 // between the steps where the work the contexts queued for one another is done (docs/services/world/maps.html#map-contexts).
+// With rules.mapThreads > 1 the contexts of a step update at once on that many workers, with a barrier after each step;
+// they share nothing mutable meanwhile, so the result is the serial one (docs/services/world/maps.html#threading).
 // Talks to the outside only through Send (to a session), SendMany (one message to several) and Save (to the DB
-// worker). Each player and NPC is on one map (MapRef), in that map's context; only transfer() changes it. Entity ids
-// are process-wide (Shared), so the ids on the wire and in Lua stay unique and stable across contexts.
+// worker), always on the calling thread. Each player and NPC is on one map (MapRef), in that map's context; only
+// transfer() changes it. Entity ids are process-wide (Shared, IdPool), so the ids on the wire and in Lua stay unique
+// and stable across contexts.
 #pragma once
+#include "../core/worker_pool.h"
 #include "map_context.h"
 
 #include <filesystem>
@@ -99,6 +103,8 @@ public:
 
     void tick(TimePoint now);
     size_t population() const;
+    // Each map context's update time in the last tick (ms; tick_move + tick_rest), in map order: the tick stats.
+    const std::vector<double>& context_update_ms() const { return contextMs_; }
 
 private:
     // map's context, created (and its scripts loaded, once load_scripts has run) on first use.
@@ -115,6 +121,12 @@ private:
     // next tick.
     void serial(bool endOfTick);
     void deliver(const nlohmann::json& from, const lua::Post& post);
+    // One update step: step(ctx) for every context, on the workers if there are any (then the sends and saves they
+    // held are passed on after the barrier, in map order), else one after another here. Each context first gets its
+    // spare id block and its share of MAX_NPCS, in map order: the same either way.
+    void update(const std::function<void(MapContext&)>& step);
+    void share_npcs();    // MapContext::set_npc_share for every context
+    int64_t npcs() const; // every context's NPCs (and those on their way to one)
 
     WorldRules rules_;
     const Maps& maps_;
@@ -133,6 +145,9 @@ private:
     std::optional<std::filesystem::path> luaRoot_; // set by load_scripts: contexts created later load from it
     std::vector<std::string> gameMachines_;
     TimePoint now_{}; // the current tick's time
+    std::vector<double> contextMs_;
+    std::vector<MapContext*> stepContexts_; // the contexts of the running update step
+    std::unique_ptr<WorkerPool> pool_; // null with mapThreads 1; last: its workers stop before the contexts go
 };
 
 } // namespace kast::world

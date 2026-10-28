@@ -5464,7 +5464,7 @@ void checkAreaWorld() {
     {
         std::vector<std::string> errors;
         const auto sample = world::Maps::load(KAST_SAMPLE_MAPS, errors);
-        check(errors.empty() && sample.info(1).areas.list.size() == 4 && sample.info(2).areas.list.size() == 2,
+        check(errors.empty() && sample.info(1).areas.list.size() == 6 && sample.info(2).areas.list.size() == 2,
               "sample maps and their areas load" + (errors.empty() ? "" : ": " + errors[0]));
     }
     LogCapture capture;

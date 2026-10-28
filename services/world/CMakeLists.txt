@@ -120,6 +120,8 @@ add_test(NAME log_bench COMMAND world_self_check --log-bench)
 add_test(NAME aoi_bench COMMAND world_self_check --aoi-bench)
 # Median tick ms: 100 players alone vs with 10,000 NPCs asleep on far tiles; fails past 110%.
 add_test(NAME activation_bench COMMAND world_self_check --activation-bench)
+# p50/p95 tick ms of 4 maps x (100 moving players + 100 Guards) at MAP_THREADS=1 and 4; fails if 4 > 40% of 1 (>= 4 cores).
+add_test(NAME map_threads_bench COMMAND world_self_check --map-threads-bench)
 # Lines logged right before a crash or a fatal startup error still reach stdout.
 add_test(NAME log_flush COMMAND ${CMAKE_COMMAND} -DCHECK=$<TARGET_FILE:world_self_check> -DWORLD=$<TARGET_FILE:kast_world>
   -DOUT=${CMAKE_CURRENT_BINARY_DIR} -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/log_flush.cmake)

@@ -19,6 +19,7 @@ world::WorldRules world_rules(const Config& c) {
     r.tickSeconds = 1.0f / static_cast<float>(c.tickHz);
     r.maxNpcs = c.maxNpcs;
     r.activationTiles = static_cast<int>(c.activationTiles);
+    r.mapThreads = static_cast<int>(c.mapThreads);
     return r;
 }
 
@@ -67,7 +68,8 @@ GameServer::GameServer(asio::io_context& io, const Config& cfg, const world::Map
              [this](const db::CharSave& s) { db_.save(s); }, std::move(defs)),
       tickTimer_(io), tickPeriod_(Millis(1000 / cfg.tickHz)), windowTicks_(std::make_unique<TickStats>()),
       totalTicks_(std::make_unique<TickStats>()), windowLag_(std::make_unique<TickStats>()),
-      totalLag_(std::make_unique<TickStats>()), shutdownTimer_(io) {
+      totalLag_(std::make_unique<TickStats>()), windowContexts_(std::make_unique<TickStats>()),
+      totalContexts_(std::make_unique<TickStats>()), shutdownTimer_(io) {
     if (!cfg.adminSecret.empty()) {
         net::SessionLimits adminLimits = limits_;
         adminLimits.simLatency = adminLimits.simJitter = Millis(0); // the lag simulator is for game clients
@@ -97,7 +99,8 @@ void GameServer::start() {
     acceptor_.set_option(asio::ip::tcp::acceptor::reuse_address(true));
     acceptor_.bind(ep);
     acceptor_.listen();
-    log::info("listening", {{"host", cfg_.host}, {"port", cfg_.port}, {"realm", cfg_.realmId}, {"tickHz", cfg_.tickHz}});
+    log::info("listening", {{"host", cfg_.host}, {"port", cfg_.port}, {"realm", cfg_.realmId}, {"tickHz", cfg_.tickHz},
+                            {"mapThreads", cfg_.mapThreads}});
     accept();
     if (adminPort_) adminPort_->start();
     else log::info("admin port off: WORLD_ADMIN_SECRET is not set");
@@ -400,17 +403,23 @@ void GameServer::tick() {
     totalTicks_->add(ms);
     windowLag_->add(lagMs);
     totalLag_->add(lagMs);
+    for (const double ctxMs : world_.context_update_ms()) {
+        windowContexts_->add(ctxMs);
+        totalContexts_->add(ctxMs);
+    }
     if (start - windowStart_ >= std::chrono::seconds(cfg_.tickStatsIntervalSec)) {
-        log_tick_stats("tick stats", *windowTicks_, *windowLag_);
+        log_tick_stats("tick stats", *windowTicks_, *windowLag_, *windowContexts_);
         windowTicks_->reset();
         windowLag_->reset();
+        windowContexts_->reset();
         windowStart_ = start;
     }
     if (SteadyClock::now() > nextTick_ + tickPeriod_) nextTick_ = SteadyClock::now(); // fell behind: don't burst
     schedule_tick();
 }
 
-void GameServer::log_tick_stats(const char* msg, const TickStats& ticks, const TickStats& lag) {
+void GameServer::log_tick_stats(const char* msg, const TickStats& ticks, const TickStats& lag,
+                                const TickStats& contexts) {
     const auto saves = db_.stats();
     log::info(msg, {{"ticks", ticks.count()},
                     {"p50_ms", ticks.percentile(0.50)},
@@ -418,6 +427,11 @@ void GameServer::log_tick_stats(const char* msg, const TickStats& ticks, const T
                     {"max_ms", ticks.max()},
                     {"lag_p99_ms", lag.percentile(0.99)},
                     {"lag_max_ms", lag.max()},
+                    {"map_threads", cfg_.mapThreads},
+                    {"contexts", world_.context_update_ms().size()},
+                    {"ctx_p50_ms", contexts.percentile(0.50)},
+                    {"ctx_p99_ms", contexts.percentile(0.99)},
+                    {"ctx_max_ms", contexts.max()},
                     {"population", world_.population()},
                     {"connections", clients_.size()},
                     {"saves_ok", saves.ok},
@@ -436,7 +450,7 @@ void GameServer::shutdown(std::function<void()> onDone) {
     tickTimer_.cancel();
     if (chatLink_) chatLink_->stop();
     if (adminPort_) adminPort_->stop();
-    log_tick_stats("tick stats total", *totalTicks_, *totalLag_);
+    log_tick_stats("tick stats total", *totalTicks_, *totalLag_, *totalContexts_);
 
     world_.shutdown_scripts(); // onLeave changes are part of the saves below
     onShutdownDone_ = std::move(onDone);

@@ -28,13 +28,22 @@
   <code>Program terminated unexpectedly</code> lines, before the process dies.</li>
 </ul>
 </li>
-<li><strong>Tick stats:</strong> every <code>TICK_STATS_INTERVAL_SECONDS</code>, the server logs a <code>tick stats</code> line, and a <code>tick stats total</code> line on shutdown. They contain:<ul>
-<li><code>p50_ms</code>, <code>p99_ms</code> and <code>max_ms</code>: systems time per tick.</li>
+<li id="tick-stats"><strong>Tick stats:</strong> every <code>TICK_STATS_INTERVAL_SECONDS</code>, the server logs a <code>tick stats</code> line, and a <code>tick stats total</code> line on shutdown. They contain:<ul>
+<li><code>p50_ms</code>, <code>p99_ms</code> and <code>max_ms</code>: systems time per tick (the whole tick, workers and serial points included).</li>
 <li><code>lag_p99_ms</code> and <code>lag_max_ms</code>: how late the tick timer fired.</li>
+<li><code>map_threads</code>: <code>MAP_THREADS</code>. <code>contexts</code>: the map contexts updated in the last tick.</li>
+<li><code>ctx_p50_ms</code>, <code>ctx_p99_ms</code> and <code>ctx_max_ms</code>: one map context's update time in one tick (its two update steps), over every
+  context and tick of the window (<a href="maps.html#threading">Threading</a>). With <code>MAP_THREADS</code> &gt; 1 a tick takes at least its slowest
+  context, plus the serial points; with 1, about the sum of them.</li>
 <li><code>population</code> and <code>connections</code>.</li>
 <li><code>saves_ok</code>, <code>saves_failed_attempts</code> and <code>saves_pending</code>.</li>
 </ul>
 </li>
+<li id="map-threads"><strong>Choosing <code>MAP_THREADS</code>:</strong> keep 1 while <code>p99_ms</code> is well under the tick period (50 ms at
+  <code>TICK_HZ</code> 20) or nearly every player is on one map: a single map never splits across threads. Raise it when players spread over
+  several maps and <code>p99_ms</code> climbs: with <code>contexts</code> busy maps, about <code>min(contexts, cores - 2)</code> (the io thread, the DB
+  worker and the log writer need cores too). More threads than busy maps only wait. If <code>ctx_max_ms</code> is close to <code>p99_ms</code>, one map
+  is the bottleneck and more threads will not help.</li>
 </ul>
 </main>
 </div>

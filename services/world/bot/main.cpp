@@ -27,6 +27,8 @@ void usage() {
         "  --duration S          load: seconds after the last bot connected (default 60)\n"
         "  --threads N           load: io threads (default 4)\n"
         "  --connect-rate N      load: new sessions per second (default 50)\n"
+        "  --maps 1,2,4,5        load: bot i walks through the portals of --map-root's maps to the i-th listed map\n"
+        "                        (round robin), then wanders there clear of the portals\n"
         "  --auth-key FILE       handshake scenario: auth's private key, to mint an expired token (test only)\n"
         "  --expect-pos X,Y,Z    restart-verify scenario\n"
         "  --map-root DIR        terrain/navmesh scenarios: the server's maps/ folder (ground heights)\n"
@@ -79,6 +81,7 @@ int main(int argc, char** argv) {
         else if (a == "--tag") o.extra["tag"] = val();
         else if (a == "--expect-components") o.extra["expect-components"] = val();
         else if (a == "--zone") o.extra["zone"] = val();
+        else if (a == "--maps") o.extra["maps"] = val();
         else if (a == "--char-option") {
             const std::string kv = val();
             const size_t eq = kv.find('=');
