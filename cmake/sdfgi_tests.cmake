@@ -200,8 +200,8 @@ add_test(NAME sdfgi_outdoor_roundtrip
 add_test(NAME sdfgi_self_check COMMAND kast_self_check --sdfgi)
 
 # The player: a game built from sdfgi_outdoor.scene with the camera still renders as the editor's Play does: its
-# 957x584 screenshot matches the Game view. Along the path at 1600x900 (Medium) its GPU frame time stays under 4 ms in
-# 99% of the frames (the slowest one is logged too; a lone hiccup of the OS or another program can't fail it), with no
+# 957x584 screenshot matches the Game view. Along the path at 1600x900 (Medium) its GPU frame time stays under 4 ms
+# (KAST_SDFGI_GPU_P99_MS) in 99% of the frames (the slowest one is logged too; a lone hiccup of the OS or another program can't fail it), with no
 # cascade rebuilt in full.
 kast_game_project(sdfgi "SDFGI Test" sdfgi_outdoor.scene FALSE "")
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/game_projects/sdfgi/sdfgi_outdoor.scene" "${sg_still}")
@@ -221,11 +221,25 @@ add_test(NAME player_sdfgi_screenshot
 add_test(NAME player_sdfgi_matches_editor
   COMMAND kast_self_check --diff-png "${sg}sdfgi_still.png" "${CMAKE_CURRENT_BINARY_DIR}/player_sdfgi.png"
           ${sg_player_limit} ${sg_player_rect})
+# KAST_SDFGI_GPU_P99_MS is that limit in whole ms, for both 99th percentiles (the SDFGI view's and the frame's): 4, the
+# budget, unless a machine's GPU (or what else runs on it) can't hold it; then only that machine's build cache sets more
+# (docs/development/tests.html).
+set(KAST_SDFGI_GPU_P99_MS 4 CACHE STRING "player_sdfgi_gpu_time: the SDFGI view and frame GPU time 99th percentile limit, whole ms")
+if(NOT KAST_SDFGI_GPU_P99_MS MATCHES "^[1-9][0-9]*$")
+  message(FATAL_ERROR "KAST_SDFGI_GPU_P99_MS must be a whole number of ms, not '${KAST_SDFGI_GPU_P99_MS}'")
+endif()
+math(EXPR sg_p99_below "${KAST_SDFGI_GPU_P99_MS} - 1")
+set(sg_p99_ms "")
+foreach(ms RANGE ${sg_p99_below}) # under the limit: a whole part from 0 to limit - 1
+  list(APPEND sg_p99_ms ${ms})
+endforeach()
+string(REPLACE ";" "|" sg_p99_ms "${sg_p99_ms}")
+set(sg_p99_ms "(${sg_p99_ms})\\.[0-9]+")
 add_test(NAME player_sdfgi_gpu_time
   COMMAND "${CMAKE_COMMAND}" "-DGAME_DIR=${KAST_GAME_OUT}/sdfgi_path" "-DEXE=SDFGI Test.exe"
           "-DWORK_DIR=${KAST_GAME_OUT}/sdfgi_path.gpu" "-DEXTRA_ARGS=--fixed-dt 0.016 --size 1600x900 --frames 310 --gpu-stats --log-sdfgi"
           -DEXPECT=0 "-DFORBID_OUTPUT=rebuilt in full"
-          "-DEXPECT_OUTPUT=SDFGI view GPU time: [0-9.]+ ms average, [0-3]\\.[0-9]+ ms 99th percentile, [0-9.]+ ms at most over [0-9]+ frames \\(frame: [0-3]\\.[0-9]+ ms 99th percentile"
+          "-DEXPECT_OUTPUT=SDFGI view GPU time: [0-9.]+ ms average, ${sg_p99_ms} ms 99th percentile, [0-9.]+ ms at most over [0-9]+ frames \\(frame: ${sg_p99_ms} ms 99th percentile"
           -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/player_test.cmake")
 set_tests_properties(player_sdfgi_screenshot PROPERTIES FIXTURES_REQUIRED game_sdfgi_built
                      FIXTURES_SETUP player_sdfgi_shot TIMEOUT 90)

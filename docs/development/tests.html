@@ -16,6 +16,14 @@
 every test runs with <code>KAST_WINDOW_POS=secondary</code>, which opens windows on the first display that isn't the primary one
 (with only one display they open on it, with a warning). Configure with <code>-DKAST_TEST_WINDOW_POS=X,Y</code> (e.g.
 <code>cmake --preset debug -DKAST_TEST_WINDOW_POS=-1900,40</code>) to pin them to a desktop position instead.</p>
+<p id="sdfgi-gpu-limit"><code>player_sdfgi_gpu_time</code> holds the SDFGI view's and the frame's 99th percentile GPU time under
+<code>KAST_SDFGI_GPU_P99_MS</code> whole milliseconds: 4 by default, the <a href="../engine/sdfgi.html">SDFGI</a> budget. A machine
+whose GPU (or what else runs on it) can't hold that sets more in its own build cache only, e.g.
+<code>cmake --preset debug -DKAST_SDFGI_GPU_P99_MS=7</code>; never in a preset or the source. Measured on 2026-10-28 on the
+development machine (Debug, a YouTube tab in Chrome, Docker Desktop with the world stack, VS Code open): the frame's 99th
+percentile was 5.56 / 5.96 / 5.63 ms on the current code and 5.52 / 6.13 / 5.92 ms at <code>d6e8c5b</code> (10-27, when it last
+passed), the SDFGI view's 3.5 to 3.9 ms. The same on both, so the machine and its load, not a code regression; its
+<code>build/debug</code> sets 7, the smallest whole number that passes there every time.</p>
 <table>
 <thead>
 <tr>
