@@ -12,7 +12,7 @@
 # (e.g. a folder the New Project modal must not have created); MUST_EXIST if it doesn't. PROJECTS_FROM is copied to
 # the list before the run; LIST_MUST_CONTAIN is looked for in it after. EXPECT_OUTPUT must match the editor's log
 # (exactly EXPECT_COUNT times if given; for that count the log's ";" read as ","); FORBID_OUTPUT must not match it;
-# OUTPUT_FILE gets a copy of it (e.g. for a later secrets check). FRAMES is how many frames run
+# OUTPUT_FILE gets it as it is written (e.g. for a later secrets check). FRAMES is how many frames run
 # before the screenshot (default 120). WRAPPER (a list) runs the editor through another program, e.g.
 # kast_net_test_server <args> -- (its servers are up while the editor runs).
 # The editor settings are <work dir>/editor_settings.json (--settings-file), never the user's: SETTINGS_FROM is copied
@@ -42,13 +42,19 @@ endif()
 if(DEFINED FOCUS_PANEL)
   list(APPEND EXTRA_ARGS --focus-panel "${FOCUS_PANEL}")
 endif()
+# With OUTPUT_FILE the log goes there as the editor writes it, so a run ctest stops at its TIMEOUT still leaves it.
+if(DEFINED OUTPUT_FILE)
+  set(capture OUTPUT_FILE "${OUTPUT_FILE}" ERROR_FILE "${OUTPUT_FILE}")
+else()
+  set(capture OUTPUT_VARIABLE output ERROR_VARIABLE output)
+endif()
 execute_process(COMMAND ${WRAPPER} "${EDITOR}" --frames ${FRAMES} --screenshot "${SCREENSHOT}" --projects-file "${work_dir}/projects.json" --settings-file "${work_dir}/editor_settings.json"
                         ${EXTRA_ARGS}
-                WORKING_DIRECTORY "${work_dir}" RESULT_VARIABLE result OUTPUT_VARIABLE output ERROR_VARIABLE output)
-message("${output}")
+                WORKING_DIRECTORY "${work_dir}" RESULT_VARIABLE result ${capture})
 if(DEFINED OUTPUT_FILE)
-  file(WRITE "${OUTPUT_FILE}" "${output}")
+  file(READ "${OUTPUT_FILE}" output)
 endif()
+message("${output}")
 if(DEFINED FORBID_OUTPUT AND output MATCHES "${FORBID_OUTPUT}")
   message(FATAL_ERROR "Output matches the forbidden '${FORBID_OUTPUT}': '${CMAKE_MATCH_0}'")
 endif()
