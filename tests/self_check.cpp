@@ -3475,6 +3475,38 @@ void checkFileWrites()
     if (fd != -1)
         _close(fd);
     check(kast::readFile(dir / "locked.lua", bytes) && bytes == "return 1", "readFile reads it once unlocked");
+
+    // A file a virus scanner holds for a moment (editor/texture_cooker.cpp's temp files): the rename waits it out, but
+    // only up to its limit.
+    writeFile(dir / "scanned.png", "png");
+    check(_wsopen_s(&fd, (dir / "scanned.png").c_str(), _O_RDONLY, _SH_DENYRW, 0) == 0, "lock the file being renamed");
+    std::thread scanner([fd] {
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        _close(fd);
+    });
+    check(kast::renameRetrying(dir / "scanned.png", dir / "renamed.png") && readText(dir / "renamed.png") == "png",
+          "a rename retries until the lock goes");
+    scanner.join();
+    check(_wsopen_s(&fd, (dir / "renamed.png").c_str(), _O_RDONLY, _SH_DENYRW, 0) == 0, "lock it for good");
+    const auto renameStart = std::chrono::steady_clock::now();
+    check(!kast::renameRetrying(dir / "renamed.png", dir / "never.png", std::chrono::milliseconds(100)) &&
+              std::chrono::steady_clock::now() - renameStart < std::chrono::seconds(2) && !std::filesystem::exists(dir / "never.png"),
+          "a rename held past its limit fails in bounded time");
+    _close(fd);
+
+    // Stale temp files: this process's prefix (a dead process with the same id) and others' old ones go, a fresh one of
+    // another process stays.
+    const std::filesystem::path temps = dir / "temps";
+    std::filesystem::create_directories(temps);
+    const std::string own = std::format("{}_", _getpid());
+    writeFile(temps / (own + "3.png.tmp"), "x");
+    writeFile(temps / "1_7.png", "x");
+    writeFile(temps / "2_7.png", "x");
+    std::filesystem::last_write_time(temps / "1_7.png", std::filesystem::file_time_type::clock::now() - std::chrono::hours(2));
+    kast::removeStaleTempFiles(temps, own, std::chrono::hours(1));
+    check(!std::filesystem::exists(temps / (own + "3.png.tmp")) && !std::filesystem::exists(temps / "1_7.png") &&
+              std::filesystem::exists(temps / "2_7.png"),
+          "stale temp files are removed, a fresh one of another process kept");
 }
 
 void checkBuild()

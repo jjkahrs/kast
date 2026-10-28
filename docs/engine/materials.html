@@ -137,7 +137,10 @@ Create &gt; Material) writes version 3 with every field, in the order above. Oth
   cooker version and <code>texturec.exe</code>'s size and time; a dot-folder, never shipped, ignored by git), so each image is
   compressed once. On a cache miss the editor draws the uncompressed RGBA8 image at once, compresses on a worker thread
   and swaps the compressed texture in when it is done (<code>Loaded texture 'textures/rock.png' as color (cooked in 0.03 s)</code>);
-  a hit loads the KTX directly (<code>(cache hit)</code>). Saving the image again compresses it again. If <code>texturec</code> fails or
+  a hit loads the KTX directly (<code>(cache hit)</code>). Saving the image again compresses it again. <code>texturec</code> works on
+  temp files in <code>%TEMP%\kast_texturec</code>, a new name per compression; a file a virus scanner or indexer briefly holds
+  is retried for up to a second, and each editor removes what earlier runs left there (an hour old, or its own process
+  id's) before its first compression. If <code>texturec</code> fails or
   is missing, the editor warns once and keeps drawing the RGBA8 image:
   <code>Texture 'textures/rock.png': cannot compress it (...); drawing it uncompressed</code>. A <code>--screenshot</code> run compresses
   each texture when first drawn instead (so the shot is the same every run). Build ships the compressed textures
