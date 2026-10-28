@@ -160,11 +160,25 @@ and a system reads it with <code>kast.definitions(folder)</code>. The server giv
     shutdown = function() end,     -- graceful shutdown, before the final saves
     onEnter = function(e) end,     -- a character spawned; its persisted components are already restored (never an NPC)
     onLeave = function(e) end,     -- a character is leaving; changes made here are saved (never an NPC)
+    onMapLeave = function(e) return carried end, -- e (player or NPC) is about to move to another map's context
+    onMapEnter = function(e, carried) end,       -- e just arrived from another map's; carried: what onMapLeave returned
     validateCharacter = function(name, options) return true end, -- may this character be created? (see below)
 }
 </code></pre>
 <ul>
-<li><strong>One state, isolated files:</strong> the server has one Lua state, and each system file gets its own environment, so globals never leak between files.</li>
+<li><strong>One state per map, isolated files:</strong> each map in use has its own <a href="maps.html#map-contexts">context</a> with its own Lua state,
+  which loads <code>npcs/</code> and <code>systems/</code> and runs every <code>init</code> when the map's context starts (<code>START_MAP</code>'s at
+  startup, any other the first time it is used). So a module-level table (<code>local state = {}</code>) belongs to one map. <code>kast.*</code>
+  sees that map's entities only. Each system file gets its own environment, so globals never leak between files.</li>
+<li><strong>Which Lua runs where:</strong> systems, NPC definitions and the character and NPC <a href="state-machines.html#state-machines">state machines</a> run in every
+  map's context; the game machines (<code>GAME_STATE_MACHINES</code>) run only in the realm context, which loads <code>fsms/</code> and nothing else.</li>
+<li><strong>Changing map:</strong> a player or NPC that moves to another map takes every component along (persisted or not, <code>StateMachine</code>
+  with its current state), but not the old map's module tables. <code>onMapLeave(e)</code> runs in the old map's systems, then
+  <code>onMapEnter(e, carried)</code> in the new map's (see <a href="maps.html#map-contexts">Map contexts</a> for the order). Whatever a system's
+  <code>onMapLeave</code> returns (plain data, as an event payload; anything else disables the system) is that same system's <code>carried</code>
+  there (nil for nothing), so per-entity state goes along: <code>onMapLeave = function(e) local s = state[e]; state[e] = nil; return s end</code>,
+  <code>onMapEnter = function(e, s) state[e] = s end</code>. Store times as seconds left: each map's Lua counts its own time. Neither runs for
+  a transfer within a map, a login or a logout.</li>
 <li><strong>Sandbox:</strong> the same as the engine's. Only base, table, string and math are open, with no <code>io</code>, <code>os</code>, <code>ffi</code>, <code>debug</code>, <code>jit</code>, <code>package</code>, <code>require</code>, <code>loadfile</code>, <code>dofile</code>, <code>load</code> or <code>loadstring</code>. Definition files are sandboxed too.</li>
 <li><strong>Runaway scripts:</strong> a callback that runs longer than 2 s raises an error, so an infinite loop disables its system instead of hanging the server.</li>
 <li><strong>Runtime errors:</strong> an error in any callback is logged as <code>Lua system disabled</code>, with the system, the callback and <code>path:line</code>. That system is then disabled until restart; the server and the other systems keep running.</li>
@@ -208,11 +222,11 @@ and a system reads it with <code>kast.definitions(folder)</code>. The server giv
 </tr>
 <tr>
 <td><code>kast.create(name, opts)</code></td>
-<td>Creates an NPC and returns its entity id; <code>opts = {npc = string \| template = string, components = {...}?, map = id?, position = {x, y, z}?, heading = number?}</code> (see <a href="npcs.html#npcs">NPCs</a>)</td>
+<td>Creates an NPC and returns its entity id; <code>opts = {npc = string \| template = string, components = {...}?, map = id?, position = {x, y, z}?, heading = number?}</code> (see <a href="npcs.html#npcs">NPCs</a>). <code>map</code> defaults to this context's map. On another map the id is returned now and the NPC is created in that map's context at the end of the tick, so it is not in this one (<code>kast.get</code> raises <code>invalid entity id</code>)</td>
 </tr>
 <tr>
 <td><code>kast.transfer(e, map, position [, heading])</code></td>
-<td>Moves player or NPC <code>e</code> to <code>position</code> (<code>{x, y, z}</code>) on map <code>map</code>; <code>heading</code> defaults to the current one. Returns <code>true</code>, or <code>false</code> if this process does not own the destination (see <a href="maps.html#maps">Maps</a>)</td>
+<td>Moves player or NPC <code>e</code> to <code>position</code> (<code>{x, y, z}</code>) on map <code>map</code>; <code>heading</code> defaults to the current one. Returns <code>true</code>, or <code>false</code> if this process does not own the destination (see <a href="maps.html#maps">Maps</a>). Within this map it moves at once; onto another map at the end of the tick (until then <code>e</code> is still here, where it was)</td>
 </tr>
 <tr>
 <td><code>kast.destroy(e)</code></td>
@@ -233,7 +247,11 @@ and a system reads it with <code>kast.definitions(folder)</code>. The server giv
 </tr>
 <tr>
 <td><code>kast.publish(name [, payload])</code></td>
-<td>Queues an event on the server's event bus for the next drain (see <a href="events.html#events">Events</a>)</td>
+<td>Queues an event on this map's event bus for the next drain (see <a href="events.html#events">Events</a>)</td>
+</tr>
+<tr>
+<td><code>kast.world.post(target, event, data)</code></td>
+<td id="post">Sends <code>event</code> to another context's bus: <code>target</code> is a loaded map's id, <code>"realm"</code> or <code>"all"</code> (every running map context and the realm, this one included). Delivered on the next tick, in post order, as <code>{from = &lt;map id or "realm"&gt;, data = data}</code>; a map whose context has not started yet starts for it. <code>event</code> and <code>data</code> are checked as <code>kast.publish</code>'s; a bad target raises <code>kast.world.post: target must be a loaded map's id, "realm" or "all", got X</code>. Also from the realm's game machine callbacks</td>
 </tr>
 <tr>
 <td><code>kast.subscribe(name, fn)</code></td>
@@ -253,11 +271,11 @@ and a system reads it with <code>kast.definitions(folder)</code>. The server giv
 </tr>
 <tr>
 <td><code>kast.broadcast(name [, payload])</code></td>
-<td>Sends the event to every player in the world, on every map</td>
+<td>Sends the event to every player in the world, on every map (this map's players with this tick's other client events, the other maps' at the end of the tick). <code>kast.sendTo</code> / <code>sendNearby</code> / <code>reply</code> reach only entities in this map's context</td>
 </tr>
 <tr>
 <td><code>kast.fsm.state/change/canChange/states(target [, state])</code></td>
-<td>Game and character state machines (see <a href="state-machines.html#state-machines">State machines</a>)</td>
+<td>Game and character state machines (see <a href="state-machines.html#state-machines">State machines</a>); a game machine's state here is the realm's as of the last serial point, and a change of it is applied in the realm at the next</td>
 </tr>
 <tr>
 <td><code>kast.map.area(e)</code> / <code>kast.map.areaAt(map, x, y, z)</code></td>
@@ -345,7 +363,8 @@ return {
 </code></pre>
 <p>The hook runs on the server's game thread while the request is answered, so keep it to checks on its arguments.</p>
 <h2 id="tick-order">Tick order</h2>
-<p>Each tick runs, in this order:</p>
+<p>Each tick runs, in this order, in every map's context (steps 1-2 for every map, a <a href="maps.html#map-contexts">serial point</a>, then the
+rest for every map, then another serial point):</p>
 <ol>
 <li>movement</li>
 <li><strong>areas:</strong> <code>area.leave</code> / <code>area.enter</code> for players that moved, and portal transfers (<a href="areas.html#areas">Areas</a>)</li>
@@ -379,6 +398,10 @@ An NPC that Lua creates, or moves into or out of a player's view, gets its <code
 <tr>
 <td>Logout, disconnect or duplicate-login kick</td>
 <td><code>onLeave</code> and its client events, then the save and the despawn</td>
+</tr>
+<tr>
+<td>A portal or <code>kast.transfer</code> onto another map</td>
+<td><code>onMapLeave</code> in the old map's context (and the client events queued there so far), then the move, then <code>onMapEnter</code> in the new map's (<a href="maps.html#map-contexts">Map contexts</a>)</td>
 </tr>
 <tr>
 <td>Graceful shutdown</td>
@@ -459,7 +482,7 @@ end)
 </tr>
 <tr>
 <td><code>systems/locomotion.lua</code></td>
-<td><code>onEnter</code> adds <code>StateMachine</code> with <code>locomotion</code>, which enters <code>idle</code>, then tries <code>idle</code> again: denied by <code>allowedFrom</code>, a warning and no event. <code>update</code> switches to <code>moving</code> when the character's <code>Transform</code> changes and back to <code>idle</code> after 1 s standing still. It flips <code>zone_cycle</code> every 5 minutes if it is listed. It sends only on transitions, never per tick</td>
+<td><code>onEnter</code> adds <code>StateMachine</code> with <code>locomotion</code>, which enters <code>idle</code>, then tries <code>idle</code> again: denied by <code>allowedFrom</code>, a warning and no event. <code>update</code> switches to <code>moving</code> when the character's <code>Transform</code> changes and back to <code>idle</code> after 1 s standing still. It flips <code>zone_cycle</code> every 5 minutes if it is listed (every map's copy asks at the same tick, as a flip restarts each copy's timer; the realm applies it once). Its per-character entry goes along on a map change (<code>onMapLeave</code> / <code>onMapEnter</code>), as does <code>systems/regen.lua</code>'s. It sends only on transitions, never per tick</td>
 </tr>
 <tr>
 <td><code>systems/events.lua</code></td>

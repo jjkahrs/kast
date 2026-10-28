@@ -22,6 +22,10 @@ std::vector<entt::entity> viewers_of(const entt::registry& reg, entt::entity e) 
         if (reg.all_of<SessionLink>(from_wire(id))) out.push_back(from_wire(id));
     return out;
 }
+
+void publish_area(EventBus& bus, const char* event, entt::entity e, uint16_t map, const map::Area& a) {
+    bus.publish(event, {{"entity", wire_id(e)}, {"map", map}, {"area", a.id}, {"name", a.name}, {"flags", a.flags}});
+}
 } // namespace
 
 std::vector<uint32_t> audience(const entt::registry& reg, entt::entity e) {
@@ -72,16 +76,19 @@ const map::Area* set_area(entt::registry& reg, const Maps& maps, EventBus& bus, 
     const uint16_t mapId = reg.get<MapRef>(e).map;
     const auto& areas = maps.info(mapId).areas;
     const int16_t now = map::area_at(areas, tf.pos.x, tf.pos.y, tf.pos.z);
-    auto& ref = reg.get_or_emplace<AreaRef>(e);
-    const auto publish = [&](const char* event, uint16_t onMap, const map::Area& a) {
-        bus.publish(event, {{"entity", wire_id(e)}, {"map", onMap}, {"area", a.id}, {"name", a.name}, {"flags", a.flags}});
-    };
+    const auto& ref = reg.get_or_emplace<AreaRef>(e);
     if (ref.area != now || ref.map != mapId) {
-        if (ref.area >= 0) publish("area.leave", ref.map, maps.info(ref.map).areas.list[ref.area]);
-        if (now >= 0) publish("area.enter", mapId, areas.list[now]);
-        ref = {mapId, now};
+        leave_area(reg, maps, bus, e, mapId);
+        if (now >= 0) publish_area(bus, "area.enter", e, mapId, areas.list[now]);
+        reg.get<AreaRef>(e).area = now;
     }
     return now >= 0 ? &areas.list[now] : nullptr;
+}
+
+void leave_area(entt::registry& reg, const Maps& maps, EventBus& bus, entt::entity e, uint16_t map) {
+    auto& ref = reg.get_or_emplace<AreaRef>(e);
+    if (ref.area >= 0) publish_area(bus, "area.leave", e, ref.map, maps.info(ref.map).areas.list[ref.area]);
+    ref = {map, -1};
 }
 
 std::vector<std::pair<entt::entity, map::Portal>> area_system(entt::registry& reg, const Maps& maps, EventBus& bus) {
@@ -348,9 +355,8 @@ void save_system(entt::registry& reg, const lua::Defs& defs, const Save& save, M
     reg.remove<Dirty>(saved.begin(), saved.end());
 }
 
-void spawner_system(entt::registry& reg, Spawner& spawner, size_t maxNpcs, TimePoint now,
+void spawner_system(entt::registry& reg, Spawner& spawner, const size_t& npcs, size_t maxNpcs, TimePoint now,
                     const std::function<entt::entity(const SpawnRecord&)>& create) {
-    size_t npcs = reg.view<Npc>().size();
     bool capped = false;
     for (size_t i = 0; i < spawner.pending.size();) {
         const uint32_t record = spawner.pending[i];
@@ -360,7 +366,6 @@ void spawner_system(entt::registry& reg, Spawner& spawner, size_t maxNpcs, TimeP
         spawner.pending.erase(spawner.pending.begin() + i); // before create: an FSM enter callback may destroy an NPC
         reg.emplace<SpawnRef>(create(r), record);
         r.alive = true;
-        ++npcs;
     }
     if (capped && !spawner.capped) log::warn("spawns deferred: MAX_NPCS reached", {{"max", maxNpcs}});
     spawner.capped = capped;

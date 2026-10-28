@@ -9,7 +9,7 @@
 -- objectives' progress, completed ids; saved, owner-only).
 --
 -- Progress: a kill objective counts each death of its NPC for every player who hit it ("npc.died" {definition,
--- damagers}, systems/combat.lua), whoever tagged it. A collect objective is the live count of its item in the bag,
+-- damagers}, systems/combat.lua, or "npc.died.away" for those on another map by then), whoever tagged it. A collect objective is the live count of its item in the bag,
 -- capped at count: items held before accepting count, and destroying or moving them out lowers it
 -- ("inventory.changed" from systems/inventory.lua). No event per objective update: the Quests component carries it.
 --
@@ -379,6 +379,7 @@ return {
         kast.subscribe("inventory.exchanged", onExchanged)
         kast.subscribe("inventory.changed", onBagChanged)
         kast.subscribe("npc.died", onDied)
+        kast.subscribe("npc.died.away", function(p) onDied(p.data) end) -- damagers now on this map (kast.world.post)
     end,
 
     -- A saved state from an older .server/quests/ set: unknown, repeated and surplus quests dropped, kill progress
@@ -408,6 +409,16 @@ return {
     onLeave = function(e)
         markersSent[e], turningIn[e] = nil, nil
     end,
+
+    -- Each map has its own Lua state (docs/services/world/maps.html#map-contexts): the markers last sent go with the
+    -- character. A turn-in under way is dropped (its "inventory.exchanged" comes on this map's bus): the quest stays
+    -- ready to turn in again.
+    onMapLeave = function(e)
+        local sent = markersSent[e]
+        markersSent[e], turningIn[e] = nil, nil
+        return {markers = sent}
+    end,
+    onMapEnter = function(e, carried) markersSent[e] = carried and carried.markers end,
 
     update = function(dt) end,
 }

@@ -92,6 +92,17 @@ public:
     // forgets its machine. Called after kast.add/kast.set/kast.remove.
     void syncEntity(entt::entity entity);
 
+    // --- map contexts (docs/services/world/maps.html#map-contexts) ---
+
+    // The game machines run in the realm context only. A map context's StateMachines forwards instead: its game
+    // machine states are a copy (mirror) the World refreshes at each serial point, enterAll does nothing, and an
+    // allowed change of a game machine (checked and warned about as usual) goes to forward and returns true, for the
+    // realm to apply at the next serial point; no callback runs here.
+    using Forward = std::function<void(const std::string& machine, const std::string& to)>;
+    void forward_game_machines(Forward forward) { forward_ = std::move(forward); }
+    void mirror(const std::map<std::string, std::string>& states) { game_ = states; }
+    const std::map<std::string, std::string>& game_states() const { return game_; } // the ones entered, by name
+
 private:
     struct Queued {
         Target target;
@@ -132,6 +143,7 @@ private:
     std::map<std::string, std::string> game_; // name -> current state, for game machines that have entered one
     std::deque<Queued> queue_;
     bool busy_ = false; // a transition's callbacks are running
+    Forward forward_;   // set: a map context's (see forward_game_machines)
 };
 
 // Runtime-only (never saved or replicated): a character machine's definition name and current state.

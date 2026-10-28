@@ -16,12 +16,19 @@
 rules, and the <code>kast.fsm</code> API. A game project's <code>fsms/</code> folder can be shared with the server like <code>components/</code>. The
 port lives in <code>server/lua/state_machines.*</code> and <code>server/lua/lua_state_machines.*</code>.</p>
 <ul>
-<li><strong>Definitions:</strong> <code>LUA_ROOT/fsms/**/*.lua</code>, one machine per file, loaded once at startup before the systems' <code>init</code>.
+<li><strong>Where they run:</strong> every <a href="maps.html#map-contexts">map context</a> and the realm context load <code>fsms/</code>. The game
+  machines run in the realm context only; each map's <code>kast.fsm</code> reads a copy of their states (refreshed at every serial point), and
+  a change of one from a map is checked against that copy (a denial warns and returns <code>false</code> there, as before), returns
+  <code>true</code> and is applied in the realm at the next serial point, where its callbacks run. The same change asked by several maps at one
+  serial point is applied once. Character and NPC machines run in the context of the map their entity is on, and move along with it
+  (the <code>StateMachine</code> component keeps its current state).</li>
+<li><strong>Definitions:</strong> <code>LUA_ROOT/fsms/**/*.lua</code>, one machine per file, loaded once per context before the systems' <code>init</code>.
   Each file runs in its own sandboxed environment with the full read-only <code>kast</code> API. <code>kast.log</code> from a callback is
   prefixed with the definition path (<code>fsms/door.lua: ...</code>). A missing <code>fsms/</code> folder means no machines.</li>
-<li><strong>Game machines:</strong> <code>GAME_STATE_MACHINES</code> lists them by name. After every system's <code>init</code>, each enters its <code>initial</code>
-  state: <code>enter</code> runs with <code>ctx.from = nil</code>, and no <code>fsm.changed</code> is published. A machine that <code>kast.fsm.*</code> touches during
-  an <code>init</code> enters right then, once. Game machines run for the server's lifetime; shutdown runs no <code>exit</code>.</li>
+<li><strong>Game machines:</strong> <code>GAME_STATE_MACHINES</code> lists them by name. At startup, in the realm context and before any map's
+  systems load (so an <code>init</code> already reads their state), each enters its <code>initial</code> state: <code>enter</code> runs with
+  <code>ctx.from = nil</code>, and no <code>fsm.changed</code> is published. Game machines run for the server's lifetime; shutdown runs no
+  <code>exit</code>.</li>
 <li><strong>Character and NPC machines:</strong> use the writable built-in <code>StateMachine</code> (<code>machine</code>, <code>initialState</code>) through <code>kast.add</code>,
   <code>kast.set</code>, <code>kast.get</code>, <code>kast.has</code>, <code>kast.remove</code> and <code>kast.query</code>.<ul>
 <li><code>kast.add</code> alone leaves <code>machine</code> empty: there is no machine yet, and <code>kast.fsm.*</code> on that character raises.</li>
@@ -36,28 +43,31 @@ port lives in <code>server/lua/state_machines.*</code> and <code>server/lua/lua_
 <li><strong>Not persisted, not replicated:</strong> <code>StateMachine</code> and the current state never reach MySQL (the <code>components</code> column)
   or clients. A character starts its machine again from the initial state on every login. To tell clients about a
   transition, send it from <code>enter</code> (<code>kast.sendTo</code> / <code>sendNearby</code>).</li>
-<li><strong>Events:</strong> <code>fsm.changed</code> <code>{machine, entity, from, to}</code> goes on the server's event bus, with <code>entity</code> <code>null</code> for game
-  machines and the publisher set to the definition path. It is delivered at the normal drain (see <a href="events.html#events">Events</a>), so
-  a transition made in <code>update</code> reaches subscribers in the same tick.</li>
+<li><strong>Events:</strong> <code>fsm.changed</code> <code>{machine, entity, from, to}</code> goes on the event bus of the entity's map (the publisher set
+  to the definition path), delivered at the normal drain (see <a href="events.html#events">Events</a>), so a transition made in
+  <code>update</code> reaches subscribers in the same tick. A game machine's (<code>entity</code> <code>null</code>) goes on the realm's bus and is passed on
+  to every map's bus at the start of the next tick: one changed by C++ between ticks reaches the maps' subscribers in that tick, one a
+  map asked for at the end of the tick after it was applied.</li>
 <li><strong>Callback errors:</strong> an error in <code>enter</code> or <code>exit</code> is logged as <code>State machine fsms/door.lua: enter "open" failed:
   fsms/door.lua:5: ...</code> with a traceback. The transition still commits and the machine stays usable; no system is
-  disabled. A callback runs under the 2 s script budget of whatever entered Lua. When a system's <code>kast.fsm.change</code>
-  triggers a runaway callback, the callback is stopped and logged, and then that system is disabled too, because they
-  share one budget (as in the engine).</li>
+  disabled. A callback runs under the 2 s script budget of whatever entered Lua. When a system's <code>kast.fsm.change</code> of a
+  character or NPC machine triggers a runaway callback, the callback is stopped and logged, and then that system is disabled
+  too, because they share one budget (as in the engine). A game machine's callback runs in the realm, under the realm's own
+  budget: stopped and logged, and no system is disabled.</li>
 <li><strong>Misuse:</strong> every bad <code>kast.fsm.*</code> argument raises at the calling line, which a system callback treats like any other
   error (the system is disabled). An unknown state name passed to <code>change</code> is a denial (<code>false</code> and a warning).</li>
 <li><strong>Startup:</strong> a rejected <code>fsms/</code> file or a <code>GAME_STATE_MACHINES</code> name with no valid definition refuses the start, like
   any other Lua error (one <code>Lua error</code> line each, <code>startup failed: Lua</code>, exit status 1). That also applies when
   <code>LUA_ROOT</code> is missing and <code>GAME_STATE_MACHINES</code> is set.</li>
-<li><strong>C++:</strong> <code>World::fsm()</code> (<code>lua::StateMachines</code>, also <code>Runtime::fsm()</code>) gives <code>state</code>, <code>change</code>, <code>canChange</code> and <code>states</code>
-  for a game machine name or a character or NPC wire id. It applies the same rules, events and logging as <code>kast.fsm</code>, and a bad
-  target throws <code>std::invalid_argument</code>.</li>
+<li><strong>C++:</strong> <code>World::realm_fsm()</code> (the game machines) and <code>World::fsm(map)</code> (that map's characters and NPCs by wire
+  id; <code>World::fsm()</code>: <code>START_MAP</code>'s) are <code>lua::StateMachines</code> (also <code>Runtime::fsm()</code>), with <code>state</code>, <code>change</code>,
+  <code>canChange</code> and <code>states</code>. They apply the same rules, events and logging as <code>kast.fsm</code>, and a bad target throws
+  <code>std::invalid_argument</code>.</li>
 <li><strong>Not on the server:</strong> hot reload, scenes and <code>kast.loadScene</code>, the editor's
   panels.</li>
 </ul>
-<pre><code class="language-cpp">lua::StateMachines&amp; fsm = world.fsm();
-std::string phase = fsm.state(&quot;zone_cycle&quot;);          // a game machine by name
-bool moved = fsm.change(lua::EntityId{7}, &quot;moving&quot;);  // a character's machine by wire id
+<pre><code class="language-cpp">std::string phase = world.realm_fsm().state(&quot;zone_cycle&quot;);              // a game machine by name
+bool moved = world.fsm(world.map_of(e)).change(lua::EntityId{7}, &quot;moving&quot;); // a character's machine by wire id
 </code></pre>
 </main>
 </div>

@@ -66,5 +66,11 @@ return {
         saved[e] = nil
     end,
 
+    -- Each map has its own Lua state (docs/services/world/maps.html#map-contexts). Class and Health are components
+    -- and go with the character; the login's saved Health is not needed past its first "equipment.stats".
+    onMapLeave = function(e)
+        saved[e] = nil
+    end,
+
     update = function(dt) end,
 }

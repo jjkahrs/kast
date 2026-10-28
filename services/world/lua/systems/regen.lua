@@ -29,6 +29,14 @@ return {
         state[e] = nil
     end,
 
+    -- Each map has its own Lua state (docs/services/world/maps.html#map-contexts): the entry goes with the character.
+    onMapLeave = function(e)
+        local s = state[e]
+        state[e] = nil
+        return s
+    end,
+    onMapEnter = function(e, s) state[e] = s end,
+
     update = function(dt)
         for e in kast.query("Health") do
             local s = state[e]

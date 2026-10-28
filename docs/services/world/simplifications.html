@@ -19,6 +19,14 @@
   neighbours recompute once more on the next tick (with the same result). A separate Lua-moved tag if that shows in a profile.</li>
 <li><strong>Tiles never unload:</strong> a tile that has loaded its spawns keeps them for the life of the process, as in AzerothCore
   master; sleeping NPCs cost memory, not ticks. Despawn idle tiles on a timer if memory ever matters.</li>
+<li><strong>Map contexts are serial:</strong> each map has its own context (<a href="maps.html#map-contexts">Map contexts</a>), but they are updated one
+  after another on the tick thread, and the process-wide id pool and NPC count are plain members. Running them on worker
+  threads (phase 3, <code>MAP_THREADS</code>) needs a lock or per-context id ranges there.</li>
+<li><strong>Finding an entity's context is a scan:</strong> <code>World</code> asks each map context in turn (one per map in use) which holds an id,
+  for a session's messages and C++ calls. An id-to-context index once instanced maps multiply the contexts.</li>
+<li><strong>Map contexts never stop:</strong> a world map's context, once started, stays for the life of the process, like its tiles.</li>
+<li><strong>Every context keeps every spawn record:</strong> each map context has the full list of spawn file entries (a pointer and a
+  timer each), so a spawn index means the same in all of them; it only spawns its own map's.</li>
 <li><strong>Sleeping patrols are swept slowly:</strong> the sample <code>systems/npcs.lua</code> checks 8 patrol entries a tick for NPCs that are gone
   (a sleeping one is just missing from <code>kast.query</code>), so a destroyed patrol's few bytes linger for a while. A destroy event
   if that ever matters.</li>

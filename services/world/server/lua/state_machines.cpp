@@ -39,6 +39,7 @@ const StateMachineDef* StateMachines::definition(const std::string& name) const 
 }
 
 void StateMachines::enterAll() {
+    if (forward_) return; // a map context: the realm enters them
     for (const std::string& name : gameList_)
         if (!game_.contains(name))
             if (const auto it = defs_.find(name); it != defs_.end()) enterInitial(name, it->second, it->second.initial);
@@ -92,7 +93,7 @@ StateMachines::Instance StateMachines::resolve(const Target& target, bool enter)
         const auto it = defs_.find(*name);
         if (it == defs_.end())
             throw std::invalid_argument(std::format("game state machine \"{}\" has no valid definition", *name));
-        if (enter && !game_.contains(*name)) enterInitial(*name, it->second, it->second.initial);
+        if (enter && !forward_ && !game_.contains(*name)) enterInitial(*name, it->second, it->second.initial);
         const auto current = game_.find(*name);
         return {&it->second, current == game_.end() ? nullptr : &current->second, std::nullopt};
     }
@@ -170,6 +171,10 @@ bool StateMachines::apply(const Target& target, const std::string& to) {
         log::warn(std::format("{}: \"{}\" can't be entered from \"{}\" (allowedFrom); staying in \"{}\"", label(machine),
                               to, from, from));
         return false;
+    }
+    if (forward_ && !machine.entity) { // a game machine, in a map context: the realm applies it
+        forward_(machine.def->name, to);
+        return true;
     }
     const StateMachineDef& def = *machine.def; // definitions never change after setup
     const Transition transition{def.name, machine.entity, from, to};

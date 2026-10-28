@@ -51,9 +51,48 @@ joined only by transfers. Players and NPCs on different maps never see each othe
   for players and NPCs alike, and also teleports within a map. It moves the entity at once, resets a player's move
   budget and sends it <code>MapChange</code>, then <code>Despawn</code> for its old neighbours, who get its <code>Despawn</code>. The next interest pass
   sends the <code>Spawn</code>s at the destination: in the same tick for a <a href="areas.html#areas">portal</a>, the next tick for <code>kast.transfer</code>. So
-  <code>MapChange</code> always reaches the client first (<a href="protocol.html#maps">protocol</a>).</li>
+  <code>MapChange</code> always reaches the client first (<a href="protocol.html#maps">protocol</a>). Onto another map the entity changes
+  <a href="#map-contexts">context</a>: a portal moves it at the serial point right after movement, a <code>kast.transfer</code> at the end of
+  the tick.</li>
 <li><strong>Ownership:</strong> a transfer to a tile this process does not own is refused and logged. Every loaded tile is owned for
   now; the check is the seam for running maps in several processes later.</li>
+</ul>
+<h2 id="map-contexts">Map contexts</h2>
+<p>Like AzerothCore's one <code>Map</code> object per map, each map in use runs in its own context, and one realm context runs what
+belongs to no map. Contexts are updated one after another on the tick thread, and meet only at serial points.</p>
+<ul>
+<li><strong>A map context owns:</strong> a registry (every player and NPC on the map), an AOI grid, a Lua state (<code>npcs/</code> and
+  <code>systems/</code>, every <code>init</code> run when the context starts), the spawner and <a href="#tile-activation">tile activation</a>, an event bus,
+  and the inbound queues of its players (moves, chat, client events, interacts). The maps' immutable data (manifests, areas, ground,
+  navmesh, objects, spawn files) is loaded once and shared read-only, never copied per context.</li>
+<li><strong>When:</strong> <code>START_MAP</code>'s context starts with the scripts, at startup; any other map's the first time it is used (a
+  login or a transfer onto it, an NPC created there, a <code>kast.world.post</code> to it), as AzerothCore creates a map on demand. A map's
+  context then stays for the life of the process, like its tiles. Each logs <code>map context started</code> <code>{map, name}</code> at debug
+  level, and the realm <code>realm context started</code>.</li>
+<li><strong>The realm context:</strong> one per process. Its Lua state loads only <code>fsms/</code> and runs the game machines
+  (<code>GAME_STATE_MACHINES</code>); no map context starts them (<a href="state-machines.html#state-machines">State machines</a>). Its bus gets the game
+  machines' <code>fsm.changed</code> (passed on to every map's bus for its next drain) and posts to <code>"realm"</code> and <code>"all"</code>. It has no
+  systems: only server C++ subscribes there.</li>
+<li><strong>Isolation:</strong> while a context is updated it touches no other context: <code>kast.query</code>, <code>kast.get</code> and the rest see
+  its own map's entities only. What reaches past its map is queued for the next serial point: a transfer onto another map (a portal or
+  <code>kast.transfer</code>), <code>kast.create</code> onto another map, a destroyed NPC whose spawn file is another map's (it respawns there),
+  <code>kast.world.post</code>, a game machine change, and a <code>kast.broadcast</code>'s copy for the other maps' players.</li>
+<li><strong>Serial points:</strong> each tick runs: the realm's bus drain; a serial point (whatever C++ calls queued since the last tick);
+  movement and areas for every map; a serial point (portals onto another map, so the destination's interest pass sends their
+  <code>Spawn</code>s this tick); the rest of the tick for every map; a serial point (Lua's transfers, creates and game machine changes; posts
+  go onto their targets' buses here, for the next tick). Maps go in id order. A serial point does what was queued before it began; what
+  that queues waits for the next. Every <code>World</code> call from server C++ (a login, a logout, <code>World::transfer</code>) is one too.</li>
+<li><strong>Transfer onto another map,</strong> at a serial point, in this order: <code>onMapLeave(e)</code> in the old context's systems (and the
+  client events queued there so far are sent); <code>MapChange</code>, the <code>Despawn</code> of each old neighbour, theirs of it and
+  <code>area.leave</code> on the old map's bus; every component moved to the new context (the C++ ones and every Lua component, persisted or
+  not; a <code>StateMachine</code> keeps its current state; the entity id stays); <code>area.enter</code> on the new map's bus;
+  <code>onMapEnter(e, carried)</code> in the new context's systems (<a href="lua.html#systems">Lua</a>). A portal's <code>Spawn</code>s and area events
+  come in the portal tick, a <code>kast.transfer</code>'s in the next. Within a map a transfer is done at once, as before.</li>
+<li><strong>Entity ids:</strong> one process-wide pool hands each context its ids (the entity ids on the wire and in Lua), in the order a
+  single registry would, so an id is unique across contexts and an entity keeps it when it changes context. <code>MAX_NPCS</code> counts the
+  NPCs of every context.</li>
+<li><strong>Sessions:</strong> a player's <code>Move</code>, <code>Say</code>, <code>ClientEvent</code> and <code>Interact</code> go to the context its character is
+  in now.</li>
 </ul>
 <h2 id="tile-activation">Tile activation</h2>
 <p>A tile is <em>near</em> a player when it is at most <code>ACTIVATION_TILES</code> (default 1: a 3&times;3 block) tiles from the player's tile,

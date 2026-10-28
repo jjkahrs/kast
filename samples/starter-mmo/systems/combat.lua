@@ -34,7 +34,9 @@
 -- Health an NPC dies: its machine goes "dead" (a corpse: no walking, no fighting, refused as a target) and "npc.died"
 -- {npc, definition (its npcs/ name), tagger, damagers = {player, ...}} goes on the server bus; systems/inventory.lua
 -- rolls its loot for the tagger and removes the corpse later, systems/quests.lua credits every damager's kill
--- objectives, and its spawn file brings it back respawnSec after. An NPC without Health (a friendly one, such as
+-- objectives, and its spawn file brings it back respawnSec after. Damagers that went to another map meanwhile (each
+-- map runs its own Lua, docs/services/world/maps.html#map-contexts) are posted to every map as "npc.died.away" {npc,
+-- definition, damagers} (kast.world.post), for quests.lua there. An NPC without Health (a friendly one, such as
 -- npcs/elder.lua) is never a target ("target").
 --
 -- A character at 0 Health is dead for REVIVE_SECONDS: it cannot move (kast.setMovable) or use powers, and NPCs drop it.
@@ -182,11 +184,18 @@ local function hit(attacker, target, damage, player, extra)
         fights[target], rootedUntil[target] = nil, nil
         if exists(target, "StateMachine") then kast.fsm.change(target, "dead") end
         kast.sendNearby(player, "combat.death", {entity = target, name = name(target)})
-        local credited = {}
-        for player in pairs(damagers[target] or {}) do credited[#credited + 1] = player end
+        local credited, away = {}, {}
+        for player in pairs(damagers[target] or {}) do
+            credited[#credited + 1] = player
+            if not exists(player, "Character") then away[#away + 1] = player end -- on another map now (or gone)
+        end
         table.sort(credited)
-        kast.publish("npc.died", {npc = target, definition = kast.get(target, "Npc").npc, tagger = tagged[target],
-                                  damagers = credited})
+        local definition = kast.get(target, "Npc").npc
+        kast.publish("npc.died", {npc = target, definition = definition, tagger = tagged[target], damagers = credited})
+        if #away > 0 then -- systems/quests.lua credits them on whichever map they are on now
+            table.sort(away)
+            kast.world.post("all", "npc.died.away", {npc = target, definition = definition, damagers = away})
+        end
         tagged[target], damagers[target] = nil, nil
     end
 end
@@ -401,6 +410,34 @@ return {
 
     onLeave = function(e)
         readyAt[e], gcdUntil[e], buffs[e], deadUntil[e], gear[e] = nil, nil, nil, nil, nil
+    end,
+
+    -- Each map has its own Lua state (docs/services/world/maps.html#map-contexts). A player's cooldowns, buffs, death
+    -- timer and gear totals go with it to the next map's, as seconds left (each map counts its own now). An NPC's
+    -- fight, tag and root stay behind: its home and its damagers are this map's.
+    onMapLeave = function(e)
+        local function left(at) return at and at - now end
+        local carried = {gear = gear[e], gcd = left(gcdUntil[e]), dead = left(deadUntil[e]), ready = {}, buffs = {}}
+        for id, at in pairs(readyAt[e] or {}) do carried.ready[id] = at - now end
+        for id, buff in pairs(buffs[e] or {}) do carried.buffs[id] = {left = buff.endsAt - now, absorb = buff.left} end
+        readyAt[e], gcdUntil[e], buffs[e], deadUntil[e], gear[e] = nil, nil, nil, nil, nil
+        fights[e], tagged[e], damagers[e], rootedUntil[e] = nil, nil, nil, nil
+        return carried
+    end,
+
+    onMapEnter = function(e, carried)
+        if not carried then return end
+        gear[e] = carried.gear
+        gcdUntil[e] = carried.gcd and now + carried.gcd
+        deadUntil[e] = carried.dead and now + carried.dead
+        if next(carried.ready) then
+            readyAt[e] = {}
+            for id, seconds in pairs(carried.ready) do readyAt[e][id] = now + seconds end
+        end
+        if next(carried.buffs) then
+            buffs[e] = {}
+            for id, b in pairs(carried.buffs) do buffs[e][id] = {power = POWER[id], endsAt = now + b.left, left = b.absorb} end
+        end
     end,
 
     update = function(dt)

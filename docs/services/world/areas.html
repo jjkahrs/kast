@@ -45,7 +45,8 @@ area lookups from Lua, and treats an area with a <code>portal</code> as a zone l
 <li><strong>Portals:</strong> a player who moves into a portal area is sent to <code>portal.map</code> at <code>portal.pos</code> / <code>portal.heading</code> through
   <code>World::transfer</code>, before the tick's interest pass. The client gets <code>MapChange</code>, then <code>Despawn</code> for its old
   neighbours, then <code>Spawn</code> for its new ones, all in that tick. The bus gets <code>area.enter</code> for the portal area, then
-  <code>area.leave</code> for it and <code>area.enter</code> for the destination's area. The player is not in a portal on arrival, so it
+  <code>area.leave</code> for it and <code>area.enter</code> for the destination's area; onto another map, the leave goes on the old map's bus and
+  the enter on the new map's, each delivered at that map's drain in the portal tick (<a href="maps.html#map-contexts">Map contexts</a>). The player is not in a portal on arrival, so it
   must walk out and back in to return.</li>
 </ul>
 <table>
