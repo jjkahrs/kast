@@ -355,14 +355,14 @@ void save_system(entt::registry& reg, const lua::Defs& defs, const Save& save, M
     reg.remove<Dirty>(saved.begin(), saved.end());
 }
 
-void spawner_system(entt::registry& reg, Spawner& spawner, const size_t& npcs, size_t maxNpcs, TimePoint now,
+void spawner_system(entt::registry& reg, Spawner& spawner, const std::function<size_t()>& npcs, size_t maxNpcs, TimePoint now,
                     const std::function<entt::entity(const SpawnRecord&)>& create) {
     bool capped = false;
     for (size_t i = 0; i < spawner.pending.size();) {
         const uint32_t record = spawner.pending[i];
         SpawnRecord& r = spawner.records[record];
         if (now < r.respawnAt) { ++i; continue; }
-        if (npcs >= maxNpcs) { capped = true; break; }
+        if (npcs() >= maxNpcs) { capped = true; break; }
         spawner.pending.erase(spawner.pending.begin() + i); // before create: an FSM enter callback may destroy an NPC
         reg.emplace<SpawnRef>(create(r), record);
         r.alive = true;

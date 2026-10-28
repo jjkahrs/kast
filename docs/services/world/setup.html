@@ -93,7 +93,8 @@ ctest --preset debug          :: world_self_check, mapbake_cli
 </tr>
 <tr>
 <td><code>bash tests/load.sh</code></td>
-<td>Load test: 500 <code>wander</code> bots for 300 s (<code>COUNT</code>, <code>DURATION</code>, <code>BEHAVIOUR</code>, <code>THREADS</code> override)</td>
+<td>Load test: 500 <code>wander</code> bots for 300 s (<code>COUNT</code>, <code>DURATION</code>, <code>BEHAVIOUR</code>, <code>THREADS</code> override;
+<code>MAPS=1,2,4,5</code> spreads the bots over those maps, <code>MAP_THREADS</code> sets the world's; <a href="tests.html">Tests</a>)</td>
 </tr>
 <tr>
 <td><code>bash tests/docs_check.sh</code></td>
@@ -105,7 +106,7 @@ ctest --preset debug          :: world_self_check, mapbake_cli
 </tr>
 <tr>
 <td><code>docker compose run --rm bot --mode load --count 50 --behaviour chat --duration 60</code></td>
-<td>Ad-hoc load</td>
+<td>Ad-hoc load (add <code>--maps 1,4</code> to spread the bots over maps 1 and 4 through the portals)</td>
 </tr>
 </tbody>
 </table>

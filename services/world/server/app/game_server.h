@@ -69,7 +69,8 @@ private:
 
     void schedule_tick();
     void tick();
-    void log_tick_stats(const char* msg, const TickStats& ticks, const TickStats& lag);
+    // contexts: one sample per map context per tick, its update ms (World::context_update_ms).
+    void log_tick_stats(const char* msg, const TickStats& ticks, const TickStats& lag, const TickStats& contexts);
 
     asio::io_context& io_;
     const Config& cfg_;
@@ -92,7 +93,7 @@ private:
     TimePoint nextTick_{};
     Millis tickPeriod_;
     // Heap: each histogram is ~400 KB.
-    std::unique_ptr<TickStats> windowTicks_, totalTicks_, windowLag_, totalLag_;
+    std::unique_ptr<TickStats> windowTicks_, totalTicks_, windowLag_, totalLag_, windowContexts_, totalContexts_;
     TimePoint windowStart_{};
 
     bool shuttingDown_ = false;

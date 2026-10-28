@@ -23,6 +23,8 @@ services:
       # Lag simulator, testing only (0 = off): from .env or the shell, e.g. SIM_LATENCY_MS=150 SIM_JITTER_MS=50.
       SIM_LATENCY_MS: ${SIM_LATENCY_MS:-0}
       SIM_JITTER_MS: ${SIM_JITTER_MS:-0}
+      # Map context update workers (docs/services/world/configuration.html): from .env or the shell, e.g. MAP_THREADS=4.
+      MAP_THREADS: ${MAP_THREADS:-1}
       # The chat service (docs/services/chat): clients are told CHAT_PUBLIC_HOST:CHAT_HOST_PORT (the host's view); the
       # internal link goes to the compose service. The world starts and runs without it.
       CHAT_PUBLIC_HOST: ${CHAT_PUBLIC_HOST:-127.0.0.1}

@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <mutex>
 
 namespace kast::world {
 namespace {
@@ -24,6 +25,10 @@ struct Nav::Mesh {
     dtNavMeshQuery* query = dtAllocNavMeshQuery();
     dtQueryFilter filter; // every polygon the bake flagged walkable (flag 1)
     int maxPolys = 0;
+    // findPath uses the query's node pool: one search at a time (map contexts update on several threads, and a
+    // kast path may ask for another map's). findNearestPoly and findStraightPath only read.
+    // ponytail: one lock per map; a dtNavMeshQuery per context if cross-map paths ever contend.
+    std::mutex pathMu;
     ~Mesh() {
         dtFreeNavMeshQuery(query);
         dtFreeNavMesh(mesh);
@@ -108,7 +113,7 @@ bool Nav::has(uint16_t map) const { return meshes_.contains(map); }
 std::vector<proto::Vec3> Nav::path(uint16_t map, proto::Vec3 from, proto::Vec3 to) const {
     const auto it = meshes_.find(map);
     if (it == meshes_.end()) return {};
-    const Mesh& m = *it->second;
+    Mesh& m = *it->second;
     static constexpr float kSnap[3] = {2, 4, 2};
     float start[3], end[3];
     const dtPolyRef startRef = m.nearest(from, kSnap, start), endRef = m.nearest(to, kSnap, end);
@@ -117,7 +122,11 @@ std::vector<proto::Vec3> Nav::path(uint16_t map, proto::Vec3 from, proto::Vec3 t
     if (!startRef || !endRef || !near(start, from) || !near(end, to)) return {};
     dtPolyRef polys[kMaxPathPolys];
     int npolys = 0;
-    const dtStatus s = m.query->findPath(startRef, endRef, start, end, &m.filter, polys, &npolys, kMaxPathPolys);
+    dtStatus s;
+    {
+        std::lock_guard lk(m.pathMu);
+        s = m.query->findPath(startRef, endRef, start, end, &m.filter, polys, &npolys, kMaxPathPolys);
+    }
     if (dtStatusFailed(s) || npolys == 0 || polys[npolys - 1] != endRef) return {}; // partial: `to` is unreachable
     float points[kMaxPathPoints * 3];
     int npoints = 0;

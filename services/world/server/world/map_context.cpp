@@ -55,6 +55,27 @@ void move_entity(entt::registry& from, entt::registry& to, entt::entity e, const
     from.destroy(e);
 }
 
+std::pair<uint32_t, uint32_t> Shared::block() {
+    std::lock_guard lk(mu_);
+    constexpr uint32_t kIndices = entt::entt_traits<entt::entity>::entity_mask; // index tombstone excluded
+    if (kIndices - next_ < kIdBlock) throw std::length_error("out of entity ids");
+    next_ += kIdBlock;
+    return {next_ - kIdBlock, next_};
+}
+
+entt::entity IdPool::generate(Shared& shared) {
+    if (!freed_.empty()) {
+        const entt::entity e = freed_.back();
+        freed_.pop_back();
+        return e;
+    }
+    // ponytail: a context past Shared::kIdBlock new ids in one update step takes its block mid-update, so which block
+    // depends on the other contexts there; ids stay unique, only the parallel = serial guarantee is gone for them.
+    if (block_.first == block_.second) block_ = std::exchange(spare_, {});
+    if (block_.first == block_.second) block_ = shared.block();
+    return entt::entity{block_.first++};
+}
+
 proto::Vec3 clamp_to_map(const Maps& maps, const MoveRules& rules, uint16_t map, proto::Vec3 pos) {
     const auto [x, z] = maps.info(map).clamp(pos.x, pos.z);
     // ponytail: no flying NPCs; add a flag when one exists
@@ -63,8 +84,23 @@ proto::Vec3 clamp_to_map(const Maps& maps, const MoveRules& rules, uint16_t map,
 
 MapContext::MapContext(uint16_t map, const WorldRules& rules, const Maps& maps, Shared& shared, Send send,
                        SendMany sendMany, Save save, lua::Defs defs, TimePoint now)
-    : map_(map), rules_(rules), maps_(maps), shared_(shared), send_(std::move(send)), sendMany_(std::move(sendMany)),
-      save_(std::move(save)), defs_(defs), grid_(rules.cellSize, rules.viewRadius),
+    : map_(map), rules_(rules), maps_(maps), shared_(shared), out_(std::move(send)), outMany_(std::move(sendMany)),
+      outSave_(std::move(save)),
+      send_([this](uint32_t sid, const proto::Message& m) {
+          if (!holding_) return out_(sid, m);
+          held_.msgs.push_back({uint32_t(held_.sessions.size()), 1, false, m});
+          held_.sessions.push_back(sid);
+      }),
+      sendMany_([this](std::span<const uint32_t> sids, const proto::Message& m) {
+          if (!holding_) return outMany_(sids, m);
+          held_.msgs.push_back({uint32_t(held_.sessions.size()), uint32_t(sids.size()), true, m});
+          held_.sessions.insert(held_.sessions.end(), sids.begin(), sids.end());
+      }),
+      save_([this](const db::CharSave& s) {
+          if (!holding_) return outSave_(s);
+          held_.saves.push_back(s);
+      }),
+      defs_(defs), grid_(rules.cellSize, rules.viewRadius),
       lua_(reg_, std::move(defs),
            {.create = [this](std::string name, std::string templateName, std::optional<uint16_t> to,
                              std::optional<proto::Vec3> pos, float heading, std::string npc, const lua::Json& components) {
@@ -78,7 +114,7 @@ MapContext::MapContext(uint16_t map, const WorldRules& rules, const Maps& maps, 
             .transfer = [this](entt::entity e, uint16_t to, proto::Vec3 pos,
                                float heading) { return request_transfer(e, {to, pos, heading}); },
             .spawn = [this](uint32_t record) { return spawner_.records.at(record).spawn; },
-            .count = [this] { return shared_.npcs; },
+            .count = [this] { return npc_count(); },
             .post = [this](lua::Post post) { outbox_.posts.push_back(std::move(post)); },
             .max = rules.maxNpcs}) {
     now_ = now;
@@ -116,6 +152,16 @@ void MapContext::shutdown_scripts() {
     send_lua_client_events(); // before the despawns
 }
 
+void MapContext::release_held() {
+    // holding_ off first: a send that drops a slow client can reach World again (on_closed, despawn) and send more.
+    if (!std::exchange(holding_, false)) return; // held_ is what an earlier release passed on already
+    for (const Held::Msg& m : held_.msgs) {
+        if (m.many) outMany_(std::span(held_.sessions).subspan(m.first, m.count), m.msg);
+        else out_(held_.sessions[m.first], m.msg);
+    }
+    for (const db::CharSave& s : held_.saves) outSave_(s);
+}
+
 void MapContext::send_lua_client_events() {
     std::vector<lua::ClientEvent> events = lua_.take_client_events();
     for (const auto& event : events)
@@ -135,12 +181,12 @@ entt::entity MapContext::create(entt::entity id) {
 
 void MapContext::destroy(entt::entity e) {
     reg_.destroy(e);
-    shared_.ids.erase(e);
+    ids_.release(e);
 }
 
 entt::entity MapContext::spawn(uint32_t sessionId, const db::CharRow& row, proto::Vec3 pos, float heading, TimePoint now) {
     now_ = now;
-    const auto e = create(shared_.ids.generate());
+    const auto e = create(ids_.generate(shared_));
     reg_.emplace<SessionLink>(e, sessionId);
     reg_.emplace<CharacterRef>(e, row.id, row.name, row.options);
     reg_.emplace<Transform>(e, pos, heading);
@@ -276,8 +322,8 @@ entt::entity MapContext::lua_create(std::string name, std::string templateName, 
                                     const lua::Json& components) {
     const uint16_t on = map.value_or(map_);
     if (on == map_) return create_npc(std::move(name), std::move(templateName), pos, heading, std::move(npc), components);
-    const entt::entity id = shared_.ids.generate(); // the id kast.create returns now; the NPC is there at the serial point
-    ++shared_.npcs;
+    const entt::entity id = ids_.generate(shared_); // the id kast.create returns now; the NPC is there at the serial point
+    ++npcs_;
     outbox_.creates.push_back({id, std::move(name), std::move(templateName), on, pos, heading, std::move(npc), components});
     return id;
 }
@@ -287,8 +333,8 @@ entt::entity MapContext::create_npc(std::string name, std::string templateName, 
     const auto& info = maps_.info(map_);
     const proto::Vec3 at = clamp(pos.value_or(proto::Vec3{info.spawn[0], info.spawn[1], info.spawn[2]}));
     if (id == entt::null) {
-        id = shared_.ids.generate();
-        ++shared_.npcs;
+        id = ids_.generate(shared_);
+        ++npcs_;
     }
     const auto e = create(id);
     reg_.emplace<Npc>(e, std::move(name), std::move(templateName), std::move(npc));
@@ -323,7 +369,7 @@ void MapContext::destroy_npc(entt::entity e) {
     leave_views(e);
     grid_.remove(wire_id(e), reg_.get<AoiCell>(e).cell);
     destroy(e);
-    --shared_.npcs;
+    --npcs_;
 }
 
 void MapContext::leave_views(entt::entity e) {
@@ -349,7 +395,7 @@ void MapContext::leave_views(entt::entity e) {
 }
 
 void MapContext::spawn_due(TimePoint now) {
-    spawner_system(reg_, spawner_, shared_.npcs, rules_.maxNpcs, now, [this](const SpawnRecord& r) {
+    spawner_system(reg_, spawner_, [this] { return npc_count(); }, rules_.maxNpcs, now, [this](const SpawnRecord& r) {
         const auto& s = *r.spawn;
         const lua::NpcDef* def = lua_.npc(s.npc); // load_scripts refused the start without one
         if (!def) throw std::logic_error("spawn \"" + s.id + "\": npc \"" + s.npc + "\" not loaded");
@@ -398,10 +444,10 @@ void MapContext::tick_move(TimePoint now) {
 // NPCs Lua creates or moves out of a view show up in the next tick's aoi diff. The events Lua published are delivered
 // right after update; client events go out after component replication, so a client already has the Spawn and the
 // latest component values they may refer to.
-void MapContext::tick_rest(TimePoint now, const Mutes& mutes) {
+void MapContext::tick_rest(TimePoint now, const Mutes& mutes, SysTime wallNow) {
     now_ = now;
     aoi_system(reg_, grid_, send_);
-    chat_system(reg_, rules_.chat, mutes, send_, sendMany_, now, std::chrono::system_clock::now());
+    chat_system(reg_, rules_.chat, mutes, send_, sendMany_, now, wallNow);
     client_event_in_system(reg_, lua_.bus(), now); // delivered by the drain after this tick's Lua update
     interact_system(reg_, maps_, lua_.bus());      // likewise
     spawn_due(now);

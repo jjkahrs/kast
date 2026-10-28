@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "id": 5,
+  "name": "Marsh",
+  "tiles": [[0, 0, 3, 3]],
+  "heightRange": [0, 500],
+  "spawn": {"pos": [512, 0, 512], "heading": 0}
+}

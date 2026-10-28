@@ -15,6 +15,8 @@
 #include "world/components.h"
 #include "world/rules.h"
 #include "world/systems.h"
+#include "world/world.h"
+#include "lua/components.h"
 
 #include <codec.h>
 
@@ -32,6 +34,8 @@
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
+#include <format>
+#include <fstream>
 #include <map>
 #include <mutex>
 #include <random>
@@ -825,6 +829,17 @@ void checkConfig() {
     env["ACTIVATION_TILES"] = "2";
     check(load_config(lookup).errors.empty() && load_config(lookup).config.activationTiles == 2, "ACTIVATION_TILES 2 read");
     env.erase("ACTIVATION_TILES");
+    check(ok.config.mapThreads == 1, "MAP_THREADS defaults to 1");
+    for (const char* bad : {"0", "-1", "-4", "abc", "1.5", "", " 4", "257"}) {
+        env["MAP_THREADS"] = bad;
+        const auto r = load_config(lookup);
+        const bool refused = r.errors.size() == 1 && r.errors[0] == std::string("MAP_THREADS: must be a number in [1, 256], got \"") + bad + "\"";
+        check(*bad == 0 ? r.errors.empty() && r.config.mapThreads == 1 : refused,
+              (std::string("MAP_THREADS \"") + bad + "\" refused with a clear error (empty: the default)").c_str());
+    }
+    env["MAP_THREADS"] = "4";
+    check(load_config(lookup).errors.empty() && load_config(lookup).config.mapThreads == 4, "MAP_THREADS 4 read");
+    env.erase("MAP_THREADS");
     env["START_MAP"] = "65536";
     check(load_config(lookup).errors.size() == 1, "START_MAP above 65535 refused");
     env["START_MAP"] = "2";
@@ -1403,6 +1418,408 @@ int aoi_bench() {
     return 0;
 }
 
+// --- parallel differential check: World with MAP_THREADS=1 against MAP_THREADS=4, message for message ---
+namespace parallel_diff {
+using namespace kast::world;
+namespace fs = std::filesystem;
+constexpr uint16_t kMaps = 4;
+constexpr float kSide = 512; // 2 x 2 tiles per map
+
+// The Lua root: an aoi + persisted component every character gets, a spawn NPC definition, a game machine, and one
+// system that, on its own seeded generator (Lua's math.random is not used), moves NPCs, creates them (here and on
+// other maps; past MAX_NPCS the error is caught), destroys and transfers NPCs and players, sets components, posts to
+// one map or "all", answers posts with a broadcast, sends client events and changes the game machine.
+constexpr const char* kSystem = R"lua(
+local seed, tick = 0, 0
+local function rnd(n) seed = (seed * 16807) % 2147483647 ; return seed % n end
+local function spot() return {x = rnd(490) + 10, y = 0, z = rnd(490) + 10} end
+local function here()
+    for e in kast.query("Character") do return kast.get(e, "Transform").map end
+    for e in kast.query("Npc") do return kast.get(e, "Transform").map end
+end
+return {
+    init = function()
+        kast.subscribe("ping", function(p) kast.broadcast("pinged", {from = p.from, n = p.data.n}) end)
+    end,
+    onEnter = function(e) kast.add(e, "Hp") end,
+    update = function()
+        tick = tick + 1
+        local m = here()
+        if not m then return end
+        if seed == 0 then seed = m * 7919 end
+        local npcs, players = {}, {}
+        for e in kast.query("Npc") do npcs[#npcs + 1] = e end
+        for e in kast.query("Character") do players[#players + 1] = e end
+        for i = 1, #npcs do
+            if rnd(3) == 0 then
+                local p = kast.get(npcs[i], "Transform").position
+                kast.set(npcs[i], "Transform", {position = {x = p.x + rnd(21) - 10, y = 0, z = p.z + rnd(21) - 10}})
+            end
+        end
+        if #npcs < 40 and rnd(3) == 0 then pcall(kast.create, "N", {template = "T", position = spot()}) end
+        if rnd(8) == 0 then pcall(kast.create, "X", {template = "T", map = rnd(4) + 1, position = spot()}) end
+        if #npcs > 8 and rnd(4) == 0 then pcall(kast.destroy, npcs[rnd(#npcs) + 1]) end -- maybe gone already
+        if #npcs > 0 and rnd(6) == 0 then pcall(kast.transfer, npcs[rnd(#npcs) + 1], rnd(4) + 1, spot()) end
+        if #players > 0 and rnd(25) == 0 then pcall(kast.transfer, players[rnd(#players) + 1], rnd(4) + 1, spot()) end
+        for i = 1, #players do
+            if rnd(4) == 0 then pcall(kast.set, players[i], "Hp", {cur = rnd(100)}) end
+        end
+        if rnd(5) == 0 then kast.world.post(rnd(4) + 1, "ping", {n = tick}) end
+        if rnd(30) == 0 then kast.world.post("all", "ping", {n = -tick}) end
+        if #players > 0 and rnd(3) == 0 then kast.sendNearby(players[rnd(#players) + 1], "near", {t = tick, m = m}) end
+        if #players > 0 and rnd(4) == 0 then kast.sendTo(players[rnd(#players) + 1], "own", {t = tick}) end
+        if rnd(40) == 0 then pcall(kast.fsm.change, "cycle", kast.fsm.state("cycle") == "a" and "b" or "a") end
+    end,
+}
+)lua";
+
+// Map i: 2 x 2 tiles, 10 Mob spawns (respawn after 2 s) and a portal area at (400..410, 400..410) to map i % 4 + 1.
+Maps diff_maps() {
+    Maps maps;
+    for (uint16_t id = 1; id <= kMaps; ++id) {
+        map::MapInfo m;
+        m.id = id;
+        m.name = "diff" + std::to_string(id);
+        m.tiles = {{0, 0, 1, 1}};
+        m.spawn = {kSide / 2, 0, kSide / 2};
+        for (int i = 0; i < 10; ++i)
+            m.spawns.push_back({"m" + std::to_string(i), "Mob", {float(30 + 45 * i), 0, float(480 - 40 * i)}, 0, 2, {}, ""});
+        std::string err;
+        const auto areas = map::parse_areas(nlohmann::json::parse(std::format(
+            R"({{"version":1,"areas":[{{"id":"door","rect":[400,400,410,410],"portal":{{"map":{},"pos":[100,0,100]}}}}]}})",
+            id % kMaps + 1)), err);
+        if (areas) m.areas = *areas;
+        maps.add(m);
+    }
+    return maps;
+}
+
+struct LuaFiles {
+    fs::path root = fs::temp_directory_path() / ("kast_parallel_diff_" + std::to_string(std::random_device{}()));
+    LuaFiles() {
+        const std::pair<const char*, const char*> files[] = {
+            {"components/hp.lua", R"(return { name = "Hp", replicate = "aoi", persist = true, fields = {
+                { name = "cur", type = "int", default = 50, min = 0 } } })"},
+            {"npcs/mob.lua", "return { name = 'Mob', template = 'MobTpl', components = { Hp = { cur = 5 } } }"},
+            {"fsms/cycle.lua", "return { name = 'cycle', initial = 'a', states = { a = {}, b = {} } }"},
+            {"systems/chaos.lua", kSystem}};
+        for (const auto& [rel, text] : files) {
+            fs::create_directories((root / rel).parent_path());
+            std::ofstream(root / rel, std::ios::binary) << text;
+        }
+    }
+    ~LuaFiles() {
+        std::error_code ec;
+        fs::remove_all(root, ec);
+    }
+};
+
+// One World and what it sent: each session's messages (encoded) and the saves, since the last clear.
+struct Run {
+    std::map<uint32_t, std::vector<std::vector<uint8_t>>> sent;
+    std::vector<std::string> saves;
+    World world;
+    std::vector<std::pair<uint32_t, entt::entity>> players; // (session, entity), login order
+    std::mt19937 rng;
+    uint32_t nextSession = 1;
+
+    Run(const Maps& maps, const LuaFiles& lua, int threads, unsigned seed)
+        : world(rules(threads), maps,
+                [this](uint32_t sid, const proto::Message& m) { sent[sid].push_back(proto::encode(m)); },
+                [this](std::span<const uint32_t> sids, const proto::Message& m) {
+                    for (uint32_t sid : sids) sent[sid].push_back(proto::encode(m));
+                },
+                [this](const db::CharSave& s) {
+                    saves.push_back(std::format("{} {} {} {} {} {} {}", s.charId, s.mapId, s.pos.x, s.pos.y, s.pos.z,
+                                                s.heading, s.components.value_or("-")));
+                },
+                lua::load_component_defs(lua.root, world::kReservedComponentNames).defs),
+          rng(seed) {}
+    static WorldRules rules(int threads) {
+        WorldRules r;
+        r.mapThreads = threads;
+        r.maxNpcs = 150; // reached now and then: the shares of MAX_NPCS take part
+        r.saveInterval = Millis(500);
+        return r;
+    }
+};
+
+struct Counts {
+    int logins = 0, logouts = 0, moves = 0, corrections = 0, says = 0, transfers = 0, creates = 0, destroys = 0,
+        mapChanges = 0, spawns = 0, serverEvents = 0, componentUpdates = 0, saves = 0;
+};
+
+// Between two ticks, as GameServer would: logins (some next to a portal), logouts, moves (now and then a speedhack),
+// says and yells, client events, C++ transfers and NPC creates / destroys. Every choice comes from r.rng.
+void drive(Run& r, TimePoint now, Counts& n) {
+    std::uniform_real_distribution<float> u(0, 1), spot(10, kSide - 10), step(-0.4f, 0.4f);
+    const auto chance = [&](float p) { return u(r.rng) < p; };
+    const auto map = [&] { return uint16_t(1 + r.rng() % kMaps); };
+    if (r.players.size() < 60 && chance(0.4f)) {
+        const uint32_t sid = r.nextSession++;
+        const uint16_t m = map();
+        const proto::Vec3 pos = chance(0.3f) ? proto::Vec3{398 + u(r.rng), 0, 398 + u(r.rng)} : proto::Vec3{spot(r.rng), 0, spot(r.rng)};
+        const db::CharRow row{sid, sid, "P" + std::to_string(sid), m, pos, 0, "", {}};
+        r.players.emplace_back(sid, r.world.spawn(sid, row, now));
+        ++n.logins;
+    }
+    if (r.players.size() > 10 && chance(0.15f)) {
+        const size_t i = r.rng() % r.players.size();
+        r.world.despawn(r.players[i].second);
+        r.players.erase(r.players.begin() + std::ptrdiff_t(i));
+        ++n.logouts;
+    }
+    for (const auto& [sid, e] : r.players) {
+        entt::registry& reg = *r.world.registry_of(e);
+        if (chance(0.5f)) {
+            const auto& ms = reg.get<MoveState>(e);
+            proto::Vec3 to = reg.get<Transform>(e).pos;
+            const bool hack = chance(0.03f);
+            to.x = std::clamp(to.x + (hack ? 40 : step(r.rng)), 1.f, kSide - 1);
+            to.z = std::clamp(to.z + step(r.rng), 1.f, kSide - 1);
+            to.y = 0;
+            r.world.push_move(e, proto::Move{to, 0, 0, 0, ms.epoch});
+            ++n.moves;
+        }
+        if (chance(0.02f)) {
+            r.world.push_say(e, proto::Say{chance(0.5f) ? proto::ChatKind::say : proto::ChatKind::yell, "hi " + std::to_string(sid)});
+            ++n.says;
+        }
+        if (chance(0.02f)) r.world.push_client_event(e, "poke", nlohmann::json{{"n", sid}});
+    }
+    if (!r.players.empty() && chance(0.08f)) {
+        r.world.transfer(r.players[r.rng() % r.players.size()].second, {map(), {spot(r.rng), 0, spot(r.rng)}, 0});
+        ++n.transfers;
+    }
+    if (chance(0.1f)) {
+        r.world.create_npc("C", "T", map(), proto::Vec3{spot(r.rng), 0, spot(r.rng)}, 0);
+        ++n.creates;
+    }
+    if (chance(0.1f)) {
+        std::vector<entt::entity> npcs;
+        for (uint16_t m = 1; m <= kMaps; ++m)
+            for (auto e : r.world.registry(m).view<Npc>()) npcs.push_back(e);
+        if (!npcs.empty()) {
+            r.world.destroy_npc(npcs[r.rng() % npcs.size()]);
+            ++n.destroys;
+        }
+    }
+}
+
+// "" if a and b sent the same, else the first difference.
+std::string mismatch(const Run& a, const Run& b) {
+    for (const auto& [sid, msgs] : a.sent) {
+        const auto it = b.sent.find(sid);
+        const size_t got = it == b.sent.end() ? 0 : it->second.size();
+        if (got != msgs.size()) return std::format("session {}: {} messages vs {}", sid, msgs.size(), got);
+        for (size_t i = 0; i < msgs.size(); ++i)
+            if (it->second[i] != msgs[i])
+                return std::format("session {} message {} differs (opcode {} vs {})", sid, i, msgs[i][2] | msgs[i][3] << 8,
+                                   it->second[i][2] | it->second[i][3] << 8);
+    }
+    if (a.sent.size() != b.sent.size()) return "MAP_THREADS=4 sent to a session MAP_THREADS=1 did not";
+    if (a.saves != b.saves) return std::format("saves differ ({} vs {})", a.saves.size(), b.saves.size());
+    if (a.world.population() != b.world.population()) return "population differs";
+    return "";
+}
+
+// seeds x ticks; prints what ran. Returns the first difference, "" if none.
+std::string run(int seeds, int ticks, Counts& n, int& compared) {
+    const Maps maps = diff_maps();
+    const LuaFiles lua;
+    for (int seed = 1; seed <= seeds; ++seed) {
+        Run one(maps, lua, 1, unsigned(seed)), four(maps, lua, 4, unsigned(seed));
+        for (Run* r : {&one, &four})
+            if (const auto errors = r->world.load_scripts(lua.root, {"cycle"}); !errors.empty()) return errors.front();
+        TimePoint now = T0;
+        for (int t = 0; t < ticks; ++t, ++compared) {
+            now += Millis(50);
+            Counts ignored;
+            drive(one, now, n);
+            drive(four, now, ignored);
+            one.world.tick(now);
+            four.world.tick(now);
+            if (std::string why = mismatch(one, four); !why.empty())
+                return std::format("seed {} tick {}: {}", seed, t, why);
+            for (const auto& [sid, msgs] : one.sent)
+                for (const auto& m : msgs) {
+                    const auto op = proto::Opcode(m[2] | m[3] << 8);
+                    n.corrections += op == proto::Opcode::Correction;
+                    n.mapChanges += op == proto::Opcode::MapChange;
+                    n.spawns += op == proto::Opcode::Spawn;
+                    n.serverEvents += op == proto::Opcode::ServerEvent;
+                    n.componentUpdates += op == proto::Opcode::ComponentUpdate;
+                }
+            n.saves += int(one.saves.size());
+            for (Run* r : {&one, &four}) {
+                r->sent.clear();
+                r->saves.clear();
+            }
+        }
+        for (const auto& s : one.world.script_status()) // a disabled system would stop making the traffic checked here
+            if (!s.ok) return std::format("seed {}: {} disabled: {}", seed, s.path, s.error);
+    }
+    return "";
+}
+
+void print(const Counts& n, int compared) {
+    std::printf("parallel differential: %d ticks compared; logins %d / logouts %d, moves %d (%d Corrections), says %d, "
+                "C++ transfers %d, C++ NPC creates %d / destroys %d; %d MapChange, %d Spawn, %d ServerEvent, %d "
+                "ComponentUpdate, %d saves\n",
+                compared, n.logins, n.logouts, n.moves, n.corrections, n.says, n.transfers, n.creates, n.destroys,
+                n.mapChanges, n.spawns, n.serverEvents, n.componentUpdates, n.saves);
+}
+} // namespace parallel_diff
+
+// Seeded random worlds on 4 maps (players, spawn and Lua NPCs, moves, logins / logouts, NPC create / destroy, portal,
+// C++ and Lua transfers across maps, kast.world.post, broadcasts, chat, MAX_NPCS reached) run with MAP_THREADS=1 and
+// MAP_THREADS=4: after every tick each session's messages (encoded, in order) and the saves must be identical.
+void checkParallelDifferential() {
+    log::set_level(log::Level::error); // Lua's NPC moves past a map edge and MAX_NPCS warn; not what is checked
+    parallel_diff::Counts n;
+    int compared = 0;
+    const std::string why = parallel_diff::run(20, 400, n, compared);
+    log::set_level(log::Level::info);
+    if (!why.empty()) std::fprintf(stderr, "parallel differential: %s\n", why.c_str());
+    check(why.empty(), "parallel differential: MAP_THREADS=4 sends and saves exactly what MAP_THREADS=1 does");
+    parallel_diff::print(n, compared);
+    check(n.logins > 100 && n.logouts > 100 && n.corrections > 100 && n.says > 100 && n.transfers > 100 &&
+              n.creates > 100 && n.destroys > 100 && n.mapChanges > 1000 && n.spawns > 1000 && n.serverEvents > 1000 &&
+              n.componentUpdates > 1000 && n.saves > 100,
+          "parallel differential: every event kind ran many times");
+}
+
+// world_self_check --parallel-stress N: the differential check over N seeds (the long race run).
+int parallel_stress(int seeds) {
+    log::set_level(log::Level::error);
+    const auto start = std::chrono::steady_clock::now();
+    parallel_diff::Counts n;
+    int compared = 0;
+    const std::string why = parallel_diff::run(seeds, 400, n, compared);
+    parallel_diff::print(n, compared);
+    std::printf("parallel stress: %d seeds x 400 ticks in %.1f s: %s\n", seeds,
+                std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count(),
+                why.empty() ? "identical" : why.c_str());
+    return why.empty() ? 0 : 1;
+}
+
+// --- parallel map update cost (ctest map_threads_bench): p50/p95 World::tick ms on 4 maps, each with 100 moving
+// players and 100 patrolling spawn-file Guards (the sample lua/) around them, on the injected clock ---
+namespace threads_bench {
+using namespace kast::world;
+constexpr uint16_t kMaps = 4;
+constexpr int kPlayers = 100, kGuards = 100;
+constexpr float kSide = 1024; // 4 x 4 tiles per map
+
+Maps bench_maps() {
+    Maps maps;
+    std::mt19937 rng(5);
+    std::uniform_real_distribution<float> in(8, kSide - 8), leg(-30, 30);
+    for (uint16_t id = 1; id <= kMaps; ++id) {
+        map::MapInfo m;
+        m.id = id;
+        m.name = "bench" + std::to_string(id);
+        m.tiles = {{0, 0, 3, 3}};
+        m.spawn = {kSide / 2, 0, kSide / 2};
+        for (int i = 0; i < kGuards; ++i) {
+            const float x = in(rng), z = in(rng);
+            const float x2 = std::clamp(x + leg(rng), 8.f, kSide - 8), z2 = std::clamp(z + leg(rng), 8.f, kSide - 8);
+            m.spawns.push_back({"g" + std::to_string(i), "Guard", {x, 0, z}, 0, 30,
+                                map::PatrolPath{{{x, 0, z}, {x2, 0, z2}}, 1, true}, ""});
+        }
+        maps.add(m);
+    }
+    return maps;
+}
+
+struct Result {
+    double p50 = -1, p95 = -1;
+};
+
+double percentile(std::vector<double> v, double p) {
+    const auto at = v.begin() + static_cast<std::ptrdiff_t>(p * double(v.size() - 1));
+    std::ranges::nth_element(v, at);
+    return *at;
+}
+
+Result run(int threads) {
+    const Maps maps = bench_maps();
+    WorldRules rules;
+    rules.mapThreads = threads;
+    World world(rules, maps, [](uint32_t, const proto::Message&) {}, [](std::span<const uint32_t>, const proto::Message&) {},
+                [](const db::CharSave&) {},
+                lua::load_component_defs(KAST_WORLD_LUA_SAMPLE, world::kReservedComponentNames).defs);
+    if (const auto errors = world.load_scripts(KAST_WORLD_LUA_SAMPLE); !errors.empty()) {
+        std::fprintf(stderr, "map threads bench: %s\n", errors.front().c_str());
+        return {};
+    }
+    struct Player {
+        entt::entity e;
+        proto::Vec3 pos;
+        float heading;
+        uint32_t seq = 0;
+    };
+    std::vector<Player> players;
+    std::mt19937 rng(9);
+    std::uniform_real_distribution<float> in(8, kSide - 8), turn(0, 6.2831853f);
+    TimePoint now = T0;
+    for (uint16_t map = 1; map <= kMaps; ++map)
+        for (int i = 0; i < kPlayers; ++i) {
+            const uint32_t id = uint32_t(players.size() + 1);
+            const proto::Vec3 p{in(rng), 0, in(rng)};
+            const db::CharRow row{id, id, "P" + std::to_string(id), map, p, 0, "", {}};
+            players.push_back({world.spawn(id, row, now), p, turn(rng)});
+        }
+    const auto tick = [&] {
+        now += std::chrono::milliseconds(50);
+        for (Player& p : players) { // 8 m/s, turning back at the edges
+            proto::Vec3 to{p.pos.x + 0.4f * std::sin(p.heading), 0, p.pos.z + 0.4f * std::cos(p.heading)};
+            if (to.x < 8 || to.x > kSide - 8 || to.z < 8 || to.z > kSide - 8) {
+                p.heading += 3.14159265f;
+                to = {p.pos.x + 0.4f * std::sin(p.heading), 0, p.pos.z + 0.4f * std::cos(p.heading)};
+            }
+            p.pos = to;
+            const uint32_t epoch = world.registry_of(p.e)->get<MoveState>(p.e).epoch;
+            world.push_move(p.e, proto::Move{to, p.heading, 0, ++p.seq, epoch});
+        }
+        const auto start = std::chrono::steady_clock::now();
+        world.tick(now);
+        return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count();
+    };
+    for (int i = 0; i < 50; ++i) tick(); // warm up: spawns, first views, buffers grown
+    std::vector<double> ms;
+    for (int i = 0; i < 300; ++i) ms.push_back(tick());
+    return {percentile(ms, 0.50), percentile(ms, 0.95)};
+}
+} // namespace threads_bench
+
+int map_threads_bench() {
+    log::set_level(log::Level::error); // the sample's per-entity warnings are not what is measured
+    const unsigned cores = std::thread::hardware_concurrency();
+    const auto one = threads_bench::run(1), four = threads_bench::run(4);
+    std::fprintf(stderr, "map threads bench: %u hardware threads; 4 maps x (100 players + 100 Guards)\n", cores);
+    std::fprintf(stderr, "map threads bench: MAP_THREADS=1 tick p50 %.3f ms, p95 %.3f ms\n", one.p50, one.p95);
+    std::fprintf(stderr, "map threads bench: MAP_THREADS=4 tick p50 %.3f ms, p95 %.3f ms; p95 = %.1f%% of 1 thread's\n",
+                 four.p50, four.p95, 100 * four.p95 / one.p95);
+    if (one.p95 < 0 || four.p95 < 0) return 1;
+#ifndef NDEBUG
+    // Measured: MSVC Debug runs 4 threads at 140-230% of 1 thread's time (its checked STL and debug heap take
+    // process-wide locks), so a Debug build says nothing about the speedup; Release and the Docker build check it.
+    std::fprintf(stderr, "map threads bench: SKIPPED the 40%% threshold: a Debug build (build Release to check it)\n");
+    return 0;
+#else
+    if (cores < 4) {
+        std::fprintf(stderr, "map threads bench: SKIPPED the 40%% threshold: %u hardware threads, need 4\n", cores);
+        return 0;
+    }
+    if (four.p95 > 0.40 * one.p95) {
+        std::fprintf(stderr, "map threads bench: FAIL, the 4-thread p95 must be at most 40%% of the 1-thread p95\n");
+        return 1;
+    }
+    return 0;
+#endif
+}
+
 void segv() {
     volatile int* null = nullptr;
     *null = 1; // SIGSEGV / access violation
@@ -1470,6 +1887,8 @@ int main(int argc, char** argv) {
     if (argc > 1 && std::string_view(argv[1]) == "--log-bench") return log_bench();
     if (argc > 1 && std::string_view(argv[1]) == "--aoi-bench") return aoi_bench();
     if (argc > 1 && std::string_view(argv[1]) == "--activation-bench") return activation_bench();
+    if (argc > 1 && std::string_view(argv[1]) == "--map-threads-bench") return map_threads_bench();
+    if (argc > 2 && std::string_view(argv[1]) == "--parallel-stress") return parallel_stress(std::atoi(argv[2]));
     if (argc > 2 && std::string_view(argv[1]) == "--log-crash") return log_crash(argv[2]);
     checkCodecRoundTrip();
     checkFrameRejection();
@@ -1477,6 +1896,7 @@ int main(int argc, char** argv) {
     checkMovement();
     checkAoi();
     checkAoiDifferential();
+    checkParallelDifferential();
     checkChat();
     checkClientEvents();
     checkMessageRate();

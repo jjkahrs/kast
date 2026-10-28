@@ -10,6 +10,7 @@
 #include <lua/runtime.h>
 
 #include <filesystem>
+#include <mutex>
 #include <optional>
 
 #include <entt/entity/registry.hpp>
@@ -29,6 +30,7 @@ struct WorldRules {
     float tickSeconds = 0.05f; // dt passed to Lua update
     size_t maxNpcs = 10000;    // kast.create raises past this
     int activationTiles = 1;   // ACTIVATION_TILES: tiles around a player's that load and stay awake (Activation)
+    int mapThreads = 1;        // MAP_THREADS: workers updating the map contexts; 1: all on the calling thread
 };
 
 // Where a transfer puts an entity.
@@ -38,21 +40,42 @@ struct Destination {
     float heading = 0;
 };
 
-// What every context shares, owned by World. Entity ids come from one process-wide pool: a context creates each entity
-// with an id from it (registry::create(hint)), so an entt::entity, and the wire id it is, is unique across contexts,
-// and an entity keeps it when it moves to another context. Ids are handed out and recycled in the order one registry
-// would.
-// ponytail: plain members, touched only on the tick thread; the parallel map update (phase 3) needs a lock or a
-// per-context id range here.
+// What every context shares, owned by World: the process-wide entity index space, handed out in blocks (IdPool).
 struct Shared {
-    entt::storage<entt::entity> ids;
-    size_t npcs = 0; // in every context (and on their way to one), for MAX_NPCS
+    static constexpr uint32_t kIdBlock = 4096;
+    // The next unused block of entity indices. Locked: a context past its spare block takes one mid-update.
+    // ponytail: one mutex, taken once per 4096 new ids; never contended in practice.
+    std::pair<uint32_t, uint32_t> block();
+
+private:
+    std::mutex mu_;
+    uint32_t next_ = 0;
+};
+
+// A context's entity ids. Each entity is created with one (registry::create(hint)), so an entt::entity, and the wire id
+// it is, is unique across contexts, and an entity keeps it when it moves to another context. A context hands out the
+// ids it freed first, the last freed first (version bumped, as entt does), then new indices from its block of Shared's.
+// What a context gets depends only on what it did itself, never on the other contexts, so a parallel update hands out
+// the same ids as a serial one. With one context the ids are those one registry would give.
+class IdPool {
+public:
+    entt::entity generate(Shared& shared);
+    void release(entt::entity e) { freed_.push_back(entt::entt_traits<entt::entity>::next(e)); }
+    // Takes a spare block if it has none, so an update can make Shared::kIdBlock new ids without asking Shared. World
+    // calls it for every context, in map order, before each update step.
+    void reserve(Shared& shared) {
+        if (spare_.first == spare_.second) spare_ = shared.block();
+    }
+
+private:
+    std::vector<entt::entity> freed_;
+    std::pair<uint32_t, uint32_t> block_{}, spare_{}; // [first, second): unused indices
 };
 
 class MapContext {
 public:
     // Work for other contexts, queued during this one's update and done by World at the next serial point.
-    struct Create { // kast.create onto another map; id and its count in Shared are taken already
+    struct Create { // kast.create onto another map; its id is taken, and counted here, already
         entt::entity id;
         std::string name, templateName;
         uint16_t map;
@@ -92,6 +115,31 @@ public:
     lua::StateMachines& fsm() { return lua_.fsm(); }
     entt::registry& registry() { return reg_; }
     size_t population() const { return population_; }
+    IdPool& ids() { return ids_; }
+
+    // MAX_NPCS across contexts that may update at once: each counts its own NPCs (net: created here, counting
+    // kast.create onto another map, less destroyed here; may be negative), and World splits what is left under
+    // MAX_NPCS among them (set_npc_share) before each update step. A context then counts the NPCs everywhere at that
+    // point, plus its own since, plus the other contexts' shares as if used: it never takes another's share, so
+    // what it may create depends on nothing they do meanwhile. With one context: exactly the NPCs everywhere.
+    int64_t npcs() const { return npcs_; }
+    void set_npc_share(int64_t total, size_t left, size_t share) { npcBase_ = total - npcs_ + int64_t(left - share); }
+    size_t npc_count() const { return size_t(std::max<int64_t>(0, npcBase_ + npcs_)); }
+
+    // From hold() to release_held(), sends and saves wait here (in call order) instead of going out: World holds them
+    // during a parallel update, then passes them on, context by context in map order, after the barrier. Each session
+    // is in one context, so it gets its messages in the order a serial update sends them. hold() runs on the worker
+    // and frees what the last release passed on there, off the tick thread.
+    void hold() {
+        held_.sessions.clear();
+        held_.msgs.clear();
+        held_.saves.clear();
+        holding_ = true;
+    }
+    void release_held();
+    // ms spent in tick_move + tick_rest since the last take (World times them for the tick stats).
+    void add_update_ms(double ms) { updateMs_ += ms; }
+    double take_update_ms() { return std::exchange(updateMs_, 0); }
 
     // As World's, for an entity of (or a position on) this map. spawn: pos already checked (on the map, on its ground).
     entt::entity spawn(uint32_t sessionId, const db::CharRow& row, proto::Vec3 pos, float heading, TimePoint now);
@@ -125,7 +173,7 @@ public:
     // The tick, split at World's serial point: movement and areas (portal transfers onto another map are queued), then
     // the rest (World::tick lists the order).
     void tick_move(TimePoint now);
-    void tick_rest(TimePoint now, const Mutes& mutes);
+    void tick_rest(TimePoint now, const Mutes& mutes, SysTime wallNow);
     Outbox take_outbox() { return std::exchange(outbox_, {}); }
     // The realm's game machine states, for kast.fsm here.
     void mirror_game_machines(const std::map<std::string, std::string>& states) {
@@ -143,14 +191,31 @@ private:
     proto::Vec3 clamp(proto::Vec3 pos) const;
     // Sends the client events Lua queued; a broadcast also goes to the outbox for the other contexts.
     void send_lua_client_events();
-    entt::entity create(entt::entity id); // in the registry with id, one from Shared
-    void destroy(entt::entity e);         // out of the registry, its id back to Shared
+    entt::entity create(entt::entity id); // in the registry with id, one from ids_
+    void destroy(entt::entity e);         // out of the registry, its id back to ids_
+
+    // What hold() keeps: each message with its sessions (sessions[first, first + count)), and whether it was a SendMany.
+    struct Held {
+        struct Msg {
+            uint32_t first, count;
+            bool many;
+            proto::Message msg;
+        };
+        std::vector<uint32_t> sessions;
+        std::vector<Msg> msgs;
+        std::vector<db::CharSave> saves;
+    };
 
     uint16_t map_;
     const WorldRules& rules_;
     const Maps& maps_;
     Shared& shared_;
-    Send send_;
+    Send out_;            // World's: the sessions
+    SendMany outMany_;
+    Save outSave_;
+    bool holding_ = false;
+    Held held_;
+    Send send_;           // out_ or, while holding, held_; every system sends through these
     SendMany sendMany_;
     Save save_;
     lua::Defs defs_;
@@ -160,6 +225,9 @@ private:
     Spawner spawner_;  // every map's spawn file entries, in Maps order (SpawnRef indexes it); only this map's spawn here
     Activation activation_;
     Outbox outbox_;
+    IdPool ids_;
+    int64_t npcs_ = 0, npcBase_ = 0; // npc_count = npcBase_ + npcs_
+    double updateMs_ = 0;
     size_t population_ = 0;
     TimePoint now_{}; // the current tick's time (transfer resets move budgets to it)
 };

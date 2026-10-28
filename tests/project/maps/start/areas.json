@@ -11,6 +11,12 @@
      "portal": {"map": 2, "pos": [256, 0, 240], "heading": 3.14}},
     {"id": "hills_gate", "name": "Hills Gate", "parent": "eastvale", "priority": 20,
      "rect": [1060, 1020, 1070, 1030],
-     "portal": {"map": 3, "pos": [256, 30, 256], "heading": 0}}
+     "portal": {"map": 3, "pos": [256, 30, 256], "heading": 0}},
+    {"id": "plains_gate", "name": "Plains Gate", "parent": "eastvale", "priority": 20,
+     "rect": [800, 1250, 810, 1260],
+     "portal": {"map": 4, "pos": [512, 0, 512], "heading": 0}},
+    {"id": "marsh_gate", "name": "Marsh Gate", "parent": "eastvale", "priority": 20,
+     "rect": [700, 750, 710, 760],
+     "portal": {"map": 5, "pos": [512, 0, 512], "heading": 0}}
   ]
 }

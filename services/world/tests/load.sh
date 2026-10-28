@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Load test: COUNT bots (default 500) running BEHAVIOUR (default wander) in one zone for DURATION seconds
-# (default 300) against the compose stack. Restarts the world first so its run totals cover this test only, and
-# stops it gracefully afterwards to get the "tick stats total" line.
+# (default 300) against the compose stack. MAPS=1,2,4,5 spreads the bots evenly over those maps instead (each walks
+# there through the portals: kast_bot --maps). MAP_THREADS (default 1) is the world's. Recreates the world first so
+# its run totals cover this test only (and it runs with this MAP_THREADS), and stops it gracefully afterwards to get
+# the "tick stats total" line.
 # Pass: bot summary PASS, every 10 s window's tick p99 < 25 ms, run p99 < 25 ms, zero failed save attempts.
 set -u
 cd "$(dirname "$0")/.."
@@ -11,12 +13,14 @@ COUNT="${COUNT:-500}"
 DURATION="${DURATION:-300}"
 BEHAVIOUR="${BEHAVIOUR:-wander}"
 THREADS="${THREADS:-8}"
+MAPS="${MAPS:-}"
+export MAP_THREADS="${MAP_THREADS:-1}" # read by docker-compose.yml
 RUN="${RUN_ID:-load$(date +%s)}"
 LOG="build/load-$RUN.log"
 P99_LIMIT_MS=25
 mkdir -p build
 
-docker compose restart world >/dev/null 2>&1
+docker compose up -d --no-deps --force-recreate world >/dev/null 2>&1
 for i in $(seq 120); do
     [ "$(docker inspect -f '{{.State.Health.Status}}' "$(docker compose ps -q world)")" = healthy ] && break
     sleep 1
@@ -24,9 +28,9 @@ done
 WORLD=$(docker compose ps -q world)
 since=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
-echo "load: $COUNT x $BEHAVIOUR for ${DURATION}s (run $RUN)"
+echo "load: $COUNT x $BEHAVIOUR for ${DURATION}s on maps ${MAPS:-START_MAP}, MAP_THREADS=$MAP_THREADS (run $RUN)"
 docker compose run --rm -T bot --run-id "$RUN" --mode load --count "$COUNT" --behaviour "$BEHAVIOUR" \
-    --duration "$DURATION" --threads "$THREADS" 2>&1 | grep -v -E '^ *(Container|Network) ' | tee "$LOG"
+    --duration "$DURATION" --threads "$THREADS" ${MAPS:+--maps "$MAPS"} 2>&1 | grep -v -E '^ *(Container|Network) ' | tee "$LOG"
 botrc=${PIPESTATUS[0]}
 
 docker compose stop -t 15 world >/dev/null 2>&1 # emits "tick stats total"

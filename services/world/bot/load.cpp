@@ -1,10 +1,16 @@
 #include "load.h"
 
+#include <map.h>
+
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
 #include <atomic>
 #include <cmath>
+#include <deque>
+#include <filesystem>
+#include <fstream>
+#include <map>
 #include <mutex>
 #include <random>
 #include <thread>
@@ -13,7 +19,8 @@ namespace kast::bot {
 namespace {
 
 struct Stats {
-    std::atomic<int> tokens{0}, connected{0}, entered{0}, unexpectedDisconnects{0}, expectedDisconnects{0}, errors{0};
+    std::atomic<int> tokens{0}, connected{0}, entered{0}, unexpectedDisconnects{0}, expectedDisconnects{0}, errors{0},
+        onTarget{0}; // --maps: bots that reached their map
     std::atomic<uint64_t> movesSent{0}, entityMoves{0}, entityMovesMsgs{0}, spawns{0}, despawns{0}, corrections{0}, mapChanges{0}, chats{0}, says{0},
         componentUpdates{0}, componentBytes{0}, componentRemoves{0}, serverEvents{0};
     std::mutex mu;
@@ -26,19 +33,95 @@ struct Stats {
     }
 };
 
-// One bot's random walk: straight segments of 3-8 s at 9 m/s, bouncing off the zone edge.
+// A map as --maps sees it (map.json and areas.json under --map-root): its bounds and its portals.
+struct BotMap {
+    float x0 = 0, z0 = 0, x1 = 0, z1 = 0;
+    std::vector<map::Area> portals;
+    // Within 5 m of a portal's bounds: a wanderer turns back there.
+    bool near_portal(const proto::Vec3& p) const {
+        for (const auto& a : portals)
+            if (p.x > a.bounds[0] - 5 && p.x < a.bounds[2] + 5 && p.z > a.bounds[1] - 5 && p.z < a.bounds[3] + 5) return true;
+        return false;
+    }
+};
+using BotMaps = std::map<uint16_t, BotMap>;
+
+std::optional<nlohmann::json> read_json(const std::filesystem::path& file) {
+    std::ifstream in(file, std::ios::binary);
+    if (!in) return std::nullopt;
+    auto j = nlohmann::json::parse(in, nullptr, false);
+    if (j.is_discarded()) return std::nullopt;
+    return j;
+}
+
+// Every <folder>/map.json under root; error names the first file that does not parse.
+BotMaps load_bot_maps(const std::string& root, std::string& error) {
+    BotMaps maps;
+    std::error_code ec;
+    for (const auto& dir : std::filesystem::directory_iterator(root, ec)) {
+        const auto manifest = read_json(dir.path() / "map.json");
+        if (!manifest) continue;
+        const auto info = map::parse_manifest(*manifest, error);
+        if (!info) {
+            error = dir.path().string() + ": " + error;
+            return {};
+        }
+        BotMap& m = maps[info->id];
+        m.x0 = m.z0 = 1e9f;
+        m.x1 = m.z1 = -1e9f;
+        for (const auto& t : info->tiles) {
+            m.x0 = std::min(m.x0, t.x0 * map::kTileSize);
+            m.z0 = std::min(m.z0, t.z0 * map::kTileSize);
+            m.x1 = std::max(m.x1, (t.x1 + 1) * map::kTileSize);
+            m.z1 = std::max(m.z1, (t.z1 + 1) * map::kTileSize);
+        }
+        if (const auto areas = read_json(dir.path() / "areas.json")) {
+            const auto parsed = map::parse_areas(*areas, error);
+            if (!parsed) {
+                error = dir.path().string() + "/areas.json: " + error;
+                return {};
+            }
+            for (const auto& a : parsed->list)
+                if (a.portal) m.portals.push_back(a);
+        }
+    }
+    if (ec) error = root + ": " + ec.message();
+    return maps;
+}
+
+// The portal on map `from` that starts the shortest portal route to map `to` (breadth first); null if none.
+const map::Area* next_portal(const BotMaps& maps, uint16_t from, uint16_t to) {
+    std::map<uint16_t, const map::Area*> first{{from, nullptr}}; // map -> the portal on `from` its route starts with
+    std::deque<uint16_t> queue{from};
+    while (!queue.empty()) {
+        const uint16_t at = queue.front();
+        queue.pop_front();
+        const auto it = maps.find(at);
+        if (it == maps.end()) continue;
+        for (const auto& a : it->second.portals) {
+            if (first.contains(a.portal->map)) continue;
+            first[a.portal->map] = at == from ? &a : first[at];
+            if (a.portal->map == to) return first[to];
+            queue.push_back(a.portal->map);
+        }
+    }
+    return nullptr;
+}
+
+// One bot's random walk: straight segments of 3-8 s at 9 m/s, bouncing off the bounds (and, with --maps, off the
+// portals: the bot stays on its map).
 struct Wander {
     std::mt19937 rng{std::random_device{}()};
     float heading = 0;
     int stepsLeft = 0;
-    proto::Vec3 step(proto::Vec3 p, float zone) {
+    proto::Vec3 step(proto::Vec3 p, float x0, float z0, float x1, float z1, const BotMap* avoid = nullptr) {
         if (stepsLeft-- <= 0) {
             heading = std::uniform_real_distribution<float>(0, 6.2831853f)(rng);
             stepsLeft = std::uniform_int_distribution<int>(30, 80)(rng);
         }
         const float d = 0.9f; // 9 m/s at 10 Hz
         proto::Vec3 n{p.x + d * std::sin(heading), p.y, p.z + d * std::cos(heading)};
-        if (n.x < 5 || n.x > zone - 5 || n.z < 5 || n.z > zone - 5) {
+        if (n.x < x0 + 5 || n.x > x1 - 5 || n.z < z0 + 5 || n.z > z1 - 5 || (avoid && avoid->near_portal(n))) {
             heading += 3.14159265f;
             n = {p.x + d * std::sin(heading), p.y, p.z + d * std::cos(heading)};
         }
@@ -46,8 +129,10 @@ struct Wander {
     }
 };
 
+// target: with --maps, the map this bot walks to through the portals and then wanders on (maps: --map-root's).
 asio::awaitable<void> run_bot(const Options& o, asio::ssl::context& tls, Stats& st, std::string token,
-                              Millis startDelay, std::chrono::steady_clock::time_point end) {
+                              Millis startDelay, std::chrono::steady_clock::time_point end, const BotMaps& maps,
+                              std::optional<uint16_t> target) {
     co_await sleep_for(startDelay);
     std::string err;
     auto c = co_await connect_and_login(o, tls, token, err);
@@ -72,10 +157,15 @@ asio::awaitable<void> run_bot(const Options& o, asio::ssl::context& tls, Stats& 
 
     auto pos = std::make_shared<proto::Vec3>(ok.pos);
     // A wanderer that walks into a portal (docs/services/world/areas.html) is parked on the other map: it stops moving, and the
-    // Corrections for its moves still in flight from the old map are not counted.
+    // Corrections for its moves still in flight from the old map are not counted. With --maps a bot never parks: it
+    // walks on to its target map (onMap follows each MapChange), then wanders there clear of the portals.
     // ponytail: parked, not wandering on; give the bot the destination map's bounds if load tests need cross-map moves.
     auto parked = std::make_shared<bool>(false);
-    c->onMessage = [&st, pos, parked](const proto::Message& m) {
+    auto onMap = std::make_shared<uint16_t>(ok.map);
+    // Steps to sit out after a MapChange: a transfer resets the move budget (validate_move), so a full 0.9 m step in
+    // the first 100 ms on the new map would be corrected, as for any client that moves before its loading screen ends.
+    auto settle = std::make_shared<int>(0);
+    c->onMessage = [&st, pos, parked, onMap, settle, target](const proto::Message& m) {
         if (auto* mv = std::get_if<proto::EntityMoves>(&m)) {
             ++st.entityMovesMsgs;
             st.entityMoves += mv->entries.size(); // entries: the moves seen, as before batching
@@ -90,14 +180,18 @@ asio::awaitable<void> run_bot(const Options& o, asio::ssl::context& tls, Stats& 
         else if (auto* corr = std::get_if<proto::Correction>(&m)) {
             if (!*parked) ++st.corrections;
             *pos = corr->pos;
-        } else if (std::holds_alternative<proto::MapChange>(m)) {
+        } else if (auto* mc = std::get_if<proto::MapChange>(&m)) {
             ++st.mapChanges;
-            *parked = true;
+            *parked = !target;
+            *pos = mc->pos;
+            *onMap = mc->map;
+            *settle = 3;
         }
     };
 
     Wander wander;
     const float zone = o.extra.count("zone") ? std::stof(o.extra.at("zone")) : 2048.f;
+    bool reached = false;
     asio::steady_timer t(co_await asio::this_coro::executor);
     auto next = std::chrono::steady_clock::now();
     uint32_t tick = 0;
@@ -109,8 +203,37 @@ asio::awaitable<void> run_bot(const Options& o, asio::ssl::context& tls, Stats& 
         co_await t.async_wait(asio::use_awaitable);
         ++tick;
         if (*parked) continue;
+        if (*settle > 0) { // 300 ms on the new map before the next step
+            --*settle;
+            continue;
+        }
+        if (target && *onMap != *target) { // on the way: straight at the next portal's middle, 9 m/s
+            const map::Area* portal = next_portal(maps, *onMap, *target);
+            if (!portal) {
+                st.error("no portal route from map " + std::to_string(*onMap) + " to " + std::to_string(*target));
+                break;
+            }
+            const float gx = (portal->bounds[0] + portal->bounds[2]) / 2, gz = (portal->bounds[1] + portal->bounds[3]) / 2;
+            const float dx = gx - pos->x, dz = gz - pos->z, dist = std::hypot(dx, dz);
+            if (dist > 0) {
+                const float d = std::min(0.9f, dist);
+                *pos = {pos->x + dx / dist * d, pos->y, pos->z + dz / dist * d};
+            }
+            c->send(proto::Move{*pos, std::atan2(dx, dz), tick * 100});
+            ++st.movesSent;
+            continue;
+        }
+        if (target && !reached) {
+            reached = true;
+            ++st.onTarget;
+        }
         if (o.behaviour == "wander" || o.behaviour == "chat") {
-            *pos = wander.step(*pos, zone);
+            if (target) {
+                const BotMap& m = maps.at(*target);
+                *pos = wander.step(*pos, m.x0, m.z0, m.x1, m.z1, &m);
+            } else {
+                *pos = wander.step(*pos, 0, 0, zone, zone);
+            }
             c->send(proto::Move{*pos, wander.heading, tick * 100});
             ++st.movesSent;
         } else if (o.behaviour == "speedhack") {
@@ -134,6 +257,24 @@ asio::awaitable<void> run_bot(const Options& o, asio::ssl::context& tls, Stats& 
 
 int run_load(const Options& o) {
     Stats st;
+    // --maps: bot i heads for the i-th listed map (round robin) through the portals of --map-root's maps.
+    std::vector<uint16_t> targets;
+    BotMaps maps;
+    if (const auto it = o.extra.find("maps"); it != o.extra.end()) {
+        for (size_t at = 0; at < it->second.size();) {
+            const size_t comma = std::min(it->second.find(',', at), it->second.size());
+            targets.push_back(static_cast<uint16_t>(std::stoi(it->second.substr(at, comma - at))));
+            at = comma + 1;
+        }
+        std::string err;
+        maps = load_bot_maps(o.mapRoot, err);
+        for (uint16_t t : targets)
+            if (!maps.contains(t)) err += " map " + std::to_string(t) + " is not under --map-root '" + o.mapRoot + "';";
+        if (!err.empty() || targets.empty()) {
+            std::fprintf(stderr, "--maps: %s\n", err.empty() ? "no map ids" : err.c_str());
+            return 2;
+        }
+    }
     // 1. Real tokens from auth, in parallel (register + Mailpit verify on first run, then just login).
     std::vector<std::string> tokens(o.count);
     {
@@ -167,7 +308,8 @@ int run_load(const Options& o) {
     for (int i = 0; i < o.count; ++i) {
         if (tokens[i].empty()) continue;
         const Millis delay(1000LL * i / std::max(1, o.connectRatePerSec));
-        asio::co_spawn(*ios[i % o.threads], run_bot(o, tls, st, tokens[i], delay, end), [&st](std::exception_ptr e) {
+        const auto target = targets.empty() ? std::nullopt : std::optional(targets[i % targets.size()]);
+        asio::co_spawn(*ios[i % o.threads], run_bot(o, tls, st, tokens[i], delay, end, maps, target), [&st](std::exception_ptr e) {
             if (!e) return;
             try { std::rethrow_exception(e); } catch (const std::exception& ex) { st.error(ex.what()); }
         });
@@ -209,6 +351,8 @@ int run_load(const Options& o) {
                               {"despawns_recv", st.despawns.load()},
                               {"corrections_recv", st.corrections.load()},
                               {"map_changes_recv", st.mapChanges.load()},
+                              {"maps", o.extra.count("maps") ? o.extra.at("maps") : ""},
+                              {"on_target_map", st.onTarget.load()},
                               {"says_sent", st.says.load()},
                               {"chat_recv", st.chats.load()},
                               {"component_updates_recv", st.componentUpdates.load()},
@@ -223,6 +367,7 @@ int run_load(const Options& o) {
     else ok = ok && st.entered == o.count;
     if (o.behaviour == "speedhack") ok = ok && st.corrections > 0;
     if (o.behaviour == "wander") ok = ok && st.corrections == 0; // honest movers are never corrected
+    if (!targets.empty()) ok = ok && st.onTarget == st.entered;   // --maps: every bot got to its map
     std::printf("%s load %s x%d\n", ok ? "PASS" : "FAIL", o.behaviour.c_str(), o.count);
     return ok ? 0 : 1;
 }

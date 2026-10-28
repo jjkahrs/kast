@@ -233,6 +233,11 @@
 <td>Tiles around a player's tile (Chebyshev distance, 1–32) whose spawn files load and whose NPCs stay awake (<a href="maps.html#tile-activation">tile activation</a>). 1 is a 3&times;3 block; 0, a negative or not a whole number refuses the start</td>
 </tr>
 <tr>
+<td><code>MAP_THREADS</code></td>
+<td><code>1</code></td>
+<td>Worker threads that update the map contexts at once, 1–256 (<a href="maps.html#threading">Threading</a>). 1: no workers, every map on the tick thread. Same results with any value; it pays when players are spread over several maps (<a href="operations.html#map-threads">choosing it</a>). 0, a negative or not a whole number refuses the start</td>
+</tr>
+<tr>
 <td><code>CHAT_MAX_BYTES</code></td>
 <td><code>256</code></td>
 <td>UTF-8 bytes per <code>Say</code></td>
