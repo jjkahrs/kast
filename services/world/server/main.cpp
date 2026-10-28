@@ -6,6 +6,7 @@
 #include "auth/token_service.h"
 #include "core/config.h"
 #include "core/log.h"
+#include "db/char_repo.h"
 #include "db/db_worker.h"
 #include "db/migrate.h"
 #include "lua/components.h"
@@ -64,10 +65,14 @@ int main() {
     db::library_init();
     const db::ConnectOptions dbOpts{cfg.dbHost, cfg.dbPort, cfg.dbUser, cfg.dbPassword, cfg.dbName,
                                     cfg.dbConnectTimeoutSec, 5};
+    uint64_t firstInstanceId = 1;
     try {
         db::Connection conn(dbOpts);
         const auto applied = db::migrate(conn, cfg.migrationsDir);
         log::info("migrations done", {{"applied", applied.size()}});
+        // Above every saved id, so a relog never joins a new copy that took an old copy's id.
+        firstInstanceId = uint64_t{db::CharRepo(conn, cfg.realmId).max_instance_id()} + 1;
+        log::info("instance ids start", {{"firstInstanceId", firstInstanceId}});
     } catch (const std::exception& e) {
         log::error("startup failed: database/migrations", {{"error", e.what()}});
         return 1;
@@ -84,7 +89,7 @@ int main() {
                              Millis(cfg.jwksTimeoutMs)},
                             post);
         const size_t defCount = defs.defs.size();
-        GameServer server(io, cfg, maps, tls, dbWorker, tokens, std::move(defs.defs));
+        GameServer server(io, cfg, maps, tls, dbWorker, tokens, std::move(defs.defs), firstInstanceId);
         std::vector<std::string> luaErrors = std::move(defs.errors);
         // Also without LUA_ROOT: a GAME_STATE_MACHINES name then has no definition, which refuses the start.
         for (std::string& e : server.load_scripts()) luaErrors.push_back(std::move(e));

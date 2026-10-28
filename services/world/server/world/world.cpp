@@ -11,7 +11,7 @@ namespace kast::world {
 
 World::World(WorldRules rules, const Maps& maps, Send send, SendMany sendMany, Save save, lua::Defs defs)
     : rules_(rules), maps_(maps), send_(std::move(send)), sendMany_(std::move(sendMany)), save_(std::move(save)),
-      defs_(std::move(defs)), nextInstance_(std::max<uint32_t>(rules.firstInstanceId, 1)),
+      defs_(std::move(defs)), nextInstance_(std::max<uint64_t>(rules.firstInstanceId, 1)),
       realm_(realmReg_, {},
              {.create = {}, // the realm has no entities: nothing to create, destroy, transfer or spawn
               .destroy = {},
@@ -57,13 +57,14 @@ MapContext& World::create(uint16_t map, uint32_t instance, std::optional<std::st
     return ctx;
 }
 
-MapContext& World::copy_for(uint16_t map, const std::optional<std::string>& key) {
+MapContext* World::copy_for(uint16_t map, const std::optional<std::string>& key) {
     if (key)
         if (const auto it = shared_.copies.find({map, *key}); it != shared_.copies.end())
-            return *contexts_.at({map, it->second.instance});
-    const uint32_t id = nextInstance_;
-    nextInstance_ = nextInstance_ == UINT32_MAX ? 1 : nextInstance_ + 1; // ponytail: wraps after 2^32 copies
-    return create(map, id, key);
+            return contexts_.at({map, it->second.instance}).get();
+    // ponytail: ids never wrap (a saved one could name a new copy), so after 2^32 - 1 copies ever made in the realm no
+    // more are made; reset characters.instance_id to 0 (players then enter at the exits) if a realm ever gets there.
+    if (nextInstance_ > UINT32_MAX) return nullptr;
+    return &create(map, static_cast<uint32_t>(nextInstance_++), key);
 }
 
 MapContext* World::copy(uint16_t map, uint32_t instance) const {
@@ -243,7 +244,13 @@ bool World::move_to(entt::entity e, const Destination& to) {
             from->refuse_full(e, to.map, *to.key); // filled up since the request, by others' transfers or logins
             return false;
         }
-    MapContext& dest = info.instanced() ? copy_for(to.map, to.key) : context(to.map);
+    MapContext* const inst = info.instanced() ? copy_for(to.map, to.key) : nullptr;
+    if (info.instanced() && !inst) { // refused like a full copy
+        log::error("transfer refused: instance ids exhausted", {{"entity", wire_id(e)}, {"map", to.map}});
+        from->refuse_full(e, to.map, to.key.value_or(""));
+        return false;
+    }
+    MapContext& dest = inst ? *inst : context(to.map);
     const lua::Carried carried = from->leave_map(e);
     if (!from->registry().valid(e)) return false; // onMapLeave destroyed it
     const Destination at{to.map, clamp_to_map(to.map, to.pos), to.heading}; // owned, so on the map: y onto the ground

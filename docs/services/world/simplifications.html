@@ -43,9 +43,9 @@
   serial point (counting the context's own queued players); one filled since by another context or a login is refused when the
   transfer is done, after <code>kast.transfer</code> returned <code>true</code> (<code>instance.full</code> both times). Reserve the place at the request if
   a game needs the return value exact.</li>
-<li><strong>Instance ids from the clock:</strong> each run's copies count up from 16 &times; the Unix time in seconds, so a saved instance id
-  from an earlier run names no copy of this one. A run that made more than 16 copies a second for its whole uptime could reach the
-  next run's ids; a run counter in the database if that is ever plausible.</li>
+<li><strong>Instance ids never wrap:</strong> each run's copies count up from one above the highest saved <code>characters.instance_id</code>,
+  so a saved id names no copy of this run. After 2<sup>32</sup> &minus; 1 copies ever made in a realm no more are made (transfers into a new copy
+  are refused like a full one); reset <code>characters.instance_id</code> to 0 (those players enter at the exits) if a realm ever gets there.</li>
 <li><strong>Map contexts never stop:</strong> a world map's context, once started, stays for the life of the process, like its tiles.
   An instance copy is destroyed once empty for its map's <code>emptyTimeoutSec</code>; its entity ids go back to the pool.</li>
 <li><strong>Every context keeps every spawn record:</strong> each map context has the full list of spawn file entries (a pointer and a

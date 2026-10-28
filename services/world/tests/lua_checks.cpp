@@ -6967,6 +6967,34 @@ void checkInstanceKeyErrors() {
     check(w.world.copy(6, 40) && w.world.copy(6, 40)->key() == "good", "instanceKey errors: the next system's key picks the copy (id 40)");
 }
 
+// Instance ids never wrap: the copy past UINT32_MAX is refused like a full one (instance.full, the player stays put).
+void checkInstanceIdsExhausted() {
+    LogCapture capture;
+    LuaRoot r;
+    r.write("npcs/bat.lua", "return { name = 'Bat', template = 'BatTpl' }");
+    r.write("systems/go.lua", R"(return {
+    init = function()
+        kast.subscribe("client.go", function(e) kast.transfer(e.entity, 6, {x = 128, y = 0, z = 128}) end)
+        kast.subscribe("instance.full", function(e) kast.log("full " .. e.entity) end)
+    end,
+    update = function() end })");
+    world::WorldRules rules;
+    rules.firstInstanceId = UINT32_MAX;
+    TestWorld w({}, rules, instance_maps());
+    check(w.world.load_scripts(r.root).empty(), "instance ids exhausted: loads");
+    const auto a = w.spawn(1, 1, "Ann", 1000, 1000);
+    const auto b = w.spawn(2, 2, "Bob", 1010, 1000);
+    w.world.push_client_event(a, "go", nlohmann::json::object());
+    w.world.tick(T0);
+    check(w.world.copy(6, UINT32_MAX) && w.world.map_of(a) == 6, "instance ids exhausted: the last id makes a copy");
+    w.world.push_client_event(b, "go", nlohmann::json::object());
+    w.world.tick(T0 + std::chrono::milliseconds(50));
+    w.world.tick(T0 + std::chrono::milliseconds(100));
+    check(w.world.map_of(b) == 1 && w.world.contexts().size() == 2, "instance ids exhausted: no copy past UINT32_MAX");
+    check(log_index("transfer refused: instance ids exhausted") != SIZE_MAX && log_index("full ") != SIZE_MAX,
+          "instance ids exhausted: logged, instance.full published");
+}
+
 int lua_checks(int& checks) {
     checkCodec();
     checkDefinitionParsing();
@@ -7045,6 +7073,7 @@ int lua_checks(int& checks) {
     checkInstanceManifests();
     checkInstances();
     checkInstanceKeyErrors();
+    checkInstanceIdsExhausted();
     checkLuaFileCache();
     checkAreaShapes();
     checkAreaLoading();

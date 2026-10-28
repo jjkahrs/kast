@@ -18,7 +18,8 @@
 <li><code>map_id</code> (<code>migrations/003_character_map.sql</code>), <code>pos_x/y/z</code> and <code>heading</code></li>
 <li><code>instance_id</code> (<code>migrations/005_character_instance.sql</code>): the <a href="instances.html#relog">instance copy</a> it was saved in, 0 for none
   (a world map, or a row from before the migration). Copies are memory-only, so an id that names no live copy of the saved map
-  (destroyed, or from an earlier run) sends the character to the map's <code>exit</code> on entering</li>
+  (destroyed, or from an earlier run) sends the character to the map's <code>exit</code> on entering. At startup the server reads
+  the realm's highest <code>instance_id</code> and numbers new copies above it, so a saved id never names a new copy</li>
 <li><code>options</code> (<code>migrations/004_character_options.sql</code>): the CharCreate options</li>
 <li><code>components</code>: the persisted Lua components (JSON, see "Lua components and systems")</li>
 <li><code>created_at</code>, <code>last_login_at</code> and <code>deleted_at</code></li>

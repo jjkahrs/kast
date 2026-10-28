@@ -24,9 +24,9 @@ namespace kast {
 
 class GameServer {
 public:
-    // maps must outlive the server and hold cfg.startMap.
+    // maps must outlive the server and hold cfg.startMap. firstInstanceId: WorldRules::firstInstanceId.
     GameServer(asio::io_context& io, const Config& cfg, const world::Maps& maps, asio::ssl::context& tls,
-               db::DbWorker& db, TokenService& tokens, lua::Defs defs);
+               db::DbWorker& db, TokenService& tokens, lua::Defs defs, uint64_t firstInstanceId);
 
     // Loads the Lua systems under LUA_ROOT and runs their init; every error (empty: OK to start).
     std::vector<std::string> load_scripts() { return world_.load_scripts(cfg_.luaRoot, cfg_.gameStateMachines); }

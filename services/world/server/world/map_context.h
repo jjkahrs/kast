@@ -34,7 +34,9 @@ struct WorldRules {
     size_t maxNpcs = 10000;    // kast.create raises past this
     int activationTiles = 1;   // ACTIVATION_TILES: tiles around a player's that load and stay awake (Activation)
     int mapThreads = 1;        // MAP_THREADS: workers updating the map contexts; 1: all on the calling thread
-    uint32_t firstInstanceId = 1; // the first instance copy's id, then one up per copy (GameServer: from the clock)
+    // The first instance copy's id, then one up per copy; past UINT32_MAX no copy is made. kast_world: one above the
+    // highest id saved in characters, so a saved id never names a new copy.
+    uint64_t firstInstanceId = 1;
 };
 
 // Where a transfer puts an entity. Onto an instance map, key picks the copy: the live one with that key, or a new one

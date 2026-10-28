@@ -5,7 +5,7 @@
 namespace kast {
 namespace {
 
-world::WorldRules world_rules(const Config& c) {
+world::WorldRules world_rules(const Config& c, uint64_t firstInstanceId) {
     world::WorldRules r;
     r.move = {c.maxSpeed, c.speedTolerance, c.moveBurstSec, c.minY, c.maxY, c.groundTolerance, c.maxAir, c.moveNavCheck};
     r.chat.maxBytes = c.chatMaxBytes;
@@ -20,11 +20,7 @@ world::WorldRules world_rules(const Config& c) {
     r.maxNpcs = c.maxNpcs;
     r.activationTiles = static_cast<int>(c.activationTiles);
     r.mapThreads = static_cast<int>(c.mapThreads);
-    // Instance ids from an earlier run (saved with a character) must name no copy of this one: start from 16 x the Unix
-    // time in seconds. ponytail: a run that made more than 16 copies a second for its whole uptime could reach the next
-    // run's first ids; a run counter in the database if that is ever plausible.
-    const auto unixSec = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
-    r.firstInstanceId = static_cast<uint32_t>(unixSec * 16);
+    r.firstInstanceId = firstInstanceId;
     return r;
 }
 
@@ -54,9 +50,9 @@ const char* role_name(proto::Role r) {
 } // namespace
 
 GameServer::GameServer(asio::io_context& io, const Config& cfg, const world::Maps& maps, asio::ssl::context& tls,
-                       db::DbWorker& db, TokenService& tokens, lua::Defs defs)
+                       db::DbWorker& db, TokenService& tokens, lua::Defs defs, uint64_t firstInstanceId)
     : io_(io), cfg_(cfg), maps_(maps), tls_(tls), db_(db), tokens_(tokens), limits_(session_limits(cfg)), acceptor_(io),
-      world_(world_rules(cfg), maps,
+      world_(world_rules(cfg, firstInstanceId), maps,
              [this](uint32_t sid, const proto::Message& m) {
                  if (auto* c = find(sid)) c->session->send(m);
              },

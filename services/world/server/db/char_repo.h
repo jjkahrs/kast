@@ -48,6 +48,7 @@ public:
     bool soft_delete(uint64_t accountId, uint64_t charId); // false = not found / not owned / already deleted
     std::optional<CharRow> enter(uint64_t accountId, uint64_t charId); // also stamps last_login_at
     void save(const CharSave& s);
+    uint32_t max_instance_id(); // the highest saved instance id in the realm, also of deleted characters; 0: none
 
 private:
     Connection& c_;

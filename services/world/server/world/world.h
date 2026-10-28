@@ -132,8 +132,9 @@ private:
     MapContext& context(uint16_t map) const { return const_cast<World*>(this)->context(map); }
     // Creates a context (a world map's, or a new copy with a fresh instanceId), its scripts loaded as context's.
     MapContext& create(uint16_t map, uint32_t instance, std::optional<std::string> key);
-    // An instance map's copy for key: the live one registered under it, else a new one (always for nullopt).
-    MapContext& copy_for(uint16_t map, const std::optional<std::string>& key);
+    // An instance map's copy for key: the live one registered under it, else a new one (always for nullopt); null if
+    // a new one is needed and the instance ids are exhausted.
+    MapContext* copy_for(uint16_t map, const std::optional<std::string>& key);
     // The context e is in, or null.
     // ponytail: a scan over the contexts, a valid() check each; an id -> context index if thousands of copies live.
     MapContext* find(entt::entity e) const;
@@ -165,7 +166,7 @@ private:
     lua::Defs defs_;
     Shared shared_;
     std::map<Key, std::unique_ptr<MapContext>> contexts_; // after shared_ (they hold a reference)
-    uint32_t nextInstance_;
+    uint64_t nextInstance_; // > UINT32_MAX: ids exhausted
     int64_t retiredNpcs_ = 0; // destroyed copies' npcs(): their net share of the NPC count
     bool scriptsShutDown_ = false;
     entt::registry realmReg_; // empty: the realm has no entities

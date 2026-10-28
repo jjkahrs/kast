@@ -98,4 +98,9 @@ void CharRepo::save(const CharSave& s) {
              double{s.heading}, *s.components, s.charId, uint64_t{realm_}});
 }
 
+uint32_t CharRepo::max_instance_id() {
+    auto res = c_.exec("SELECT COALESCE(MAX(instance_id), 0) FROM characters WHERE realm_id = ?", {uint64_t{realm_}});
+    return static_cast<uint32_t>(std::stoul(*res.rows[0][0]));
+}
+
 } // namespace kast::db
