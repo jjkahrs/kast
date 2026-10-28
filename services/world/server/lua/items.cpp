@@ -60,10 +60,9 @@ ItemDefsResult load_item_defs(sol::state& lua, const std::filesystem::path& root
         Json item;
     };
     std::vector<Parsed> parsed;
-    std::error_code ec;
     for (const auto& file : definition_files(root, kItemsDir)) {
         Parsed p;
-        p.path = std::filesystem::relative(file, root, ec).generic_string();
+        p.path = lua_path(file, root);
         try {
             p.item = parse_item(lua, file, p.path, p.id);
         } catch (const Invalid& e) {

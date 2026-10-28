@@ -29,11 +29,11 @@ describe('world admin client', () => {
     expect(encodeFrame(0x0303, payload).toString('hex')).toBe('0400030304030201');
   });
 
-  it('says LinkHello{8, secret} and reads a multi-frame online list', async () => {
+  it('says LinkHello{10, secret} and reads a multi-frame online list', async () => {
     world.sessions = Array.from({ length: 2500 }, (_, i) => session(i + 1));
     world.chunkSize = 1000;
     const online = await client.online(at());
-    expect(world.hellos).toEqual([{ version: 9, secret: SECRET }]);
+    expect(world.hellos).toEqual([{ version: 10, secret: SECRET }]);
     expect(online).toHaveLength(2500);
     expect(online[1]).toEqual({
       accountId: 2 ** 40 + 2,
@@ -45,6 +45,44 @@ describe('world admin client', () => {
     });
     world.sessions = [];
     expect(await client.online(at())).toEqual([]); // one frame, count 0
+  });
+
+  it('reads a multi-frame instance list: world maps (instance 0) and copies, emptySince null while occupied', async () => {
+    world.instances = Array.from({ length: 250 }, (_, i) => ({
+      map: i === 0 ? 1 : 6,
+      mapName: i === 0 ? 'Start' : 'Crypté',
+      instance: i === 0 ? 0 : 4_000_000_000 + i,
+      key: i % 2 ? `party-${i}` : '',
+      players: i % 3,
+      npcs: 2 * i,
+      createdAtMs: 1_900_000_000_000 + i,
+      emptySinceMs: i % 3 ? 0 : 1_900_000_100_000 + i,
+    }));
+    world.chunkSize = 100;
+    const list = await client.instances(at());
+    expect(list).toHaveLength(250);
+    expect(list[0]).toEqual({
+      mapId: 1,
+      mapName: 'Start',
+      instanceId: 0,
+      key: '',
+      players: 0,
+      npcs: 0,
+      createdAt: new Date(1_900_000_000_000).toISOString(),
+      emptySince: new Date(1_900_000_100_000).toISOString(),
+    });
+    expect(list[1]).toEqual({
+      mapId: 6,
+      mapName: 'Crypté',
+      instanceId: 4_000_000_001,
+      key: 'party-1',
+      players: 1,
+      npcs: 2,
+      createdAt: new Date(1_900_000_000_001).toISOString(),
+      emptySince: null,
+    });
+    world.instances = [];
+    expect(await client.instances(at())).toEqual([]); // one frame, count 0
   });
 
   it('kicks by account or character with the reason', async () => {

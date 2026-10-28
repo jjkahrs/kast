@@ -15,6 +15,8 @@
 //        kast_net_test_server --make-cert <cert.pem> <key.pem>              writes a new 100-year localhost certificate
 #include "net_test_util.h"
 
+#include <crash_dialogs.h>
+
 #include <nlohmann/json.hpp>
 
 #include <process.h>
@@ -162,6 +164,7 @@ int run(const Cert& cert, std::vector<std::string> command)
 
 int main(int argc, char** argv)
 {
+    kast::disableCrashDialogsIfRequested();
     const std::vector<std::string> args(argv + 1, argv + argc);
     if (args.size() == 3 && args[0] == "--make-cert") {
         const Cert cert = makeCert("DNS:localhost,IP:127.0.0.1", 36500);

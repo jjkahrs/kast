@@ -17,6 +17,9 @@
      "portal": {"map": 4, "pos": [512, 0, 512], "heading": 0}},
     {"id": "marsh_gate", "name": "Marsh Gate", "parent": "eastvale", "priority": 20,
      "rect": [700, 750, 710, 760],
-     "portal": {"map": 5, "pos": [512, 0, 512], "heading": 0}}
+     "portal": {"map": 5, "pos": [512, 0, 512], "heading": 0}},
+    {"id": "crypt_gate", "name": "Crypt Gate", "parent": "eastvale", "priority": 20,
+     "rect": [900, 1100, 910, 1110],
+     "portal": {"map": 6, "pos": [128, 0, 128], "heading": 0}}
   ]
 }

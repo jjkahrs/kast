@@ -6,6 +6,7 @@ import { AccountDetail, AccountList, CreateAccount } from './pages/Accounts';
 import { Audit } from './pages/Audit';
 import { CharacterDetail, CharacterList } from './pages/Characters';
 import { Login } from './pages/Login';
+import { Instances } from './pages/Instances';
 import { Online } from './pages/Online';
 import { Realms } from './pages/Realms';
 import { ErrorBox } from './ui';
@@ -52,6 +53,7 @@ export function App() {
           <NavLink to="/accounts">Accounts</NavLink>
           <NavLink to="/characters">Characters</NavLink>
           <NavLink to="/online">Online</NavLink>
+          <NavLink to="/instances">Instances</NavLink>
           {admin && <NavLink to="/realms">Realms</NavLink>}
           {admin && <NavLink to="/audit">Audit</NavLink>}
         </nav>
@@ -70,6 +72,7 @@ export function App() {
           <Route path="/characters" element={<CharacterList />} />
           <Route path="/characters/:id" element={<CharacterDetail />} />
           <Route path="/online" element={<Online />} />
+          <Route path="/instances" element={<Instances />} />
           {admin && <Route path="/realms" element={<Realms />} />}
           {admin && <Route path="/audit" element={<Audit />} />}
           <Route path="*" element={<Navigate to="/accounts" replace />} />

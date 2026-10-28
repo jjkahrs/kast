@@ -270,12 +270,14 @@ set_source_files_properties(tests/net_self_check.cpp tests/net_test_util.cpp tes
                             PROPERTIES COMPILE_DEFINITIONS "_WIN32_WINNT=0x0A00" COMPILE_OPTIONS /bigobj)
 
 # --- net test server: the fixed-port loopback servers the tests/project net scenes talk to (see tests/net_test_server.cpp) ---
-add_executable(kast_net_test_server tests/net_test_server.cpp tests/net_test_util.cpp "${KAST_MANIFEST}")
+add_executable(kast_net_test_server tests/net_test_server.cpp tests/net_test_util.cpp engine/crash_dialogs.cpp "${KAST_MANIFEST}")
+target_include_directories(kast_net_test_server PRIVATE engine)
 target_compile_options(kast_net_test_server PRIVATE ${KAST_COMPILE_OPTIONS})
 target_link_libraries(kast_net_test_server PRIVATE kast_protocol Boost::asio Boost::beast OpenSSL::SSL OpenSSL::Crypto nlohmann_json::nlohmann_json)
 
 # --- focus probe: runs a command and fails if its window takes the foreground (see tests/focus_probe.cpp) ---
-add_executable(kast_focus_probe tests/focus_probe.cpp)
+add_executable(kast_focus_probe tests/focus_probe.cpp engine/crash_dialogs.cpp)
+target_include_directories(kast_focus_probe PRIVATE engine)
 target_compile_options(kast_focus_probe PRIVATE ${KAST_COMPILE_OPTIONS})
 
 # --- tests ---

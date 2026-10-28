@@ -19,6 +19,7 @@ struct CharRow {
     float heading = 0;
     std::string components; // the components JSON column (Lua components, see lua/components.h); empty if NULL
     proto::CharOptions options = {}; // the options JSON column (CharCreate options); empty if NULL
+    uint32_t instanceId = 0; // the instance copy it was saved in (migration 005); 0: none (a world map, or an old row)
 };
 
 struct CharSave {
@@ -27,6 +28,7 @@ struct CharSave {
     proto::Vec3 pos;
     float heading = 0;
     std::optional<std::string> components; // nullopt: leave the column as it is
+    uint32_t instanceId = 0;               // the copy of an instance map (MapRef::instance); 0 on a world map
 };
 
 struct CreateResult {
@@ -46,6 +48,7 @@ public:
     bool soft_delete(uint64_t accountId, uint64_t charId); // false = not found / not owned / already deleted
     std::optional<CharRow> enter(uint64_t accountId, uint64_t charId); // also stamps last_login_at
     void save(const CharSave& s);
+    uint32_t max_instance_id(); // the highest saved instance id in the realm, also of deleted characters; 0: none
 
 private:
     Connection& c_;

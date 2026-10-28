@@ -13561,7 +13561,8 @@ void checkTerrainStreaming()
     kast::TerrainStreamer streamer;
     streamer.start(std::filesystem::path(KAST_TEST_PROJECT_DIR));
     check(streamer.map(1) && streamer.map(2) && streamer.map(3) && streamer.map(3)->name == "Hills" &&
-              streamer.map(3)->areas.list.empty() && streamer.map(1)->areas.list.size() == 4,
+              streamer.map(3)->areas.list.empty() && streamer.map(1)->areas.list.size() == 7 && streamer.map(6) &&
+              streamer.map(6)->instanced(),
           "terrain: the project's maps (and areas) load from maps/");
     kast::Scene scene;
     const entt::entity terrain = scene.create("Terrain");

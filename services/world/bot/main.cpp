@@ -1,6 +1,7 @@
 // kast_bot: headless test client for the world server.
 //   kast_bot --scenario <name> [options]                       one integration scenario, prints PASS/FAIL
 //   kast_bot --mode load --count 500 --behaviour wander [...]  many sessions in one process
+#include "crash_dialogs.h"
 #include "load.h"
 #include "scenarios.h"
 
@@ -29,6 +30,8 @@ void usage() {
         "  --connect-rate N      load: new sessions per second (default 50)\n"
         "  --maps 1,2,4,5        load: bot i walks through the portals of --map-root's maps to the i-th listed map\n"
         "                        (round robin), then wanders there clear of the portals\n"
+        "  --instance-size N     load: bots per instance copy on an instance map in --maps (default its maxPlayers,\n"
+        "                        else 10), each group with its own instance key (the sample test_hooks.lua's)\n"
         "  --auth-key FILE       handshake scenario: auth's private key, to mint an expired token (test only)\n"
         "  --expect-pos X,Y,Z    restart-verify scenario\n"
         "  --map-root DIR        terrain/navmesh scenarios: the server's maps/ folder (ground heights)\n"
@@ -41,12 +44,13 @@ void usage() {
         "           combat-bat combat-rules (these two need the starter-mmo override and --char-option class=warrior)\n"
         "           yell chat-whisper chat-channels chat-zone chat-ignore chat-mute-setup chat-mute chat-limits\n"
         "           chat-auth chat-down (the chat ones need the chat service; see tests/integration.sh)\n"
-        "           admin admin-off (the world's admin port on / off)\n");
+        "           admin admin-off (the world's admin port on / off) instances (maps/crypt, admin port optional)\n");
 }
 
 } // namespace
 
 int main(int argc, char** argv) {
+    kast::disableCrashDialogsIfRequested();
     Options o;
     for (int i = 1; i < argc; ++i) {
         const std::string a = argv[i];
@@ -82,6 +86,7 @@ int main(int argc, char** argv) {
         else if (a == "--expect-components") o.extra["expect-components"] = val();
         else if (a == "--zone") o.extra["zone"] = val();
         else if (a == "--maps") o.extra["maps"] = val();
+        else if (a == "--instance-size") o.extra["instance-size"] = val();
         else if (a == "--char-option") {
             const std::string kv = val();
             const size_t eq = kv.find('=');

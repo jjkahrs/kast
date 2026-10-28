@@ -4,11 +4,42 @@
 #include <cmath>
 #include <format>
 #include <fstream>
+#include <map>
+#include <mutex>
 #include <sstream>
 #include <unordered_set>
 
 namespace kast::lua {
 namespace {
+
+// cache_lua_files: what was read, by path. Locked: kast.definitions reads on first use, during a parallel update.
+struct FileCache {
+    std::mutex mu;
+    bool on = false;
+    std::map<std::string, std::optional<std::string>> texts;               // nullopt: could not be opened
+    std::map<std::pair<std::string, bool>, std::vector<std::filesystem::path>> lists; // (folder, recursive)
+    std::map<std::pair<std::string, std::string>, std::string> paths;                 // (file, root)
+};
+FileCache& file_cache() {
+    static FileCache cache;
+    return cache;
+}
+
+std::optional<std::string> read_text(const std::filesystem::path& file) {
+    FileCache& c = file_cache();
+    std::unique_lock lk(c.mu);
+    if (const auto it = c.texts.find(file.string()); c.on && it != c.texts.end()) return it->second;
+    lk.unlock();
+    std::optional<std::string> text;
+    if (std::ifstream in(file, std::ios::binary); in) {
+        std::ostringstream bytes;
+        bytes << in.rdbuf();
+        text = bytes.str();
+    }
+    lk.lock();
+    if (c.on) c.texts[file.string()] = text;
+    return text;
+}
 
 constexpr const char* kUnsafeGlobals[] = {"dofile", "loadfile", "load", "loadstring", "getfenv", "setfenv", "require", "module"};
 constexpr const char* kVectorKeys[] = {"x", "y", "z", "w"};
@@ -193,14 +224,12 @@ sol::environment sandbox_environment(sol::state& lua) {
 
 sol::protected_function load_sandboxed(sol::state& lua, const std::filesystem::path& file, const std::string& chunkName,
                                        const sol::environment& env, std::string& error) {
-    std::ifstream in(file, std::ios::binary);
-    if (!in) {
+    const std::optional<std::string> text = read_text(file);
+    if (!text) {
         error = std::format("cannot open '{}'", file.string());
         return {};
     }
-    std::ostringstream text;
-    text << in.rdbuf();
-    sol::load_result chunk = lua.load(text.str(), chunkName, sol::load_mode::text);
+    sol::load_result chunk = lua.load(*text, chunkName, sol::load_mode::text);
     if (!chunk.valid()) {
         error = chunk.get<sol::error>().what();
         return {};
@@ -243,15 +272,57 @@ void check_plain_data(const sol::table& table, const std::string& what) {
 }
 
 std::vector<std::filesystem::path> definition_files(const std::filesystem::path& root, const char* dir) {
+    return lua_files(root / dir, true);
+}
+
+std::vector<std::filesystem::path> lua_files(const std::filesystem::path& folder, bool recursive) {
+    FileCache& c = file_cache();
+    std::unique_lock lk(c.mu);
+    if (const auto it = c.lists.find({folder.string(), recursive}); c.on && it != c.lists.end()) return it->second;
+    lk.unlock();
     std::vector<std::filesystem::path> files;
     std::error_code ec;
-    const std::filesystem::path folder = root / dir;
-    if (std::filesystem::is_directory(folder, ec))
-        for (auto it = std::filesystem::recursive_directory_iterator(folder, ec);
-             !ec && it != std::filesystem::recursive_directory_iterator(); it.increment(ec))
-            if (it->is_regular_file(ec) && it->path().extension() == ".lua") files.push_back(it->path());
+    const auto add = [&](const std::filesystem::directory_entry& e) {
+        if (e.is_regular_file(ec) && e.path().extension() == ".lua") files.push_back(e.path());
+    };
+    if (std::filesystem::is_directory(folder, ec)) {
+        if (recursive)
+            for (auto it = std::filesystem::recursive_directory_iterator(folder, ec);
+                 !ec && it != std::filesystem::recursive_directory_iterator(); it.increment(ec))
+                add(*it);
+        else
+            for (auto it = std::filesystem::directory_iterator(folder, ec); !ec && it != std::filesystem::directory_iterator();
+                 it.increment(ec))
+                add(*it);
+    }
     std::ranges::sort(files);
+    lk.lock();
+    if (c.on) c.lists[{folder.string(), recursive}] = files;
     return files;
+}
+
+std::string lua_path(const std::filesystem::path& file, const std::filesystem::path& root) {
+    FileCache& c = file_cache();
+    std::unique_lock lk(c.mu);
+    const std::pair key{file.string(), root.string()};
+    if (const auto it = c.paths.find(key); c.on && it != c.paths.end()) return it->second;
+    lk.unlock();
+    std::error_code ec;
+    std::string path = std::filesystem::relative(file, root, ec).generic_string();
+    lk.lock();
+    if (c.on) c.paths[key] = path;
+    return path;
+}
+
+void cache_lua_files(bool on) {
+    FileCache& c = file_cache();
+    std::lock_guard lk(c.mu);
+    c.on = on;
+    if (!on) {
+        c.texts.clear();
+        c.lists.clear();
+        c.paths.clear();
+    }
 }
 
 sol::table run_definition_file(sol::state& lua, const std::filesystem::path& file, const std::string& path,

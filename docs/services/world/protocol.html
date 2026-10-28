@@ -9,7 +9,7 @@
 <body>
 <header class="top"><a class="brand" href="../../index.html">Kast Docs</a><nav><a href="../../editor/index.html">Editor</a><a href="../../engine/index.html">Engine</a><a href="../auth/index.html">Auth Server</a><a href="index.html">World Server</a><a href="../chat/index.html">Chat Server</a><a href="../admin/index.html">Admin App</a><a href="../../development/tests.html">Development</a></nav></header>
 <div class="layout">
-<nav class="side"><h2>World Server</h2><ul><li><a href="index.html">Overview</a></li><li><a href="setup.html">Setup and commands</a></li><li><a href="configuration.html">Configuration</a></li><li><a href="security.html">Security behaviour</a></li><li><a href="maps.html">Maps</a></li><li><a href="areas.html">Areas</a></li><li><a href="persistence.html">Persistence</a></li><li><a href="lua.html">Lua components and systems</a></li><li><a href="npcs.html">NPCs</a></li><li><a href="events.html">Events</a></li><li><a href="state-machines.html">State machines</a></li><li><a href="operations.html">Operations</a></li><li><a href="tests.html">Tests</a></li><li><a href="simplifications.html">Deliberate simplifications</a></li><li><a href="protocol.html" class="active">Protocol</a></li></ul></nav>
+<nav class="side"><h2>World Server</h2><ul><li><a href="index.html">Overview</a></li><li><a href="setup.html">Setup and commands</a></li><li><a href="configuration.html">Configuration</a></li><li><a href="security.html">Security behaviour</a></li><li><a href="maps.html">Maps</a></li><li><a href="areas.html">Areas</a></li><li><a href="instances.html">Instances</a></li><li><a href="persistence.html">Persistence</a></li><li><a href="lua.html">Lua components and systems</a></li><li><a href="npcs.html">NPCs</a></li><li><a href="events.html">Events</a></li><li><a href="state-machines.html">State machines</a></li><li><a href="operations.html">Operations</a></li><li><a href="tests.html">Tests</a></li><li><a href="simplifications.html">Deliberate simplifications</a></li><li><a href="protocol.html" class="active">Protocol</a></li></ul></nav>
 <main>
 <h1 id="kast-world-protocol">Kast World Protocol</h1>
 <p><strong>Protocol version: 9</strong> (<code>kProtocolVersion</code> in <code>protocol/messages.h</code>, sent in <code>Hello</code>). A client on any other version gets <code>protocol_mismatch</code>.</p>
@@ -448,6 +448,18 @@
 <td>A</td>
 <td><code>u32 kicked</code>: sessions disconnected</td>
 </tr>
+<tr>
+<td><code>0x0304</code></td>
+<td>AdminInstancesReq</td>
+<td>A</td>
+<td>(empty): the live map contexts (<a href="#admin">admin port</a>, admin protocol 10)</td>
+</tr>
+<tr>
+<td><code>0x0305</code></td>
+<td>AdminInstances</td>
+<td>A</td>
+<td><code>u8 more, u16 count</code>, then <code>count</code> &times; (<code>u16 map, str mapName, u32 instance, str key, u32 players, u32 npcs, u64 createdAtMs, u64 emptySinceMs</code>); <code>more</code> 1: another chunk follows</td>
+</tr>
 </tbody>
 </table>
 <p><strong>CharInfo:</strong> <code>u64 id, str name, vec3 pos, options</code> (the options the character was created with).</p>
@@ -507,6 +519,11 @@
   your old neighbours and the <code>Spawn</code>s of your new ones (both on the next tick). A <code>Move</code> you sent before it arrived is
   checked from the new position with an empty speed budget, so it gets <code>Correction</code>.</li>
 <li><strong>Others:</strong> a player who changes map is a plain <code>Despawn</code> to its old neighbours and a <code>Spawn</code> to its new ones.</li>
+<li><strong>Instances:</strong> every copy of an <a href="instances.html">instance map</a> has the map's id, so entering one is a <code>MapChange</code> to that id
+  like any map change; the wire does not name the copy. A move from one copy to another of the same map (only through
+  <code>kast.transfer</code> with another <code>instance</code> key) is a <code>MapChange</code> with the same map id: the client keeps the map loaded and
+  places itself again, and the <code>Despawn</code>s and <code>Spawn</code>s swap the old copy's entities for the new one's. A transfer refused
+  because the copy is full sends nothing.</li>
 </ul>
 <h3 id="proximity-chat">Proximity chat (say, yell, emote)</h3>
 <p>The world server owns proximity chat; whispers, channels and the zone channel are the <a href="../chat/index.html">chat service</a>'s.</p>
@@ -771,12 +788,16 @@ that sends one gets <code>Disconnect{unexpected_message}</code>.</p>
   |&lt;--- AdminOnline{more=0, ...} -------------|   last (or only, possibly empty) chunk
   |---- AdminKick{accountId | charId, reason}&gt;|
   |&lt;--- AdminKicked{kicked} ------------------|
+  |---- AdminInstancesReq -------------------&gt;|
+  |&lt;--- AdminInstances{more=1, ...} ----------|   chunks of up to 100 entries
+  |&lt;--- AdminInstances{more=0, ...} ----------|   last (or only) chunk
 </code></pre>
 <ul>
-<li><strong>Hello:</strong> the first message must be <code>LinkHello</code> (the chat link's hello, <code>0x0200</code>) with <code>protocolVersion</code> = the current version (8) and <code>secret</code> = <code>WORLD_ADMIN_SECRET</code>. Anything else first gets <code>Disconnect{unexpected_message}</code>.</li>
-<li><strong>Requests:</strong> after <code>LinkOk</code>, any number of <code>AdminOnlineReq</code> and <code>AdminKick</code>, answered in order on the same connection. Any other message gets <code>Disconnect{unexpected_message}</code>; a bad payload <code>Disconnect{malformed}</code>.</li>
+<li><strong>Hello:</strong> the first message must be <code>LinkHello</code> (the chat link's hello, <code>0x0200</code>) with <code>protocolVersion</code> = the admin port's own version (<code>kAdminProtocolVersion</code>, 10; it was the game's 9 before the instance list) and <code>secret</code> = <code>WORLD_ADMIN_SECRET</code>. The game protocol and the chat link stay on <code>kProtocolVersion</code> (9). Anything else first gets <code>Disconnect{unexpected_message}</code>.</li>
+<li><strong>Requests:</strong> after <code>LinkOk</code>, any number of <code>AdminOnlineReq</code>, <code>AdminKick</code> and <code>AdminInstancesReq</code>, answered in order on the same connection. Any other message gets <code>Disconnect{unexpected_message}</code>; a bad payload <code>Disconnect{malformed}</code>.</li>
 <li><strong>Online list:</strong> every authenticated session. One in the lobby has <code>charId</code> 0, an empty name and map 0. <code>connectedAtMs</code> is when the TCP connection was accepted (Unix ms).</li>
 <li><strong>Kick:</strong> exactly one of <code>accountId</code> / <code>charId</code> is non-zero (both or neither: <code>malformed</code>). By account: every session of that account, lobby or world. By character: the session that has it in the world. Each one leaves the world as on a <a href="#handshake">duplicate login</a> (its save is queued), then gets <code>Disconnect{kicked}</code>. <code>kicked</code> counts them; 0 when nobody matched. The reason is logged, not sent to the player.</li>
+<li><strong>Instances:</strong> every live <a href="maps.html#map-contexts">map context</a>, in map then instance order: each world map's (instance 0, key empty) and every <a href="instances.html">instance copy</a> (its process-unique instanceId and its key, empty for a keyless copy). <code>players</code> and <code>npcs</code> are what it holds now, <code>createdAtMs</code> when it started (Unix ms), <code>emptySinceMs</code> when an empty copy's timer started (0: it has players, or a world map).</li>
 <li><strong>Heartbeat and limits:</strong> as for game clients: the server pings every <code>PING_INTERVAL_MS</code> and closes a connection idle for <code>IDLE_TIMEOUT_MS</code>; at most 32 admin connections (then <code>server_full</code>). One connection per request is fine.</li>
 </ul>
 </main>

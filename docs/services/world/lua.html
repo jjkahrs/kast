@@ -9,7 +9,7 @@
 <body>
 <header class="top"><a class="brand" href="../../index.html">Kast Docs</a><nav><a href="../../editor/index.html">Editor</a><a href="../../engine/index.html">Engine</a><a href="../auth/index.html">Auth Server</a><a href="index.html">World Server</a><a href="../chat/index.html">Chat Server</a><a href="../admin/index.html">Admin App</a><a href="../../development/tests.html">Development</a></nav></header>
 <div class="layout">
-<nav class="side"><h2>World Server</h2><ul><li><a href="index.html">Overview</a></li><li><a href="setup.html">Setup and commands</a></li><li><a href="configuration.html">Configuration</a></li><li><a href="security.html">Security behaviour</a></li><li><a href="maps.html">Maps</a></li><li><a href="areas.html">Areas</a></li><li><a href="persistence.html">Persistence</a></li><li><a href="lua.html" class="active">Lua components and systems</a></li><li><a href="npcs.html">NPCs</a></li><li><a href="events.html">Events</a></li><li><a href="state-machines.html">State machines</a></li><li><a href="operations.html">Operations</a></li><li><a href="tests.html">Tests</a></li><li><a href="simplifications.html">Deliberate simplifications</a></li><li><a href="protocol.html">Protocol</a></li></ul></nav>
+<nav class="side"><h2>World Server</h2><ul><li><a href="index.html">Overview</a></li><li><a href="setup.html">Setup and commands</a></li><li><a href="configuration.html">Configuration</a></li><li><a href="security.html">Security behaviour</a></li><li><a href="maps.html">Maps</a></li><li><a href="areas.html">Areas</a></li><li><a href="instances.html">Instances</a></li><li><a href="persistence.html">Persistence</a></li><li><a href="lua.html" class="active">Lua components and systems</a></li><li><a href="npcs.html">NPCs</a></li><li><a href="events.html">Events</a></li><li><a href="state-machines.html">State machines</a></li><li><a href="operations.html">Operations</a></li><li><a href="tests.html">Tests</a></li><li><a href="simplifications.html">Deliberate simplifications</a></li><li><a href="protocol.html">Protocol</a></li></ul></nav>
 <main>
 <h1 id="lua-components-and-systems">Lua components and systems</h1>
 <p>Game developers define data components in Lua and write server-authoritative Lua systems that run on the 20 Hz tick
@@ -163,6 +163,7 @@ and a system reads it with <code>kast.definitions(folder)</code>. The server giv
     onMapLeave = function(e) return carried end, -- e (player or NPC) is about to move to another map's context
     onMapEnter = function(e, carried) end,       -- e just arrived from another map's; carried: what onMapLeave returned
     validateCharacter = function(name, options) return true end, -- may this character be created? (see below)
+    instanceKey = function(e, map) return key end, -- e is entering instance map `map`: which copy? (nil: a new one)
 }
 </code></pre>
 <ul>
@@ -179,6 +180,11 @@ and a system reads it with <code>kast.definitions(folder)</code>. The server giv
   there (nil for nothing), so per-entity state goes along: <code>onMapLeave = function(e) local s = state[e]; state[e] = nil; return s end</code>,
   <code>onMapEnter = function(e, s) state[e] = s end</code>. Store times as seconds left: each map's Lua counts its own time. Neither runs for
   a transfer within a map, a login or a logout.</li>
+<li><strong>Instance copies:</strong> each copy of an <a href="instances.html">instance map</a> is a context of its own: its systems' <code>init</code>
+  runs when the copy is made and <code>shutdown</code> when it is destroyed (the per-instance hooks), and its module tables are its own.
+  <code>instanceKey(e, map)</code> runs in the context <code>e</code> is leaving, on a portal or <code>kast.transfer</code> into instance map <code>map</code>
+  (not with <code>instance =</code>): the first system returning a non-empty string of at most 255 bytes picks the copy by that key; nil from
+  all, a new keyless copy; anything else disables that system.</li>
 <li><strong>Sandbox:</strong> the same as the engine's. Only base, table, string and math are open, with no <code>io</code>, <code>os</code>, <code>ffi</code>, <code>debug</code>, <code>jit</code>, <code>package</code>, <code>require</code>, <code>loadfile</code>, <code>dofile</code>, <code>load</code> or <code>loadstring</code>. Definition files are sandboxed too.</li>
 <li><strong>Runaway scripts:</strong> a callback that runs longer than 2 s raises an error, so an infinite loop disables its system instead of hanging the server.</li>
 <li><strong>Runtime errors:</strong> an error in any callback is logged as <code>Lua system disabled</code>, with the system, the callback and <code>path:line</code>. That system is then disabled until restart; the server and the other systems keep running.</li>
@@ -225,8 +231,8 @@ and a system reads it with <code>kast.definitions(folder)</code>. The server giv
 <td>Creates an NPC and returns its entity id; <code>opts = {npc = string \| template = string, components = {...}?, map = id?, position = {x, y, z}?, heading = number?}</code> (see <a href="npcs.html#npcs">NPCs</a>). <code>map</code> defaults to this context's map. On another map the id is returned now and the NPC is created in that map's context at the end of the tick, so it is not in this one (<code>kast.get</code> raises <code>invalid entity id</code>)</td>
 </tr>
 <tr>
-<td><code>kast.transfer(e, map, position [, heading])</code></td>
-<td>Moves player or NPC <code>e</code> to <code>position</code> (<code>{x, y, z}</code>) on map <code>map</code>; <code>heading</code> defaults to the current one. Returns <code>true</code>, or <code>false</code> if this process does not own the destination (see <a href="maps.html#maps">Maps</a>). Within this map it moves at once; onto another map at the end of the tick (until then <code>e</code> is still here, where it was)</td>
+<td><code>kast.transfer(e, map, position [, heading])</code><br><code>kast.transfer(e, {map =, position =, heading =?, instance =?})</code></td>
+<td>Moves player or NPC <code>e</code> to <code>position</code> (<code>{x, y, z}</code>) on map <code>map</code>; <code>heading</code> defaults to the current one. Onto an <a href="instances.html">instance map</a>, <code>instance</code> (a non-empty string of at most 255 bytes) is the copy's key and the <code>instanceKey</code> hooks are not asked; on a world map it raises. Returns <code>true</code>, or <code>false</code> if this process does not own the destination (see <a href="maps.html#maps">Maps</a>) or the copy is full (<code>instance.full</code> on this bus; <a href="instances.html#full">Instances</a>). Within this map it moves at once; onto another map at the end of the tick (until then <code>e</code> is still here, where it was)</td>
 </tr>
 <tr>
 <td><code>kast.destroy(e)</code></td>
@@ -251,7 +257,7 @@ and a system reads it with <code>kast.definitions(folder)</code>. The server giv
 </tr>
 <tr>
 <td><code>kast.world.post(target, event, data)</code></td>
-<td id="post">Sends <code>event</code> to another context's bus: <code>target</code> is a loaded map's id, <code>"realm"</code> or <code>"all"</code> (every running map context and the realm, this one included). Delivered on the next tick, in post order, as <code>{from = &lt;map id or "realm"&gt;, data = data}</code>; a map whose context has not started yet starts for it. <code>event</code> and <code>data</code> are checked as <code>kast.publish</code>'s; a bad target raises <code>kast.world.post: target must be a loaded map's id, "realm" or "all", got X</code>. Also from the realm's game machine callbacks</td>
+<td id="post">Sends <code>event</code> to another context's bus: <code>target</code> is a loaded world map's id, <code>"realm"</code> or <code>"all"</code> (every running map context, instance copies included, and the realm, this one included). An instance map's id raises <code>kast.world.post: map N is an instance map, with no single context to post to</code>. Delivered on the next tick, in post order, as <code>{from = &lt;map id or "realm"&gt;, data = data}</code>; a map whose context has not started yet starts for it. <code>event</code> and <code>data</code> are checked as <code>kast.publish</code>'s; a bad target raises <code>kast.world.post: target must be a loaded map's id, "realm" or "all", got X</code>. Also from the realm's game machine callbacks</td>
 </tr>
 <tr>
 <td><code>kast.subscribe(name, fn)</code></td>
@@ -280,6 +286,10 @@ and a system reads it with <code>kast.definitions(folder)</code>. The server giv
 <tr>
 <td><code>kast.map.area(e)</code> / <code>kast.map.areaAt(map, x, y, z)</code></td>
 <td>The area <code>e</code> or a point is in: <code>{id, name, flags, music}</code> or <code>nil</code> (see <a href="areas.html#areas">Areas</a>)</td>
+</tr>
+<tr>
+<td><code>kast.map.instance()</code></td>
+<td>The <a href="instances.html">instance copy</a> this context runs: <code>{id, key, map}</code> (<code>key</code> nil for a keyless copy), or <code>nil</code> on a world map</td>
 </tr>
 <tr>
 <td><code>kast.map.spawn(map)</code></td>
@@ -494,7 +504,7 @@ end)
 </tr>
 <tr>
 <td><code>systems/test_hooks.lua</code></td>
-<td>Test only. Scenario 18: a character whose name starts with <code>Respawntest</code> destroys the Guard (spawn <code>guard_1</code>) when it enters. Scenarios 21 and 22: every <code>client.test.echo</code> goes back to its sender as <code>test.echo</code> <code>{n, entity}</code>. Remove it from a real game</td>
+<td>Test only. Scenario 18: a character whose name starts with <code>Respawntest</code> destroys the Guard (spawn <code>guard_1</code>) when it enters. Scenarios 21 and 22: every <code>client.test.echo</code> goes back to its sender as <code>test.echo</code> <code>{n, entity}</code>. Scenario 41 and <code>load.sh</code>'s instance copies: <code>client.test.instance_key</code> <code>{key}</code> sets the sender's instance key, which its <code>instanceKey</code> returns; <code>instance.full</code> goes back to the refused player as <code>test.instance_full</code> <code>{map, key}</code>. Remove it from a real game</td>
 </tr>
 <tr>
 <td><code>systems/regen.lua</code></td>

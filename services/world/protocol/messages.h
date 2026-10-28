@@ -16,6 +16,9 @@
 namespace kast::proto {
 
 constexpr uint16_t kProtocolVersion = 9;
+// The admin port's own version (its LinkHello): 10 added AdminInstancesReq / AdminInstances. The game protocol, the
+// chat service and its link stay on kProtocolVersion.
+constexpr uint16_t kAdminProtocolVersion = 10;
 constexpr size_t kHeaderSize = 4; // u16 payload length + u16 opcode
 constexpr size_t kMaxPayloadBytes = 0xFFFF; // the u16 length field's limit
 
@@ -68,6 +71,8 @@ enum class Opcode : uint16_t {
     AdminOnline = 0x0301,     // A world -> admin
     AdminKick = 0x0302,       // A admin -> world
     AdminKicked = 0x0303,     // A world -> admin
+    AdminInstancesReq = 0x0304, // A admin -> world
+    AdminInstances = 0x0305,    // A world -> admin
 };
 
 // Reason codes carried by Disconnect and CharError.
@@ -719,8 +724,8 @@ struct MuteState {
 };
 
 // --- admin port: an admin tool -> world server (WORLD_ADMIN_*), never from a game client ---
-// Opens with LinkHello{secret = WORLD_ADMIN_SECRET}, answered LinkOk (or Disconnect{invalid_token / protocol_mismatch});
-// then any number of requests, each answered in order.
+// Opens with LinkHello{kAdminProtocolVersion, secret = WORLD_ADMIN_SECRET}, answered LinkOk (or
+// Disconnect{invalid_token / protocol_mismatch}); then any number of requests, each answered in order.
 
 struct AdminOnlineReq {
     static constexpr Opcode op = Opcode::AdminOnlineReq;
@@ -793,11 +798,62 @@ struct AdminKicked {
     bool operator==(const AdminKicked&) const = default;
 };
 
+struct AdminInstancesReq {
+    static constexpr Opcode op = Opcode::AdminInstancesReq;
+    void write(Writer&) const {}
+    void read(Reader&) {}
+    bool operator==(const AdminInstancesReq&) const = default;
+};
+
+// A live map context: a world map's (instance 0, key empty) or an instance copy's.
+struct AdminInstanceEntry {
+    uint16_t map = 0;
+    std::string mapName;
+    uint32_t instance = 0;
+    std::string key; // empty: keyless (or a world map)
+    uint32_t players = 0;
+    uint32_t npcs = 0;
+    uint64_t createdAtMs = 0;  // Unix ms, wall clock
+    uint64_t emptySinceMs = 0; // a copy's empty timer started then (Unix ms); 0: it has players, or a world map
+    bool operator==(const AdminInstanceEntry&) const = default;
+};
+
+// The answer to AdminInstancesReq, in chunks of at most kMaxEntries (more 1 = another follows), in map then instance
+// order.
+struct AdminInstances {
+    static constexpr Opcode op = Opcode::AdminInstances;
+    static constexpr size_t kMaxEntries = 100; // 100 x <= 548 bytes (two 255-byte strings) stays under the 64 KB frame
+    bool more = false;
+    std::vector<AdminInstanceEntry> entries;
+    void write(Writer& w) const {
+        w.u8(more ? 1 : 0);
+        w.u16(static_cast<uint16_t>(entries.size()));
+        for (const auto& e : entries) {
+            w.u16(e.map); w.str(e.mapName); w.u32(e.instance); w.str(e.key); w.u32(e.players); w.u32(e.npcs);
+            w.u64(e.createdAtMs); w.u64(e.emptySinceMs);
+        }
+    }
+    void read(Reader& r) {
+        const uint8_t v = r.u8();
+        if (v > 1) r.fail();
+        more = v == 1;
+        entries.clear();
+        for (uint16_t n = r.u16(); n > 0 && r.ok(); --n) {
+            AdminInstanceEntry e;
+            e.map = r.u16(); e.mapName = r.str(); e.instance = r.u32(); e.key = r.str(); e.players = r.u32();
+            e.npcs = r.u32(); e.createdAtMs = r.u64(); e.emptySinceMs = r.u64();
+            entries.push_back(std::move(e));
+        }
+    }
+    bool operator==(const AdminInstances&) const = default;
+};
+
 using Message = std::variant<Hello, Auth, Ping, Pong, CharListReq, CharCreate, CharDelete, EnterWorld, Move, Say, ClientEvent, Interact,
                              AuthOk, Disconnect, CharList, CharCreated, CharDeleted, EnterWorldOk, CharError, Spawn,
                              Despawn, EntityMoves, Correction, ChatMsg, ComponentUpdate,
                              ComponentRemove, ServerEvent, MapChange, Reply, ChatServer, ChatSend, ChatJoin, ChatLeave,
                              ChatIgnore, ChatMute, ChatLine, ChatChannel, ChatNotice, LinkHello, LinkOk, CharOnline,
-                             MapChanged, CharOffline, MuteState, AdminOnlineReq, AdminOnline, AdminKick, AdminKicked>;
+                             MapChanged, CharOffline, MuteState, AdminOnlineReq, AdminOnline, AdminKick, AdminKicked,
+                             AdminInstancesReq, AdminInstances>;
 
 } // namespace kast::proto

@@ -137,7 +137,6 @@ std::optional<Json> merge_components(const sol::object& components, Json base, c
 NpcDefsResult load_npc_defs(sol::state& lua, const std::filesystem::path& root, const Defs& defs,
                             const MachineExists& machine, const ItemDefs& items) {
     const std::vector<std::filesystem::path> files = definition_files(root, kNpcsDir);
-    std::error_code ec;
 
     struct Parsed {
         std::string path, name, error; // name: as declared, even if the file was rejected later
@@ -146,7 +145,7 @@ NpcDefsResult load_npc_defs(sol::state& lua, const std::filesystem::path& root, 
     std::vector<Parsed> parsed;
     for (const auto& file : files) {
         Parsed p;
-        p.path = std::filesystem::relative(file, root, ec).generic_string();
+        p.path = lua_path(file, root);
         try {
             p.def = parse_definition(lua, file, p.path, defs, machine, items, p.name);
         } catch (const Invalid& e) {

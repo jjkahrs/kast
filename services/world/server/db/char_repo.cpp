@@ -30,11 +30,12 @@ CharRow to_row(const Row& r) {
     c.pos = {std::stof(*r[4]), std::stof(*r[5]), std::stof(*r[6])};
     c.heading = std::stof(*r[7]);
     c.options = to_options(r[8]);
-    if (r.size() > 9 && r[9]) c.components = *r[9];
+    c.instanceId = static_cast<uint32_t>(std::stoul(*r[9]));
+    if (r.size() > 10 && r[10]) c.components = *r[10];
     return c;
 }
 
-constexpr const char* kColumns = "id, account_id, name, map_id, pos_x, pos_y, pos_z, heading, options";
+constexpr const char* kColumns = "id, account_id, name, map_id, pos_x, pos_y, pos_z, heading, options, instance_id";
 
 } // namespace
 
@@ -85,15 +86,21 @@ std::optional<CharRow> CharRepo::enter(uint64_t accountId, uint64_t charId) {
 
 void CharRepo::save(const CharSave& s) {
     if (!s.components) {
-        c_.exec("UPDATE characters SET map_id = ?, pos_x = ?, pos_y = ?, pos_z = ?, heading = ? WHERE id = ? AND realm_id = ?",
-                {uint64_t{s.mapId}, double{s.pos.x}, double{s.pos.y}, double{s.pos.z}, double{s.heading}, s.charId,
-                 uint64_t{realm_}});
+        c_.exec("UPDATE characters SET map_id = ?, instance_id = ?, pos_x = ?, pos_y = ?, pos_z = ?, heading = ? "
+                "WHERE id = ? AND realm_id = ?",
+                {uint64_t{s.mapId}, uint64_t{s.instanceId}, double{s.pos.x}, double{s.pos.y}, double{s.pos.z},
+                 double{s.heading}, s.charId, uint64_t{realm_}});
         return;
     }
-    c_.exec("UPDATE characters SET map_id = ?, pos_x = ?, pos_y = ?, pos_z = ?, heading = ?, components = ? "
-            "WHERE id = ? AND realm_id = ?",
-            {uint64_t{s.mapId}, double{s.pos.x}, double{s.pos.y}, double{s.pos.z}, double{s.heading}, *s.components,
-             s.charId, uint64_t{realm_}});
+    c_.exec("UPDATE characters SET map_id = ?, instance_id = ?, pos_x = ?, pos_y = ?, pos_z = ?, heading = ?, "
+            "components = ? WHERE id = ? AND realm_id = ?",
+            {uint64_t{s.mapId}, uint64_t{s.instanceId}, double{s.pos.x}, double{s.pos.y}, double{s.pos.z},
+             double{s.heading}, *s.components, s.charId, uint64_t{realm_}});
+}
+
+uint32_t CharRepo::max_instance_id() {
+    auto res = c_.exec("SELECT COALESCE(MAX(instance_id), 0) FROM characters WHERE realm_id = ?", {uint64_t{realm_}});
+    return static_cast<uint32_t>(std::stoul(*res.rows[0][0]));
 }
 
 } // namespace kast::db

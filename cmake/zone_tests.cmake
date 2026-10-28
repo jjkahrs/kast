@@ -28,7 +28,7 @@ function(kast_zone_cli_test name)
             -P "${zone_test}")
 endfunction()
 
-foreach(case "meadow;samples/starter-mmo" "cavern;samples/starter-mmo" "hills;tests/project")
+foreach(case "meadow;samples/starter-mmo" "cavern;samples/starter-mmo" "hills;tests/project" "crypt;tests/project")
   list(GET case 0 map)
   list(GET case 1 project)
   kast_zone_cli_test(roundtrip_${map} "-DPROJECT=${CMAKE_CURRENT_SOURCE_DIR}/${project}" -DMODE=roundtrip -DMAP=${map})
@@ -59,7 +59,8 @@ kast_zone_cli_test(zone_objects "-DPROJECT=${starter}" -DMODE=edit -DMAP=grove "
 # the Meadow Shrine: interactable 1).
 foreach(case "overlap|--add-area|dup,10,140,120,160,140" "portal|--area-portal|cavern_gate,999,128,0,128,0"
              "spawn_id|--add-spawn|guard_1,Bat,100,100" "spawn_off_map|--add-spawn|far,Bat,300,100" "map_id|--map-id|11"
-             "interactable_event|--set-interactable|1,3,")
+             "interactable_event|--set-interactable|1,3,"
+             "instance_exit_map|--instance|2,30,999,128,0,128" "instance_exit_portal|--instance|2,30,11,103,0,128")
   string(FIND "${case}" "|" bar)
   string(SUBSTRING "${case}" 0 ${bar} name)
   math(EXPR bar "${bar} + 1")
@@ -80,6 +81,10 @@ kast_zone_cli_test(terrain_gen "-DPROJECT=${starter}" -DMODE=edit -DMAP=terra "-
   "-DARGS=--generate-heights|7,256,5,0.5,2|--terrain-colors|0,0,0,1,100,1,0,0|--create-terrain-material"
   "-DEXPECT_FILES=heights/0_0.r16|heights/1_0.r16|heights/0_1.r16|heights/1_1.r16|../../textures/terra_terrain.png|../../materials/terra_terrain.mat"
   -DTERRAIN_GEN=1)
+# An instance map (docs/services/world/instances.html): 2 players, 30 s empty timeout, exit on meadow at its spawn;
+# saved, linted by kast_mapbake and loaded by the world server.
+kast_zone_cli_test(instance "-DPROJECT=${starter}" -DMODE=edit -DMAP=keep "-DMAPBAKE=${KAST_MAPBAKE}" "-DWORLD=${KAST_WORLD_EXE}"
+  "-DARGS=--instance|2,30,10,128,5,128,1.5")
 # Bake Navmesh on a copy of meadow, in the window (the Zone tab's Bake section drawing meanwhile) and with --headless.
 kast_zone_cli_test(bake "-DPROJECT=${starter}" -DMODE=bake -DMAP=meadow "-DMAPBAKE=${KAST_MAPBAKE}")
 kast_zone_cli_test(bake_headless "-DPROJECT=${starter}" -DMODE=bake -DMAP=meadow "-DMAPBAKE=${KAST_MAPBAKE}" -DHEADLESS=1)

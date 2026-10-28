@@ -34,6 +34,27 @@ bool uses_path(const Json& file, const std::string& name) {
 Json point_json(Point p) { return Json::array({num(p[0]), num(p[1])}); }
 Json vec3_json(const Vec3& v) { return Json::array({num(v[0]), num(v[1]), num(v[2])}); }
 
+void set_instance(ZoneState& state, bool instance, const kast::map::Portal& exit) {
+    Json& m = state.manifest;
+    if (!instance) {
+        for (const char* key : {"type", "maxPlayers", "emptyTimeoutSec", "exit"}) m.erase(key);
+        return;
+    }
+    m["type"] = "instance";
+    if (!m.contains("exit")) set_exit(state, exit);
+}
+
+void set_max_players(ZoneState& state, std::optional<uint32_t> players) {
+    if (players) state.manifest["maxPlayers"] = *players;
+    else state.manifest.erase("maxPlayers");
+}
+
+void set_empty_timeout(ZoneState& state, uint32_t seconds) { state.manifest["emptyTimeoutSec"] = seconds; }
+
+void set_exit(ZoneState& state, const kast::map::Portal& exit) {
+    state.manifest["exit"] = {{"map", unsigned(exit.map)}, {"pos", vec3_json(exit.pos)}, {"heading", num(exit.heading)}};
+}
+
 Json& areas_list(ZoneState& state) {
     if (!state.areas.is_object()) state.areas = {{"version", 1}, {"areas", Json::array()}};
     if (!state.areas.contains("areas") || !state.areas["areas"].is_array()) state.areas["areas"] = Json::array();

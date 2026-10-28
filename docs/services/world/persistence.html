@@ -9,13 +9,18 @@
 <body>
 <header class="top"><a class="brand" href="../../index.html">Kast Docs</a><nav><a href="../../editor/index.html">Editor</a><a href="../../engine/index.html">Engine</a><a href="../auth/index.html">Auth Server</a><a href="index.html">World Server</a><a href="../chat/index.html">Chat Server</a><a href="../admin/index.html">Admin App</a><a href="../../development/tests.html">Development</a></nav></header>
 <div class="layout">
-<nav class="side"><h2>World Server</h2><ul><li><a href="index.html">Overview</a></li><li><a href="setup.html">Setup and commands</a></li><li><a href="configuration.html">Configuration</a></li><li><a href="security.html">Security behaviour</a></li><li><a href="maps.html">Maps</a></li><li><a href="areas.html">Areas</a></li><li><a href="persistence.html" class="active">Persistence</a></li><li><a href="lua.html">Lua components and systems</a></li><li><a href="npcs.html">NPCs</a></li><li><a href="events.html">Events</a></li><li><a href="state-machines.html">State machines</a></li><li><a href="operations.html">Operations</a></li><li><a href="tests.html">Tests</a></li><li><a href="simplifications.html">Deliberate simplifications</a></li><li><a href="protocol.html">Protocol</a></li></ul></nav>
+<nav class="side"><h2>World Server</h2><ul><li><a href="index.html">Overview</a></li><li><a href="setup.html">Setup and commands</a></li><li><a href="configuration.html">Configuration</a></li><li><a href="security.html">Security behaviour</a></li><li><a href="maps.html">Maps</a></li><li><a href="areas.html">Areas</a></li><li><a href="instances.html">Instances</a></li><li><a href="persistence.html" class="active">Persistence</a></li><li><a href="lua.html">Lua components and systems</a></li><li><a href="npcs.html">NPCs</a></li><li><a href="events.html">Events</a></li><li><a href="state-machines.html">State machines</a></li><li><a href="operations.html">Operations</a></li><li><a href="tests.html">Tests</a></li><li><a href="simplifications.html">Deliberate simplifications</a></li><li><a href="protocol.html">Protocol</a></li></ul></nav>
 <main>
 <h1 id="persistence">Persistence</h1>
 <ul>
 <li><strong>Schema:</strong> characters live in <code>kast_world.characters</code> with these fields:<ul>
 <li><code>id</code>, <code>realm_id</code>, <code>account_id</code> (the JWT <code>sub</code>) and <code>name</code></li>
-<li><code>pos_x/y/z</code> and <code>heading</code></li>
+<li><code>map_id</code> (<code>migrations/003_character_map.sql</code>), <code>pos_x/y/z</code> and <code>heading</code></li>
+<li><code>instance_id</code> (<code>migrations/005_character_instance.sql</code>): the <a href="instances.html#relog">instance copy</a> it was saved in, 0 for none
+  (a world map, or a row from before the migration). Copies are memory-only, so an id that names no live copy of the saved map
+  (destroyed, or from an earlier run) sends the character to the map's <code>exit</code> on entering. At startup the server reads
+  the realm's highest <code>instance_id</code> and numbers new copies above it, so a saved id never names a new copy</li>
+<li><code>options</code> (<code>migrations/004_character_options.sql</code>): the CharCreate options</li>
 <li><code>components</code>: the persisted Lua components (JSON, see "Lua components and systems")</li>
 <li><code>created_at</code>, <code>last_login_at</code> and <code>deleted_at</code></li>
 </ul>
@@ -27,6 +32,7 @@
 <h2 id="save-and-load-rules">Save and load rules</h2>
 <p>The world never touches MySQL from the game thread. One DB worker thread owns the connection. Requests come in on a queue, and results go back to the game thread through <code>asio::post</code>.</p>
 <ul>
+<li><strong>What a save writes:</strong> <code>map_id</code>, <code>instance_id</code>, the position and heading, and the persisted components when they changed.</li>
 <li><strong>When saves happen:</strong> on logout or disconnect, on a duplicate-login kick, on graceful shutdown, and every <code>SAVE_INTERVAL_MS</code> while the position or a persisted Lua component is dirty.</li>
 <li><strong>Never dropped:</strong><ul>
 <li>A save sits in a pending map keyed by character, where the latest save wins.</li>

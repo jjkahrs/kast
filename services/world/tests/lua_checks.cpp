@@ -272,12 +272,13 @@ struct TestWorld {
     }
     // The state machines of the map context e is in (e must be in the world).
     lua::StateMachines& fsm(entt::entity e) { return world.fsm(world.map_of(e)); }
-    // Every NPC in every map's context, in map order. Creates the contexts not there yet: for worlds with a player on
+    // Every NPC in every world map's context, in map order. Creates the contexts not there yet: for worlds with a player on
     // every map.
     std::vector<std::pair<entt::entity, world::Npc>> npcs() {
         std::vector<std::pair<entt::entity, world::Npc>> out;
         for (const auto& [id, info] : maps.all())
-            for (auto [e, n] : world.registry(id).view<world::Npc>().each()) out.emplace_back(e, n);
+            if (!info.instanced()) // a copy's NPCs: World::copy
+                for (auto [e, n] : world.registry(id).view<world::Npc>().each()) out.emplace_back(e, n);
         return out;
     }
     // A Move of e's current epoch, as from a client that has heard every Correction so far.
@@ -299,6 +300,7 @@ void watch_spawns(TestWorld& w) {
     uint32_t i = 0;
     for (const auto& [id, info] : w.maps.all())
         for (const auto& s : info.spawns) {
+            if (info.instanced()) continue; // no copy to watch
             w.spawn(900 + i, 900 + i, "Watcher" + std::to_string(i), s.pos[0], s.pos[2], "", id);
             ++i;
         }
@@ -5464,7 +5466,8 @@ void checkAreaWorld() {
     {
         std::vector<std::string> errors;
         const auto sample = world::Maps::load(KAST_SAMPLE_MAPS, errors);
-        check(errors.empty() && sample.info(1).areas.list.size() == 6 && sample.info(2).areas.list.size() == 2,
+        check(errors.empty() && sample.info(1).areas.list.size() == 7 && sample.info(2).areas.list.size() == 2 &&
+                  sample.info(6).instanced() && sample.info(6).maxPlayers == 2u && sample.info(6).areas.list.size() == 2,
               "sample maps and their areas load" + (errors.empty() ? "" : ": " + errors[0]));
     }
     LogCapture capture;
@@ -6608,6 +6611,390 @@ void checkObstacleNavmesh() {
     check(corrections({120, 0, 100}, {124, 0, 100}) == 0, "move beside the wall: accepted");
 }
 
+// --- instance maps (docs/services/world/instances.html) ---
+
+// map.json "type" / "maxPlayers" / "emptyTimeoutSec" / "exit": parsed in kast_map, every bad value or misplaced field
+// refused with the field named; Maps::load checks the exit against the other maps, naming the file.
+void checkInstanceManifests() {
+    std::string err;
+    const auto inst = map::parse_manifest(Json::parse(R"({"version":1,"id":6,"tiles":[[0,0,0,0]],"spawn":{"pos":[1,0,1]},
+        "type":"instance","maxPlayers":5,"emptyTimeoutSec":0,"exit":{"map":1,"pos":[10,0,20],"heading":1.5}})"), err);
+    check(inst && inst->instanced() && inst->maxPlayers == 5u && inst->emptyTimeoutSec == 0 && inst->exit &&
+              inst->exit->map == 1 && inst->exit->pos == std::array<float, 3>{10, 0, 20} && inst->exit->heading == 1.5f,
+          "instance manifest parses: " + err);
+    const auto defaults = map::parse_manifest(Json::parse(R"({"version":1,"id":6,"tiles":[[0,0,0,0]],"spawn":{"pos":[1,0,1]},
+        "type":"instance","exit":{"map":1,"pos":[10,0,20]}})"), err);
+    check(defaults && !defaults->maxPlayers && defaults->emptyTimeoutSec == 300 && defaults->exit->heading == 0,
+          "instance defaults: no player limit, emptyTimeoutSec 300, exit heading 0");
+    const auto world = map::parse_manifest(Json::parse(R"({"version":1,"id":1,"tiles":[[0,0,0,0]],"spawn":{"pos":[1,0,1]},"type":"world"})"), err);
+    check(world && !world->instanced() && !world->exit, "\"type\": \"world\" is the default kind");
+
+    const std::string base = R"("version":1,"id":6,"tiles":[[0,0,0,0]],"spawn":{"pos":[1,0,1]})";
+    const std::string exit = R"("exit":{"map":1,"pos":[10,0,20]})";
+    const std::pair<std::string, const char*> bad[] = {
+        {R"("type":"dungeon")", "\"type\" must be \"world\" or \"instance\""},
+        {R"("type":3)", "\"type\" must be \"world\" or \"instance\""},
+        {R"("maxPlayers":5)", "\"maxPlayers\" is only for instance maps"},
+        {R"("type":"world","emptyTimeoutSec":5)", "\"emptyTimeoutSec\" is only for instance maps"},
+        {exit, "\"exit\" is only for instance maps"},
+        {R"("type":"instance")", "\"exit\" must be {\"map\": id, \"pos\": [x, y, z], \"heading\": h} (required on an instance map)"},
+        {R"("type":"instance","exit":{"map":1})", "\"exit\" must be {"},
+        {R"("type":"instance","exit":{"map":-1,"pos":[1,0,1]})", "\"exit\" must be {"},
+        {R"("type":"instance","exit":{"map":1,"pos":[1,0,1],"heading":"n"})", "\"exit\" must be {"},
+        {R"("type":"instance","maxPlayers":0,)" + exit, "\"maxPlayers\" must be an integer >= 1 (leave it out for no limit)"},
+        {R"("type":"instance","maxPlayers":1.5,)" + exit, "\"maxPlayers\" must be an integer >= 1"},
+        {R"("type":"instance","maxPlayers":"2",)" + exit, "\"maxPlayers\" must be an integer >= 1"},
+        {R"("type":"instance","emptyTimeoutSec":-1,)" + exit, "\"emptyTimeoutSec\" must be an integer in [0, 31536000] (a year)"},
+        {R"("type":"instance","emptyTimeoutSec":31536001,)" + exit, "\"emptyTimeoutSec\" must be an integer in [0, 31536000]"},
+        {R"("type":"instance","emptyTimeoutSec":2.5,)" + exit, "\"emptyTimeoutSec\" must be an integer"},
+    };
+    for (const auto& [fields, want] : bad) {
+        err.clear();
+        const bool refused = !map::parse_manifest(Json::parse("{" + base + "," + fields + "}"), err);
+        check(refused && contains(err, want), std::string("instance manifest refused: ") + want + " (got: " + err + ")");
+    }
+
+    // Maps::load: the exit is on a loaded world map's tiles, not in a portal there; START_MAP's file named.
+    LuaRoot r;
+    r.write("start/map.json", R"({"version":1,"id":1,"tiles":[[0,0,1,1]],"spawn":{"pos":[256,0,256]}})");
+    r.write("start/areas.json", R"({"version":1,"areas":[{"id":"door","rect":[100,100,110,110],"portal":{"map":6,"pos":[50,0,50]}}]})");
+    r.write("crypt/map.json", R"({"version":1,"id":6,"tiles":[[0,0,0,0]],"spawn":{"pos":[50,0,50]},"type":"instance",
+        "maxPlayers":2,"exit":{"map":1,"pos":[200,0,200]}})");
+    std::vector<std::string> errors;
+    const auto ok = world::Maps::load(r.root, errors);
+    check(errors.empty() && ok.info(6).instanced() && ok.info(6).maxPlayers == 2u, "instance map loads, a portal into it too: " + joined(errors));
+    const std::pair<const char*, const char*> exits[] = {
+        {R"({"map":9,"pos":[200,0,200]})", "maps/crypt/map.json: \"exit\": to unknown map 9"},
+        {R"({"map":1,"pos":[900,0,200]})", "maps/crypt/map.json: \"exit\": position is not on a tile of map 1"},
+        {R"({"map":1,"pos":[105,0,105]})", "maps/crypt/map.json: \"exit\": position is inside portal area \"door\" of map 1"},
+        {R"({"map":6,"pos":[50,0,50]})", "maps/crypt/map.json: \"exit\": map 6 is an instance map; an exit must be on a world map"},
+    };
+    for (const auto& [to, want] : exits) {
+        r.write("crypt/map.json", std::string(R"({"version":1,"id":6,"tiles":[[0,0,0,0]],"spawn":{"pos":[50,0,50]},"type":"instance","exit":)") + to + "}");
+        errors.clear();
+        world::Maps::load(r.root, errors);
+        check(errors.size() == 1 && errors[0] == want, std::string("bad exit refused: ") + want + " (got: " + joined(errors) + ")");
+    }
+    r.write("crypt/map.json", R"({"version":1,"id":6,"tiles":[[0,0,0,0]],"spawn":{"pos":[50,0,50]},"maxPlayers":2})");
+    errors.clear();
+    world::Maps::load(r.root, errors);
+    check(!errors.empty() && errors[0] == "maps/crypt/map.json: \"maxPlayers\" is only for instance maps (\"type\": \"instance\")",
+          "misplaced field refused with the file named: " + joined(errors));
+}
+
+// Map 1 "start" and 2 "cave" (test_maps), 6 "crypt" (instance: 1 tile, maxPlayers 2, emptyTimeoutSec 10, exit on map
+// 1 at (1000, 0, 1000) heading 1, a Bat spawn) and 7 "vault" (instance: no limit, emptyTimeoutSec 0, same exit).
+world::Maps instance_maps() {
+    world::Maps maps = test_maps();
+    for (const auto& [id, name, extra] :
+         {std::tuple{6, "crypt", R"("maxPlayers":2,"emptyTimeoutSec":10,)"}, std::tuple{7, "vault", R"("emptyTimeoutSec":0,)"}}) {
+        std::string err;
+        auto m = map::parse_manifest(Json::parse(std::format(
+            R"({{"version":1,"id":{},"name":"{}","tiles":[[0,0,0,0]],"spawn":{{"pos":[128,0,128]}},"type":"instance",{}
+                "exit":{{"map":1,"pos":[1000,0,1000],"heading":1}}}})", id, name, extra)), err);
+        check(m.has_value(), "instance_maps: " + err);
+        if (id == 6) m->spawns.push_back({"bat_1", "Bat", {100, 0, 100}, 0, -1, {}, "maps/crypt/.server/spawns/0_0.json"});
+        maps.add(std::move(*m));
+    }
+    return maps;
+}
+
+constexpr const char* kInstanceSystem = R"lua(
+local keys = {} -- by entity: what the test set with a "key" client event
+return {
+    init = function()
+        local i = kast.map.instance()
+        if i then kast.log(string.format("init copy %d key %s map %d", i.id, tostring(i.key), i.map)) end
+        kast.subscribe("client.key", function(e) keys[e.entity] = e.data.key end)
+        kast.subscribe("client.go", function(e) -- kast.transfer onto the crypt, with the client's instance = if any
+            local ok = kast.transfer(e.entity, {map = e.data.map or 6, position = {x = 128, y = 0, z = 128}, instance = e.data.instance})
+            kast.log(string.format("go %d %s", e.entity, tostring(ok)))
+        end)
+        kast.subscribe("client.whoami", function(e)
+            local i = kast.map.instance()
+            if i then kast.log(string.format("whoami %d: copy %d key %s map %d", e.entity, i.id, tostring(i.key), i.map))
+            else kast.log(string.format("whoami %d: world map %d", e.entity, kast.get(e.entity, "Transform").map)) end
+        end)
+        kast.subscribe("instance.full", function(p)
+            kast.log(string.format("full %d map %d key %s", p.entity, p.map, tostring(p.key)))
+        end)
+        kast.subscribe("client.api", function(e)
+            raises("kast.world.post: map 6 is an instance map", function() kast.world.post(6, "x", {}) end)
+            raises("kast.transfer: \"instance\" is only for instance maps; map 2 is a world map",
+                   function() kast.transfer(e.entity, {map = 2, position = {x = 1, y = 0, z = 1}, instance = "a"}) end)
+            raises('kast.transfer: "instance" must be a non-empty string of at most 255 bytes, got ',
+                   function() kast.transfer(e.entity, {map = 6, position = {x = 1, y = 0, z = 1}, instance = ""}) end)
+            raises('kast.transfer: "instance" must be a non-empty string of at most 255 bytes, got 5',
+                   function() kast.transfer(e.entity, {map = 6, position = {x = 1, y = 0, z = 1}, instance = 5}) end)
+            raises("kast.transfer: unknown option where", function() kast.transfer(e.entity, {map = 6, where = 1}) end)
+            if kast.map.instance() then
+                local npc = kast.create("Made", {template = "T", map = 6, position = {x = 50, y = 0, z = 50}})
+                expect(kast.get(npc, "Transform").map == 6, "kast.create onto the copy's own map")
+            else
+                raises("kast.create: map 6 is an instance map; create its NPCs from inside the copy",
+                       function() kast.create("X", {template = "T", map = 6}) end)
+            end
+            kast.log("api checked")
+        end)
+    end,
+    instanceKey = function(e, map)
+        kast.log(string.format("asked %d %d", e, map))
+        return keys[e]
+    end,
+    shutdown = function()
+        local i = kast.map.instance()
+        if i then kast.log(string.format("shutdown copy %d key %s", i.id, tostring(i.key))) end
+    end,
+    update = function() end,
+}
+)lua";
+
+// Entering an instance map: no context at startup; by key the same copy or a new one (nil: always new), each with its
+// own NPCs and Lua state (init / shutdown per copy); kast.transfer's instance = skips the hook; a full copy refuses
+// (instance.full, no MapChange, kast.transfer false); relog rejoins a live copy with room, else the map's exit; the empty
+// timer destroys a copy (re-entry cancels it; 0: at the next serial point); kast.map.instance; ids recycled.
+void checkInstances() {
+    LogCapture capture;
+    LuaRoot r;
+    r.write("npcs/bat.lua", "return { name = 'Bat', template = 'BatTpl' }");
+    r.write("systems/inst.lua", std::string(kLuaExpect) + kInstanceSystem);
+    world::WorldRules rules;
+    rules.firstInstanceId = 1;
+    TestWorld w({}, rules, instance_maps());
+    check(w.world.load_scripts(r.root).empty(), "instances: loads");
+    const auto contexts = [&] {
+        std::vector<std::string> out;
+        for (const auto& c : w.world.contexts())
+            out.push_back(std::format("{}/{}{}:{}", c.map, c.instance, c.key ? "/" + *c.key : "", c.players));
+        return joined(out);
+    };
+    check(contexts() == "1/0:0", "instances: only START_MAP's context at startup, no copy: " + contexts());
+    TimePoint now = T0;
+    const auto tick = [&] { w.world.tick(now += std::chrono::milliseconds(50)); };
+    const auto event = [&](entt::entity e, const std::string& name, nlohmann::json data = nlohmann::json::object()) {
+        w.world.push_client_event(e, name, std::move(data));
+    };
+    const auto inst = [&](entt::entity e) {
+        entt::registry* reg = w.world.registry_of(e);
+        return reg ? std::format("{}/{}", reg->get<world::MapRef>(e).map, reg->get<world::MapRef>(e).instance) : "gone";
+    };
+    const auto ann = w.spawn(1, 1, "Ann", 1000, 1000), bob = w.spawn(2, 2, "Bob", 1001, 1000),
+               cid = w.spawn(3, 3, "Cid", 1002, 1000), dan = w.spawn(4, 4, "Dan", 1003, 1000);
+    for (const auto& [e, key] : {std::pair{ann, "a"}, {bob, "a"}, {cid, "b"}, {dan, "a"}}) event(e, "key", {{"key", key}});
+    tick();
+    w.sent.clear();
+
+    // Ann: the hook says "a": a new copy, id 1, its own init and Bat.
+    event(ann, "go");
+    tick();
+    check(said(std::format("asked {} 6", wire(ann))) && said("init copy 1 key a map 6"), "instances: hook asked; copy 1 created, its init ran");
+    check(inst(ann) == "6/1" && contexts() == "1/0:3; 6/1/a:1", "instances: Ann in copy 1 (key a): " + contexts());
+    const auto annMc = w.sent.of<proto::MapChange>(1);
+    check(annMc.size() == 1 && annMc[0].map == 6 && annMc[0].pos == proto::Vec3{128, 0, 128}, "instances: MapChange{6}");
+    tick();
+    const auto bats = [&](uint32_t instance) {
+        std::vector<uint32_t> out;
+        if (auto* c = w.world.copy(6, instance))
+            for (auto [e, npc] : c->registry().view<world::Npc>().each()) out.push_back(wire(e));
+        return out;
+    };
+    check(bats(1).size() == 1, "instances: copy 1 spawned its own Bat");
+
+    // Bob, same key: the same copy, and Ann and Bob see each other. Cid, key b: a new copy, apart, with its own Bat.
+    event(bob, "go");
+    event(cid, "go");
+    tick();
+    tick();
+    check(inst(bob) == "6/1" && inst(cid) == "6/2" && contexts() == "1/0:1; 6/1/a:2; 6/2/b:1",
+          "instances: same key -> same copy, other key -> a new one: " + contexts());
+    const auto seen = [&](uint32_t sid, entt::entity other) {
+        for (const auto& s : w.sent.of<proto::Spawn>(sid)) if (s.entityId == wire(other)) return true;
+        return false;
+    };
+    check(seen(1, bob) && seen(2, ann) && !seen(3, ann) && !seen(3, bob) && !seen(1, cid), "instances: copies share no players");
+    check(bats(2).size() == 1 && bats(2) != bats(1), "instances: copy 2 has its own Bat, not copy 1's");
+    for (uint32_t bat : bats(2)) check(!seen(1, entt::entity{bat}) && !seen(2, entt::entity{bat}), "instances: copies share no NPCs");
+
+    // Dan, key a: copy 1 is full (2): refused at the request, no MapChange, still on map 1, instance.full.
+    w.sent.clear();
+    event(dan, "go");
+    tick();
+    tick();
+    check(said(std::format("go {} false", wire(dan))) && said(std::format("full {} map 6 key a", wire(dan))) &&
+              logged("transfer refused: instance full") && w.sent.of<proto::MapChange>(4).empty() && inst(dan) == "1/0",
+          "instances: a full copy refuses: kast.transfer false, instance.full, no MapChange, the player stays");
+    // instance = "b": the hook is not asked; copy 2.
+    clear_log();
+    event(dan, "go", {{"instance", "b"}});
+    tick();
+    check(!said(std::format("asked {}", wire(dan))) && said(std::format("go {} true", wire(dan))) && inst(dan) == "6/2",
+          "instances: kast.transfer instance = picks the copy without asking the hook");
+
+    // No key: always a new copy (Eve, Fay). The C++ transfer refuses a full copy too.
+    const auto eve = w.spawn(5, 5, "Eve", 1000, 1000), fay = w.spawn(6, 6, "Fay", 1000, 1000);
+    event(eve, "go");
+    event(fay, "go");
+    tick();
+    const std::string eveAt = inst(eve); // copies 3 and 4: Eve's and Fay's events reach Lua in either order
+    check(std::set{eveAt, inst(fay)} == std::set<std::string>{"6/3", "6/4"}, "instances: nil key -> a new keyless copy each: " + contexts());
+    check(!w.world.transfer(eve, {6, {128, 0, 128}, 0, "a"}) && inst(eve) == eveAt, "instances: World::transfer into a full copy refused");
+
+    // kast.map.instance(), and the Lua surface's refusals, in a copy and on a world map.
+    clear_log();
+    const auto gus = w.spawn(7, 7, "Gus", 1000, 1000);
+    for (auto e : {ann, eve, gus}) {
+        event(e, "whoami");
+        event(e, "api");
+    }
+    tick();
+    check(said(std::format("whoami {}: copy 1 key a map 6", wire(ann))) && said(std::format("whoami {}: copy {} key nil map 6", wire(eve), eveAt.substr(2))) &&
+              said(std::format("whoami {}: world map 1", wire(gus))),
+          "instances: kast.map.instance() is {id, key, map} in a copy, nil on a world map");
+    check(said_at("api checked").size() == 3, "instances: Lua refusals checked in 3 contexts");
+    check_lua_expectations("instances", "api checked");
+
+    // Relog: Ann's save names copy 1; she rejoins it. Saved in a full copy, a gone one or none at all: the exit.
+    w.sent.clear();
+    w.world.despawn(ann);
+    const db::CharSave annSave = w.sent.saves.back();
+    check(annSave.mapId == 6 && annSave.instanceId == 1, "instances: the save carries map 6, instance 1");
+    const auto row = [](uint64_t id, const std::string& name, uint16_t map, uint32_t instance) {
+        db::CharRow r{id, 1, name, map, {120, 0, 120}, 0, "", {}};
+        r.instanceId = instance;
+        return r;
+    };
+    const entt::entity ann2 = w.world.spawn(11, row(1, "Ann", 6, 1), now);
+    const auto ok11 = w.sent.of<proto::EnterWorldOk>(11);
+    check(inst(ann2) == "6/1" && ok11.size() == 1 && ok11[0].map == 6 && ok11[0].pos == proto::Vec3{120, 0, 120},
+          "instances: relog into a live copy with room rejoins it at the saved position");
+    const auto exitOf = [&](uint32_t sid) {
+        const auto ok = w.sent.of<proto::EnterWorldOk>(sid);
+        return ok.size() == 1 && ok[0].map == 1 && ok[0].pos == proto::Vec3{1000, 0, 1000} && ok[0].heading == 1;
+    };
+    clear_log();
+    const entt::entity hal = w.world.spawn(12, row(8, "Hal", 6, 1), now); // copy 1 has Ann and Bob
+    const entt::entity ivy = w.world.spawn(13, row(9, "Ivy", 6, 999), now); // a previous run's, or a destroyed copy's
+    const entt::entity jon = w.world.spawn(14, row(10, "Jon", 6, 0), now);  // an old row
+    check(exitOf(12) && exitOf(13) && exitOf(14) && inst(hal) == "1/0" && inst(ivy) == "1/0" && inst(jon) == "1/0",
+          "instances: relog into a full, an unknown or no copy -> the map's exit");
+    check(logged(R"("reason":"instance full")") && logged(R"("reason":"instance gone")"), "instances: the exit is logged with why");
+
+    // The empty timer (10 s on the crypt): Cid and Dan leave copy 2; Cid comes back after 5 s (cancelled); both
+    // leave, and 10 s later copy 2 is destroyed: shutdown, NPCs gone, key b free (the next b is a new copy).
+    for (auto e : {cid, dan}) w.world.transfer(e, {1, {1000, 0, 1000}, 0});
+    tick();
+    check(w.world.copy(6, 2) && w.world.copy(6, 2)->empty_since(), "instances: copy 2 empty: its timer runs");
+    now += std::chrono::seconds(5);
+    check(w.world.transfer(cid, {6, {128, 0, 128}, 0, "b"}) && inst(cid) == "6/2", "instances: back into copy 2 by key before the timeout");
+    tick();
+    check(!w.world.copy(6, 2)->empty_since(), "instances: re-entry cancels the timer");
+    now += std::chrono::seconds(8);
+    tick();
+    check(w.world.copy(6, 2) != nullptr, "instances: 13 s after the first leave, the cancelled timer has not fired");
+    w.world.transfer(cid, {1, {1000, 0, 1000}, 0});
+    now += std::chrono::milliseconds(9900);
+    tick();
+    check(w.world.copy(6, 2) != nullptr, "instances: not yet 10 s empty");
+    clear_log();
+    now += std::chrono::milliseconds(200);
+    tick();
+    check(w.world.copy(6, 2) == nullptr && said("shutdown copy 2 key b") && logged("instance destroyed"),
+          "instances: 10 s empty -> destroyed at the serial point, its shutdown run");
+    check(w.world.transfer(cid, {6, {128, 0, 128}, 0, "b"}) && inst(cid) == "6/5", "instances: key b again: a new copy (5)");
+
+    // emptyTimeoutSec 0: gone at the next serial point after the last player leaves.
+    check(w.world.transfer(gus, {7, {128, 0, 128}, 0}) && inst(gus) == "7/6", "instances: the vault copy 6");
+    check(w.world.transfer(gus, {1, {1000, 0, 1000}, 0}) && w.world.copy(7, 6) == nullptr,
+          "instances: emptyTimeoutSec 0 -> destroyed at the serial point right after the last player left");
+
+    // 600 copies made and destroyed one after another: their entity ids go back, so the 2^20 indices never run out.
+    bool threw = false;
+    try {
+        for (int i = 0; i < 600; ++i) {
+            w.world.transfer(gus, {7, {128, 0, 128}, 0});
+            tick(); // the copy updates: it takes its id blocks
+            w.world.create_npc("n", "T", 1, std::nullopt, 0); // ids used on the world map meanwhile too
+            w.world.transfer(gus, {1, {1000, 0, 1000}, 0});
+        }
+    } catch (const std::exception& e) {
+        threw = true;
+        check(false, std::string("instances: 600 copies: ") + e.what());
+    }
+    check(!threw && inst(gus) == "1/0" && contexts() == "1/0:5; 6/1/a:2; 6/3:1; 6/4:1; 6/5/b:1",
+          "instances: 600 vault copies come and go: " + contexts());
+    for (const auto& s : w.world.script_status()) check(s.ok, "instances: system still enabled " + s.error);
+}
+
+// cache_lua_files (kast_world's): a second World (as a new copy would) loads what the first read, even after the file
+// changed on disk; off again, the disk.
+void checkLuaFileCache() {
+    LogCapture capture;
+    LuaRoot r;
+    r.write("systems/a.lua", "return { init = function() kast.log('version one') end, update = function() end }");
+    lua::cache_lua_files();
+    { TestWorld w({}); check(w.world.load_scripts(r.root).empty(), "file cache: loads"); }
+    r.write("systems/a.lua", "return { init = function() kast.log('version two') end, update = function() end }");
+    r.write("systems/b.lua", "return { init = function() kast.log('new file') end, update = function() end }");
+    { TestWorld w({}); check(w.world.load_scripts(r.root).empty(), "file cache: loads again"); }
+    check(said_at("version one").size() == 2 && !said("version two") && !said("new file"),
+          "file cache: on, the second load reads the kept text and folder listing");
+    lua::cache_lua_files(false);
+    { TestWorld w({}); check(w.world.load_scripts(r.root).empty(), "file cache: loads off"); }
+    check(said("version two") && said("new file"), "file cache: off, the disk again");
+}
+
+// instanceKey errors and bad results disable only that system; the next system's key is used.
+void checkInstanceKeyErrors() {
+    LogCapture capture;
+    LuaRoot r;
+    r.write("npcs/bat.lua", "return { name = 'Bat', template = 'BatTpl' }");
+    r.write("systems/a_bad.lua", "return { instanceKey = function(e, map) return 5 end, update = function() end }");
+    r.write("systems/b_long.lua", "return { instanceKey = function(e, map) return string.rep('k', 256) end, update = function() end }");
+    r.write("systems/c_good.lua", R"(return {
+    init = function() kast.subscribe("client.go", function(e) kast.transfer(e.entity, 6, {x = 128, y = 0, z = 128}) end) end,
+    instanceKey = function(e, map) return "good" end, update = function() end })");
+    world::WorldRules rules;
+    rules.firstInstanceId = 40;
+    TestWorld w({}, rules, instance_maps());
+    check(w.world.load_scripts(r.root).empty(), "instanceKey errors: loads");
+    const auto a = w.spawn(1, 1, "Ann", 1000, 1000);
+    w.world.push_client_event(a, "go", nlohmann::json::object());
+    w.world.tick(T0);
+    const auto status = w.world.script_status();
+    check(status.size() == 3 && !status[0].ok && contains(status[0].error, "instanceKey must return nil or a non-empty string") &&
+              !status[1].ok && status[2].ok,
+          "instanceKey errors: a number and a 256-byte key disable their systems");
+    check(w.world.copy(6, 40) && w.world.copy(6, 40)->key() == "good", "instanceKey errors: the next system's key picks the copy (id 40)");
+}
+
+// Instance ids never wrap: the copy past UINT32_MAX is refused like a full one (instance.full, the player stays put).
+void checkInstanceIdsExhausted() {
+    LogCapture capture;
+    LuaRoot r;
+    r.write("npcs/bat.lua", "return { name = 'Bat', template = 'BatTpl' }");
+    r.write("systems/go.lua", R"(return {
+    init = function()
+        kast.subscribe("client.go", function(e) kast.transfer(e.entity, 6, {x = 128, y = 0, z = 128}) end)
+        kast.subscribe("instance.full", function(e) kast.log("full " .. e.entity) end)
+    end,
+    update = function() end })");
+    world::WorldRules rules;
+    rules.firstInstanceId = UINT32_MAX;
+    TestWorld w({}, rules, instance_maps());
+    check(w.world.load_scripts(r.root).empty(), "instance ids exhausted: loads");
+    const auto a = w.spawn(1, 1, "Ann", 1000, 1000);
+    const auto b = w.spawn(2, 2, "Bob", 1010, 1000);
+    w.world.push_client_event(a, "go", nlohmann::json::object());
+    w.world.tick(T0);
+    check(w.world.copy(6, UINT32_MAX) && w.world.map_of(a) == 6, "instance ids exhausted: the last id makes a copy");
+    w.world.push_client_event(b, "go", nlohmann::json::object());
+    w.world.tick(T0 + std::chrono::milliseconds(50));
+    w.world.tick(T0 + std::chrono::milliseconds(100));
+    check(w.world.map_of(b) == 1 && w.world.contexts().size() == 2, "instance ids exhausted: no copy past UINT32_MAX");
+    check(log_index("transfer refused: instance ids exhausted") != SIZE_MAX && log_index("full ") != SIZE_MAX,
+          "instance ids exhausted: logged, instance.full published");
+}
+
 int lua_checks(int& checks) {
     checkCodec();
     checkDefinitionParsing();
@@ -6683,6 +7070,11 @@ int lua_checks(int& checks) {
     checkMapLua();
     checkMapContexts();
     checkWorldPost();
+    checkInstanceManifests();
+    checkInstances();
+    checkInstanceKeyErrors();
+    checkInstanceIdsExhausted();
+    checkLuaFileCache();
     checkAreaShapes();
     checkAreaLoading();
     checkGround();
@@ -6756,6 +7148,70 @@ double activation_tick_ms(int npcs) {
     return ms[ms.size() / 2];
 }
 } // namespace
+
+// --- instance copy cost (world_self_check --instance-bench): median ms to make a copy with the sample lua/ (a C++
+// transfer into a new keyless copy: the context, its Lua state, its systems' init), and to destroy one. ---
+int instance_bench() {
+    log::set_level(log::Level::error);
+    world::Maps maps = test_maps();
+    std::string err;
+    auto crypt = map::parse_manifest(Json::parse(R"({"version":1,"id":6,"name":"crypt","tiles":[[0,0,0,0]],
+        "spawn":{"pos":[128,0,128]},"type":"instance","emptyTimeoutSec":0,"exit":{"map":1,"pos":[1000,0,1000]}})"), err);
+    maps.add(std::move(*crypt));
+    TestWorld w(lua::load_component_defs(KAST_WORLD_LUA_SAMPLE, world::kReservedComponentNames).defs, {}, std::move(maps));
+    if (const auto errors = w.world.load_scripts(KAST_WORLD_LUA_SAMPLE); !errors.empty()) {
+        std::fprintf(stderr, "instance bench: %s\n", errors.front().c_str());
+        return 1;
+    }
+    const auto e = w.spawn(1, 1, "Ann", 1000, 1000);
+    std::vector<double> make, destroy;
+    const auto ms = [](auto start) { return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - start).count(); };
+    for (int i = 0; i < 60; ++i) {
+        auto start = std::chrono::steady_clock::now();
+        w.world.transfer(e, {6, {128, 0, 128}, 0});
+        make.push_back(ms(start));
+        start = std::chrono::steady_clock::now();
+        w.world.transfer(e, {1, {1000, 0, 1000}, 0}); // emptyTimeoutSec 0: destroyed at this serial point
+        destroy.push_back(ms(start));
+    }
+    std::ranges::nth_element(make, make.begin() + make.size() / 2);
+    std::ranges::nth_element(destroy, destroy.begin() + destroy.size() / 2);
+    std::fprintf(stderr, "instance bench: sample lua/: make a copy %.2f ms, destroy it %.2f ms (medians of 60)\n",
+                 make[make.size() / 2], destroy[destroy.size() / 2]);
+
+    // Arrivals as in load.sh: 2 players a tick, each pair into its own new keyed copy (60 copies), 4 map threads.
+    world::WorldRules rules;
+    rules.mapThreads = 4;
+    world::Maps arrivalMaps = test_maps();
+    auto keyed = map::parse_manifest(Json::parse(R"({"version":1,"id":6,"name":"crypt","tiles":[[0,0,0,0]],
+        "spawn":{"pos":[128,0,128]},"type":"instance","maxPlayers":2,"exit":{"map":1,"pos":[1000,0,1000]}})"), err);
+    keyed->spawns.push_back({"bat", "Bat", {140, 0, 128}, 0, -1, {}, "maps/crypt/.server/spawns/0_0.json"});
+    arrivalMaps.add(std::move(*keyed));
+    TestWorld b(lua::load_component_defs(KAST_WORLD_LUA_SAMPLE, world::kReservedComponentNames).defs, rules,
+                std::move(arrivalMaps));
+    if (!b.world.load_scripts(KAST_WORLD_LUA_SAMPLE).empty()) return 1;
+    std::vector<entt::entity> players;
+    for (uint32_t i = 0; i < 120; ++i)
+        players.push_back(b.spawn(10 + i, 10 + i, "P" + std::to_string(i), 1000 + float(i % 10), 1000 + float(i / 10)));
+    TimePoint now = T0;
+    std::vector<double> idle, arriving;
+    for (int t = 0; t < 120; ++t) {
+        const bool arrival = t >= 30 && t < 90;
+        const auto start = std::chrono::steady_clock::now();
+        if (arrival)
+            for (size_t k = size_t(t - 30) * 2; k < size_t(t - 30) * 2 + 2; ++k)
+                b.world.transfer(players[k], {6, {128, 0, 128}, 0, "key" + std::to_string(t)});
+        b.world.tick(now += std::chrono::milliseconds(50));
+        (arrival ? arriving : idle).push_back(ms(start));
+    }
+    const auto pct = [](std::vector<double> v, double p) {
+        std::ranges::sort(v);
+        return v[size_t(p * double(v.size() - 1))];
+    };
+    std::fprintf(stderr, "instance bench: a tick with 2 arrivals into a new copy: p50 %.2f ms, max %.2f ms; without: p50 %.2f ms\n",
+                 pct(arriving, 0.5), pct(arriving, 1), pct(idle, 0.5));
+    return 0;
+}
 
 int activation_bench() {
     log::set_level(log::Level::error); // the sample's per-entity warnings are not what is measured

@@ -4,6 +4,8 @@
 # Scenarios 10-13, 34 and 37 stop/restart containers, so run this against a test stack only.
 # --starter-mmo runs only scenarios 23-24 and 28 (samples/starter-mmo combat), against the stack with the sample's override.
 # --admin runs only scenarios 39-40 (the admin port; WORLD_ADMIN_SECRET in .env).
+# --instances runs only scenarios 17, 41 and 42 (portals, instance maps; 42 restarts world); export MAP_THREADS to run
+# them at that setting.
 set -u
 cd "$(dirname "$0")/.."
 export MSYS_NO_PATHCONV=1 # Git Bash on Windows: keep container paths as written
@@ -122,6 +124,34 @@ admin_scenarios() {
 # --admin: only the admin port scenarios.
 if [ "${1:-}" = "--admin" ]; then
     admin_scenarios
+    summary
+fi
+
+instance_scenarios() {
+    scenario "17 portal: MapChange{2} first, Bat seen, B lost, relog stays on map 2" --scenario portal
+    # 41: instance maps (docs/services/world/instances.html) with the sample maps/crypt and lua/systems/test_hooks.lua's
+    # instanceKey; the admin port's instance list when WORLD_ADMIN_SECRET is set. ~35 s: it waits out the 5 s empty timer.
+    scenario "41 instances: same key -> one copy, other key -> another (own NPCs), 3rd player refused (instance.full), relog rejoins, empty 5 s -> destroyed, relog -> exit" --scenario instances
+    instance_restart
+}
+
+# 42: a character saved inside a copy enters at the map's exit after a world restart (copies are memory-only).
+instance_restart() {
+    local name="42 instance + restart: saved in a copy, the world restarts, relog -> the crypt's exit" log="$LOGDIR/42.log" ok=0
+    echo "--- $name"
+    bot --scenario instance-restart 2>&1 | tee "$log" | grep -v -E '^ *(Container|Network) '
+    [ "${PIPESTATUS[0]}" -eq 0 ] || ok=1
+    sleep 1 # the logout's save
+    docker compose restart -t 15 world >/dev/null 2>&1 && echo "  world restarted"
+    wait_healthy world || ok=1
+    bot --scenario instance-restart-verify 2>&1 | tee -a "$log" | grep -v -E '^ *(Container|Network) '
+    [ "${PIPESTATUS[0]}" -eq 0 ] || ok=1
+    record "$name" $ok "see $log"
+}
+
+# --instances: only the portal and instance map scenarios.
+if [ "${1:-}" = "--instances" ]; then
+    instance_scenarios
     summary
 fi
 
@@ -316,6 +346,9 @@ if docker compose logs --no-color chat 2>&1 | grep -E 'psst, cave dweller|hello 
 else
     record "$name" 0 ""
 fi
+
+scenario "41 instances: same key -> one copy, other key -> another (own NPCs), 3rd player refused (instance.full), relog rejoins, empty 5 s -> destroyed, relog -> exit" --scenario instances
+instance_restart
 
 admin_scenarios
 summary

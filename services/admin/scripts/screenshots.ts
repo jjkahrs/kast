@@ -134,6 +134,9 @@ try {
   await shot(admin, 'admin-10-realms');
   await admin.goto(`${BASE}/audit`);
   await shot(admin, 'admin-11-audit');
+  await admin.goto(`${BASE}/instances`); // the realm's live map contexts (instance copies once someone is in one)
+  await admin.getByRole('cell', { name: 'world' }).first().waitFor();
+  await shot(admin, 'admin-14-instances');
 
   // GM: no Realms/Audit tabs, no create/delete/role/force; bans only on players.
   const gm = await login(gmCtx, GM);
@@ -155,6 +158,9 @@ try {
   await shot(gm, 'gm-06-online');
   await gm.goto(`${BASE}/realms`); // not a GM route: back to accounts
   await shot(gm, 'gm-07-realms-redirect');
+  await gm.goto(`${BASE}/instances`);
+  await gm.getByRole('cell', { name: 'world' }).first().waitFor();
+  await shot(gm, 'gm-09-instances');
 
   // Realm unreachable: the world is stopped. Admins get the force checkbox, GMs don't.
   compose('stop', 'world');

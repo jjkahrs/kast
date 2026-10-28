@@ -32,9 +32,11 @@ struct Transform {
     float heading = 0;
 };
 
-// The map every player and NPC is on (map.json "id"). Changed only by World::transfer.
+// The map every player and NPC is on (map.json "id"), and on an instance map which copy (instanceId; 0 on a world
+// map). Changed only by World::transfer.
 struct MapRef {
     uint16_t map = 0;
+    uint32_t instance = 0;
 };
 
 // The area a player is in: an index into map's areas (map::area_at), -1 for none. Kept by set_area; map is the map
@@ -133,6 +135,7 @@ struct Npc {
 // An NPC placed by a spawn file: record indexes World's spawn records (SpawnRecord). Read in Lua as "Spawn".
 struct SpawnRef {
     uint32_t record = 0;
+    uint32_t instance = 0; // the copy of the spawn's (instance) map it came from; 0: a world map
 };
 
 // The players that currently see this NPC, sorted wire ids. An NPC has no Visible: it sees nothing, and AOI is

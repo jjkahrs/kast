@@ -302,6 +302,35 @@ std::optional<MapInfo> parse_manifest(const Json& j, std::string& err) {
         if (uv == "map") m.terrainUv = TerrainUv::Map;
         else if (uv != "tiled") return fail("\"terrainUv\" must be \"tiled\" or \"map\"");
     }
+    if (j.contains("type")) {
+        if (j["type"] == "instance") m.type = MapType::Instance;
+        else if (j["type"] != "world") return fail("\"type\" must be \"world\" or \"instance\"");
+    }
+    for (const char* key : {"maxPlayers", "emptyTimeoutSec", "exit"})
+        if (!m.instanced() && j.contains(key))
+            return fail(std::string("\"") + key + "\" is only for instance maps (\"type\": \"instance\")");
+    if (m.instanced()) {
+        if (j.contains("maxPlayers")) {
+            const Json& v = j["maxPlayers"];
+            if (!v.is_number_unsigned() || v.get<uint64_t>() < 1 || v.get<uint64_t>() > 0xFFFFFFFF)
+                return fail("\"maxPlayers\" must be an integer >= 1 (leave it out for no limit)");
+            m.maxPlayers = static_cast<uint32_t>(v.get<uint64_t>());
+        }
+        if (j.contains("emptyTimeoutSec")) {
+            const Json& v = j["emptyTimeoutSec"];
+            if (!v.is_number_unsigned() || v.get<uint64_t>() > uint64_t(kMaxRespawnSec))
+                return fail("\"emptyTimeoutSec\" must be an integer in [0, 31536000] (a year)");
+            m.emptyTimeoutSec = static_cast<uint32_t>(v.get<uint64_t>());
+        }
+        const Json& exit = j.value("exit", Json());
+        const Json map = exit.is_object() ? exit.value("map", Json()) : Json();
+        if (!map.is_number_unsigned() || map.get<uint64_t>() > 0xFFFF || !numbers(exit.value("pos", Json()), 3) ||
+            (exit.contains("heading") && !finite_number(exit["heading"])))
+            return fail("\"exit\" must be {\"map\": id, \"pos\": [x, y, z], \"heading\": h} (required on an instance map)");
+        m.exit = Portal{static_cast<uint16_t>(map.get<uint64_t>()),
+                        {exit["pos"][0].get<float>(), exit["pos"][1].get<float>(), exit["pos"][2].get<float>()},
+                        exit.value("heading", 0.f)};
+    }
     if (j.contains("nav")) {
         const Json& nav = j["nav"];
         if (!nav.is_object()) return fail("\"nav\" must be an object");
@@ -377,6 +406,18 @@ std::optional<Areas> parse_areas(const Json& j, std::string& err) {
     for (auto& [tile, ids] : out.byTile)
         std::stable_sort(ids.begin(), ids.end(), [&](int16_t a, int16_t b) { return out.list[a].priority > out.list[b].priority; });
     return out;
+}
+
+std::optional<std::string> exit_error(const MapInfo& instance, const MapInfo* to) {
+    if (!instance.exit) return std::nullopt;
+    const Portal& e = *instance.exit;
+    const std::string id = std::to_string(e.map);
+    if (!to) return "\"exit\": to unknown map " + id;
+    if (to->instanced()) return "\"exit\": map " + id + " is an instance map; an exit must be on a world map";
+    if (!to->contains(e.pos[0], e.pos[2])) return "\"exit\": position is not on a tile of map " + id;
+    if (const int16_t i = area_at(to->areas, e.pos[0], e.pos[1], e.pos[2]); i >= 0 && to->areas.list[i].portal)
+        return "\"exit\": position is inside portal area \"" + to->areas.list[i].id + "\" of map " + id;
+    return std::nullopt;
 }
 
 int16_t area_at(const Areas& areas, float x, float y, float z) {

@@ -51,11 +51,11 @@ struct Spawner {
     bool capped = false; // MAX_NPCS hit: warned once until spawning works again
 };
 
-// Creates the NPC of every due pending record (create, then SpawnRef{record}). At maxNpcs NPCs (npcs: the context's
-// MAX_NPCS count, MapContext::npc_count, which create counts up) it creates nothing more this tick and tries again
-// the next.
+// Creates the NPC of every due pending record (create, then SpawnRef{record, instance}: instance is the context's copy
+// id, 0 on a world map). At maxNpcs NPCs (npcs: the context's MAX_NPCS count, MapContext::npc_count, which create
+// counts up) it creates nothing more this tick and tries again the next.
 void spawner_system(entt::registry& reg, Spawner& spawner, const std::function<size_t()>& npcs, size_t maxNpcs, TimePoint now,
-                    const std::function<entt::entity(const SpawnRecord&)>& create);
+                    const std::function<entt::entity(const SpawnRecord&)>& create, uint32_t instance = 0);
 
 // Tile activation (docs/services/world/maps.html#tile-activation). A tile is near a player when it is within radius
 // tiles of the player's tile (Chebyshev) on its map. The first time a tile is near, it loads: its spawn records join

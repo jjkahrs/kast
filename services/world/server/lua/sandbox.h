@@ -49,6 +49,11 @@ void check_keys(const sol::table& table, std::initializer_list<const char*> allo
 void check_plain_data(const sol::table& table, const std::string& what);
 // Every .lua file under root/dir (recursively; none if the folder is missing), sorted.
 std::vector<std::filesystem::path> definition_files(const std::filesystem::path& root, const char* dir);
+// Every .lua file in folder (with recursive, under it too), sorted; none if the folder is missing. Kept after
+// cache_lua_files (runtime.h), as the file texts load_sandboxed reads.
+std::vector<std::filesystem::path> lua_files(const std::filesystem::path& folder, bool recursive);
+// file relative to root, "/"-separated (std::filesystem::relative, which stats every part of both paths: kept too).
+std::string lua_path(const std::filesystem::path& file, const std::filesystem::path& root);
 // Runs a definition file (path: root-relative, for messages) in a fresh sandboxed environment; it must return exactly one
 // plain-data table, else throws with "<path>: must return exactly one table <shape>".
 sol::table run_definition_file(sol::state& lua, const std::filesystem::path& file, const std::string& path,

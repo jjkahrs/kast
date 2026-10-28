@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "id": 6,
+  "name": "Crypt",
+  "tiles": [[0, 0, 0, 0]],
+  "heightRange": [0, 500],
+  "spawn": {"pos": [128, 0, 128], "heading": 0},
+  "type": "instance",
+  "maxPlayers": 2,
+  "emptyTimeoutSec": 5,
+  "exit": {"map": 1, "pos": [1030, 0, 1060], "heading": 3.14}
+}

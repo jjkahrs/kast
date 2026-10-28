@@ -24,9 +24,9 @@ namespace kast {
 
 class GameServer {
 public:
-    // maps must outlive the server and hold cfg.startMap.
+    // maps must outlive the server and hold cfg.startMap. firstInstanceId: WorldRules::firstInstanceId.
     GameServer(asio::io_context& io, const Config& cfg, const world::Maps& maps, asio::ssl::context& tls,
-               db::DbWorker& db, TokenService& tokens, lua::Defs defs);
+               db::DbWorker& db, TokenService& tokens, lua::Defs defs, uint64_t firstInstanceId);
 
     // Loads the Lua systems under LUA_ROOT and runs their init; every error (empty: OK to start).
     std::vector<std::string> load_scripts() { return world_.load_scripts(cfg_.luaRoot, cfg_.gameStateMachines); }
@@ -66,6 +66,7 @@ private:
     void report_maps();                                   // map changes since the last tick, to the chat link
     std::vector<proto::AdminOnlineEntry> admin_online() const; // every authenticated session, for the admin port
     uint32_t admin_kick(const proto::AdminKick& k);
+    std::vector<proto::AdminInstanceEntry> admin_instances() const; // every live map context, for the admin port
 
     void schedule_tick();
     void tick();

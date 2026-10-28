@@ -18,7 +18,7 @@
                                        |-- auth /v1/admin/*               accounts, bans, roles, realms (caller's token)
                                        |-- MySQL kast_world.characters    SELECT/UPDATE only
                                        |-- MySQL kast_admin               audit log, realm endpoint copy
-                                       '-- world admin port :7780 per realm (TLS + secret): online list, kick
+                                       '-- world admin port :7780 per realm (TLS + secret): online list, kick, instances
 </code></pre>
 <ul>
 <li><strong>Auth owns accounts.</strong> Account and realm changes are proxied to the <a href="../auth/endpoints.html">auth admin endpoints</a> with the signed-in user's own access token, so auth re-checks every permission. The admin service never connects to <code>kast_auth</code>.</li>
@@ -38,6 +38,7 @@
 <tr><td>Characters</td><td>admin, gm</td><td>Search by name prefix, realm, account; include deleted</td></tr>
 <tr><td>Character detail</td><td>admin, gm</td><td>Rename, move, edit components/options JSON, delete (with a confirmation) and restore. An online character shows a Kick button; a write while it is online opens a dialog that offers Kick. Admins get a <em>Force</em> checkbox when the realm is unreachable</td></tr>
 <tr><td>Online</td><td>admin, gm</td><td>Sessions per realm (lobby sessions show as <em>lobby</em>); Kick with a reason and a confirmation</td></tr>
+<tr id="instances"><td>Instances</td><td>admin, gm</td><td>The live map contexts per realm: each world map's (instance <em>world</em>) and every <a href="../world/instances.html">instance copy</a> with its id, key, players, NPCs, created time and, for an empty copy, since when (its timer runs). Read-only; <strong>Refresh</strong> asks the realm again</td></tr>
 <tr><td>Realms</td><td>admin</td><td>Create, edit and delete realms, including the admin host/port; reachability of each admin port</td></tr>
 <tr><td>Audit</td><td>admin</td><td>Filter by actor, action, target and date range; before/after JSON per entry</td></tr>
 </tbody>

@@ -11,7 +11,7 @@ namespace kast::world {
 
 World::World(WorldRules rules, const Maps& maps, Send send, SendMany sendMany, Save save, lua::Defs defs)
     : rules_(rules), maps_(maps), send_(std::move(send)), sendMany_(std::move(sendMany)), save_(std::move(save)),
-      defs_(std::move(defs)),
+      defs_(std::move(defs)), nextInstance_(std::max<uint64_t>(rules.firstInstanceId, 1)),
       realm_(realmReg_, {},
              {.create = {}, // the realm has no entities: nothing to create, destroy, transfer or spawn
               .destroy = {},
@@ -20,6 +20,7 @@ World::World(WorldRules rules, const Maps& maps, Send send, SendMany sendMany, S
               .ground = [this](uint16_t map, float x, float z) { return maps_.ground(map, x, z); },
               .path = [this](uint16_t map, proto::Vec3 from, proto::Vec3 to) { return maps_.nav().path(map, from, to); },
               .transfer = {},
+              .instance = {},
               .spawn = {},
               .count = [this] { return size_t(std::max<int64_t>(0, npcs())); },
               .post = [this](lua::Post post) { realmPosts_.push_back(std::move(post)); },
@@ -35,22 +36,90 @@ World::World(WorldRules rules, const Maps& maps, Send send, SendMany sendMany, S
 World::~World() = default;
 
 MapContext& World::context(uint16_t map) {
-    if (auto it = contexts_.find(map); it != contexts_.end()) return *it->second;
+    if (auto it = contexts_.find({map, 0}); it != contexts_.end()) return *it->second;
+    if (maps_.info(map).instanced())
+        throw std::logic_error(std::format("map {} is an instance map: it has no single context", map));
+    return create(map, 0, std::nullopt);
+}
+
+MapContext& World::create(uint16_t map, uint32_t instance, std::optional<std::string> key) {
+    if (instance && key) shared_.copies[{map, *key}] = {instance, 0};
     MapContext& ctx = *contexts_
-                           .emplace(map, std::make_unique<MapContext>(map, rules_, maps_, shared_, send_, sendMany_,
-                                                                      save_, defs_, now_))
+                           .emplace(Key{map, instance},
+                                    std::make_unique<MapContext>(map, instance, std::move(key), rules_, maps_, shared_,
+                                                                 send_, sendMany_, save_, defs_, now_))
                            .first->second;
+    ctx.ids().adopt(shared_); // a destroyed copy's ids first
     share_npcs(); // before its scripts' init can create any
     if (luaRoot_) // the same files every context loaded: any error was a startup error already
         for (const std::string& e : ctx.load_scripts(*luaRoot_, gameMachines_, realm_.fsm().game_states()))
-            log::error("Lua error", {{"map", map}, {"error", e}});
+            log::error("Lua error", {{"map", map}, {"instance", instance}, {"error", e}});
     return ctx;
+}
+
+MapContext* World::copy_for(uint16_t map, const std::optional<std::string>& key) {
+    if (key)
+        if (const auto it = shared_.copies.find({map, *key}); it != shared_.copies.end())
+            return contexts_.at({map, it->second.instance}).get();
+    // ponytail: ids never wrap (a saved one could name a new copy), so after 2^32 - 1 copies ever made in the realm no
+    // more are made; reset characters.instance_id to 0 (players then enter at the exits) if a realm ever gets there.
+    if (nextInstance_ > UINT32_MAX) return nullptr;
+    return &create(map, static_cast<uint32_t>(nextInstance_++), key);
+}
+
+MapContext* World::copy(uint16_t map, uint32_t instance) const {
+    const auto it = instance ? contexts_.find({map, instance}) : contexts_.end();
+    return it == contexts_.end() ? nullptr : it->second.get();
+}
+
+std::vector<World::ContextInfo> World::contexts() const {
+    std::vector<ContextInfo> out;
+    const SysTime wallNow = std::chrono::system_clock::now();
+    const TimePoint steadyNow = SteadyClock::now();
+    for (const auto& [key, ctx] : contexts_) {
+        ContextInfo& c = out.emplace_back();
+        c.map = key.first;
+        c.instance = key.second;
+        c.key = ctx->key();
+        c.players = ctx->population();
+        c.npcs = ctx->npcs_here();
+        c.createdAt = ctx->created_at();
+        if (const auto since = ctx->empty_since(); since && c.instance)
+            c.emptySince = wallNow - std::chrono::duration_cast<SysTime::duration>(steadyNow - *since);
+    }
+    return out;
 }
 
 MapContext* World::find(entt::entity e) const {
     for (const auto& [id, ctx] : contexts_)
         if (ctx->registry().valid(e)) return ctx.get();
     return nullptr;
+}
+
+std::vector<World::Key> World::expire_copies() {
+    std::vector<Key> dying;
+    if (scriptsShutDown_) return dying; // the server is going down: every context goes with it
+    for (auto& [key, ctx] : contexts_) {
+        if (!key.second) continue;
+        if (ctx->population() > 0) {
+            ctx->set_empty_since(std::nullopt);
+            continue;
+        }
+        if (!ctx->empty_since()) ctx->set_empty_since(now_);
+        if (now_ - *ctx->empty_since() < std::chrono::seconds(maps_.info(key.first).emptyTimeoutSec)) continue;
+        log::info("instance destroyed", {{"map", key.first}, {"instance", key.second},
+                                         {"key", ctx->key() ? nlohmann::json(*ctx->key()) : nlohmann::json()},
+                                         {"npcs", ctx->npcs_here()}});
+        ctx->shutdown_scripts();
+        ctx->remove_npcs();
+        if (ctx->key()) shared_.copies.erase({key.first, *ctx->key()});
+        dying.push_back(key);
+    }
+    return dying;
+}
+
+void World::refresh_copies() {
+    for (auto& [key, copy] : shared_.copies) copy.players = contexts_.at({key.first, copy.instance})->population();
 }
 
 std::vector<std::string> World::load_scripts(const std::filesystem::path& luaRoot, std::vector<std::string> gameMachines) {
@@ -68,6 +137,7 @@ std::vector<std::string> World::load_scripts(const std::filesystem::path& luaRoo
 }
 
 void World::shutdown_scripts() {
+    scriptsShutDown_ = true;
     for (auto& [id, ctx] : contexts_) ctx->shutdown_scripts();
     realm_.shutdown();
     serial(false); // the broadcasts reach the other maps' players before the despawns
@@ -87,6 +157,23 @@ entt::entity World::spawn(uint32_t sessionId, const db::CharRow& row, TimePoint 
     uint16_t map = row.mapId == 0 ? rules_.startMap : row.mapId; // 0: saved before maps (migration 003)
     proto::Vec3 pos = row.pos;
     float heading = row.heading;
+    MapContext* ctx = nullptr;
+    if (const map::MapInfo* info = maps_.by_id(map); info && info->instanced()) {
+        MapContext* saved = copy(map, row.instanceId);
+        const char* why = !saved                                                       ? "instance gone"
+                          : info->maxPlayers && saved->population() >= *info->maxPlayers ? "instance full"
+                          : !info->contains(pos.x, pos.z)                               ? "position off the map"
+                                                                                        : nullptr;
+        if (!why) {
+            ctx = saved;
+        } else { // a restart, the copy's timeout, or its cap: the way out
+            log::info("saved instance not joinable; entering at the map's exit",
+                      {{"char", row.id}, {"map", map}, {"instance", row.instanceId}, {"reason", why}});
+            map = info->exit->map;
+            pos = {info->exit->pos[0], info->exit->pos[1], info->exit->pos[2]};
+            heading = info->exit->heading;
+        }
+    }
     if (!maps_.has_tile(map, pos.x, pos.z)) { // map removed or shrunk since the save
         const auto& start = maps_.info(rules_.startMap);
         log::warn("saved position not on a loaded map; using START_MAP spawn",
@@ -98,7 +185,7 @@ entt::entity World::spawn(uint32_t sessionId, const db::CharRow& row, TimePoint 
     if (const float ground = *maps_.ground(map, pos.x, pos.z); pos.y < ground - rules_.move.groundTolerance)
         pos.y = ground; // saved under the ground (heights edited since): onto it
     pos.y = std::clamp(pos.y, rules_.move.minY, rules_.move.maxY);
-    const entt::entity e = context(map).spawn(sessionId, row, pos, heading, now);
+    const entt::entity e = (ctx ? *ctx : context(map)).spawn(sessionId, row, pos, heading, now);
     serial(false);
     return e;
 }
@@ -146,11 +233,24 @@ bool World::move_to(entt::entity e, const Destination& to) {
                   {{"entity", wire_id(e)}, {"map", to.map}, {"x", to.pos.x}, {"z", to.pos.z}});
         return false;
     }
-    if (to.map == from->map()) {
+    const map::MapInfo& info = maps_.info(to.map);
+    if (to.map == from->map() && (!info.instanced() || to.key == from->key())) {
         from->transfer(e, to);
         return true;
     }
-    MapContext& dest = context(to.map);
+    if (info.instanced() && to.key && info.maxPlayers && from->registry().all_of<SessionLink>(e))
+        if (const auto it = shared_.copies.find({to.map, *to.key});
+            it != shared_.copies.end() && contexts_.at({to.map, it->second.instance})->population() >= *info.maxPlayers) {
+            from->refuse_full(e, to.map, *to.key); // filled up since the request, by others' transfers or logins
+            return false;
+        }
+    MapContext* const inst = info.instanced() ? copy_for(to.map, to.key) : nullptr;
+    if (info.instanced() && !inst) { // refused like a full copy
+        log::error("transfer refused: instance ids exhausted", {{"entity", wire_id(e)}, {"map", to.map}});
+        from->refuse_full(e, to.map, to.key.value_or(""));
+        return false;
+    }
+    MapContext& dest = inst ? *inst : context(to.map);
     const lua::Carried carried = from->leave_map(e);
     if (!from->registry().valid(e)) return false; // onMapLeave destroyed it
     const Destination at{to.map, clamp_to_map(to.map, to.pos), to.heading}; // owned, so on the map: y onto the ground
@@ -162,7 +262,8 @@ bool World::move_to(entt::entity e, const Destination& to) {
 }
 
 void World::serial(bool endOfTick) {
-    std::vector<std::pair<uint16_t, MapContext::Outbox>> boxes; // taken first: what this work queues waits for the next
+    const std::vector<Key> dying = expire_copies(); // their outboxes (shutdown's work) are done below like any other
+    std::vector<std::pair<Key, MapContext::Outbox>> boxes; // taken first: what this work queues waits for the next
     for (auto& [id, ctx] : contexts_)
         if (MapContext::Outbox box = ctx->take_outbox(); !box.empty()) boxes.emplace_back(id, std::move(box));
     // Every context reads the same mirror, so the same change from several of them is one intent: applied once.
@@ -172,7 +273,8 @@ void World::serial(bool endOfTick) {
         for (MapContext::Create& c : box.creates)
             context(c.map).create_npc(std::move(c.name), std::move(c.templateName), c.pos, c.heading, std::move(c.npc),
                                       c.components, c.id);
-        for (const auto& [map, record] : box.respawns) context(map).spawn_destroyed(record);
+        for (const auto& [map, instance, record] : box.respawns) // a copy's NPC: gone with its copy
+            if (MapContext* home = instance ? copy(map, instance) : &context(map)) home->spawn_destroyed(record);
         for (const auto& [machine, to] : box.gameChanges) {
             if (!gameChanges.emplace(machine, to).second) continue;
             try {
@@ -183,19 +285,26 @@ void World::serial(bool endOfTick) {
         }
         for (const auto& [id, ctx] : contexts_)
             if (id != from && !box.broadcasts.empty()) ctx->send_client_events(box.broadcasts);
-        for (lua::Post& post : box.posts) posts_.emplace_back(from, std::move(post));
+        for (lua::Post& post : box.posts) posts_.emplace_back(from.first, std::move(post));
     }
     if (std::vector<lua::ClientEvent> events = realm_.take_client_events(); !events.empty())
         for (auto& [id, ctx] : contexts_) ctx->send_client_events(events); // each context sends to its own players
     for (lua::Post& post : std::exchange(realmPosts_, {})) posts_.emplace_back("realm", std::move(post));
     if (endOfTick)
         for (const auto& [from, post] : std::exchange(posts_, {})) deliver(from, post);
+    for (const Key& key : dying) {
+        MapContext& ctx = *contexts_.at(key);
+        retiredNpcs_ += ctx.npcs();
+        ctx.ids().retire(shared_);
+        contexts_.erase(key);
+    }
     for (auto& [id, ctx] : contexts_) ctx->mirror_game_machines(realm_.fsm().game_states());
+    refresh_copies();
     share_npcs();
 }
 
 int64_t World::npcs() const {
-    int64_t n = 0;
+    int64_t n = retiredNpcs_;
     for (const auto& [id, ctx] : contexts_) n += ctx->npcs();
     return n;
 }

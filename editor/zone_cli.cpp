@@ -33,9 +33,10 @@ constexpr std::string_view kValueOps[] = {"--map", "--new-map", "--falloff", "--
                                           "--area-portal", "--move-area-vertex", "--delete-area", "--add-spawn",
                                           "--move-spawn", "--delete-spawn", "--add-path", "--map-id", "--add-tile",
                                           "--remove-tile", "--set-spawn", "--add-object", "--set-interactable",
-                                          "--move-object", "--delete-object", "--scatter", "--erase-visuals"};
+                                          "--move-object", "--delete-object", "--scatter", "--erase-visuals",
+                                          "--instance"};
 constexpr std::string_view kFlagOps[] = {"--save-zone", "--expect-save-fail", "--undo", "--redo", "--validate",
-                                         "--create-terrain-material"};
+                                         "--create-terrain-material", "--world-map"};
 constexpr float kLoopRadius = 24.0f; // --sculpt-loop's brush
 
 std::string utf8(const fs::path& p)
@@ -494,6 +495,23 @@ bool runOp(ZoneSession& zone, const Op& op, zone::Brush& brush)
             if (v->size() == 3)
                 s.manifest["spawn"]["heading"] = kast::jsonNumber((*v)[2]);
         });
+        return true;
+    }
+    if (op.flag == "--instance") { // maxPlayers (0: no limit),emptyTimeoutSec,exitMap,x,y,z[,heading]
+        const auto v = parseFloats(op.value, 6, 7);
+        const auto whole = [](float f, float max) { return f >= 0 && f <= max && f == std::floor(f); };
+        if (!v || !whole((*v)[0], 1e9f) || !whole((*v)[1], 31536000) || !whole((*v)[2], 0xFFFF))
+            return bad("maxPlayers,emptyTimeoutSec,exitMap,x,y,z[,heading] (maxPlayers 0: no limit)");
+        doc->edit([&](zone::ZoneState& s) {
+            zone::set_instance(s, true);
+            zone::set_max_players(s, (*v)[0] > 0 ? std::optional(uint32_t((*v)[0])) : std::nullopt);
+            zone::set_empty_timeout(s, uint32_t((*v)[1]));
+            zone::set_exit(s, {uint16_t((*v)[2]), {(*v)[3], (*v)[4], (*v)[5]}, v->size() == 7 ? (*v)[6] : 0.0f});
+        });
+        return true;
+    }
+    if (op.flag == "--world-map") {
+        doc->edit([](zone::ZoneState& s) { zone::set_instance(s, false); });
         return true;
     }
     if (op.flag == "--map-id") {

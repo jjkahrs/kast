@@ -83,6 +83,10 @@ struct Spawn {
 // the declared tiles (map.json "terrainUv": "tiled" | "map").
 enum class TerrainUv { Tiled, Map };
 
+// map.json "type": a world map runs as one context for everyone; an instance map has none until someone enters, then
+// one copy per instance key (docs/services/world/instances.html).
+enum class MapType { World, Instance };
+
 struct MapInfo {
     uint16_t id = 0;
     std::string name;
@@ -95,6 +99,14 @@ struct MapInfo {
     std::optional<NavParams> nav;                    // phase 6
     Areas areas;                                     // areas.json, loaded separately (parse_areas); empty if none
     std::vector<Spawn> spawns;                       // every owned tile's spawn file (parse_spawns); empty if none
+    MapType type = MapType::World;
+    // Instance maps only: players per copy (nullopt: no limit), seconds an empty copy lives on, and where a character
+    // goes when its copy is gone (required; the loader checks it is on a loaded world map's tiles).
+    std::optional<uint32_t> maxPlayers;
+    uint32_t emptyTimeoutSec = 300;
+    std::optional<Portal> exit;
+
+    bool instanced() const { return type == MapType::Instance; }
 
     // ponytail: linear scan of the rects; a tile set if maps grow many rects.
     bool has_tile(TileKey t) const;
@@ -114,6 +126,11 @@ std::optional<Areas> parse_areas(const nlohmann::json& j, std::string& err);
 // every spawn's pos inside tile, ids unique within the file, every "path" one of the file's "paths". Ids across a map's
 // files are checked by the loader, "npc" names by the server. nullopt with err set on any problem.
 std::optional<std::vector<Spawn>> parse_spawns(const nlohmann::json& j, TileKey tile, std::string& err);
+
+// An instance map's "exit" against the map it names (to: nullptr if that is not loaded), as the loaders check it: a
+// world map, the position on its tiles and not inside one of its portal areas. The problem ("\"exit\": ..."), or
+// nullopt.
+std::optional<std::string> exit_error(const MapInfo& instance, const MapInfo* to);
 
 // The index in areas.list of the highest-priority area containing (x, y, z), or -1. Edges: a point on a boundary may
 // fall either side.

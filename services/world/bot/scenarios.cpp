@@ -2007,7 +2007,7 @@ std::string admin_secret() {
 asio::awaitable<std::shared_ptr<WorldClient>> admin_connect(Ctx& x, const std::string& secret) {
     auto c = std::make_shared<WorldClient>(co_await asio::this_coro::executor, x.tls);
     if (!co_await c->connect(x.o.host, x.o.adminPort)) co_return nullptr;
-    c->send(proto::LinkHello{proto::kProtocolVersion, secret});
+    c->send(proto::LinkHello{proto::kAdminProtocolVersion, secret});
     co_return c;
 }
 
@@ -2108,6 +2108,161 @@ asio::awaitable<void> admin_off(Ctx& x) {
     if (player) player->close();
 }
 
+// --- 41: instance maps (docs/services/world/instances.html) with the sample maps/crypt (map 6: maxPlayers 2,
+// emptyTimeoutSec 5, exit on map 1 at (1030, 0, 1060)) and lua/systems/test_hooks.lua's instanceKey ---
+
+// The crypt gate on the start map (crypt_gate [900..910] x [1100..1110]): its middle.
+constexpr float kCryptGateX = 905, kCryptGateZ = 1105;
+
+// Sets c's instance key (test_hooks.lua), then walks from pos into the start map's crypt gate.
+asio::awaitable<void> to_crypt(WorldClient& c, proto::Vec3 pos, const std::string& key) {
+    c.send(proto::ClientEvent{"test.instance_key", nlohmann::json{{"key", key}}.dump()});
+    co_await sleep_for(Millis(300)); // the key is set before the walk ends: the next tick's Lua update has it
+    co_await walk(c, pos, kCryptGateX - pos.x, kCryptGateZ - pos.z);
+}
+
+// The player and NPC Spawns c got after its MapChange onto map 6 (nullopt: no such MapChange).
+struct CryptView {
+    std::optional<proto::MapChange> change;
+    std::set<uint32_t> players, npcs;
+};
+CryptView crypt_view(const std::vector<proto::Message>& msgs) {
+    CryptView v;
+    for (const auto& m : msgs) {
+        if (auto* mc = std::get_if<proto::MapChange>(&m); mc && mc->map == 6) v.change = *mc;
+        if (auto* s = std::get_if<proto::Spawn>(&m); s && v.change) {
+            if (s->kind == proto::SpawnKind::player) v.players.insert(s->entityId);
+            else if (s->name == "Bat") v.npcs.insert(s->entityId);
+        }
+    }
+    return v;
+}
+
+// Every live context the admin port lists, or nullopt without WORLD_ADMIN_SECRET (the instance checks are skipped).
+asio::awaitable<std::optional<std::vector<proto::AdminInstanceEntry>>> admin_instances(Ctx& x) {
+    const std::string secret = admin_secret();
+    if (secret.empty()) co_return std::nullopt;
+    auto admin = co_await admin_connect(x, secret);
+    if (!admin || !co_await admin->wait_for<proto::LinkOk>(Millis(5000))) {
+        x.check.expect(false, "admin port: LinkOk for the instance list");
+        co_return std::nullopt;
+    }
+    std::vector<proto::AdminInstanceEntry> all;
+    admin->send(proto::AdminInstancesReq{});
+    for (;;) {
+        auto chunk = co_await admin->wait_for<proto::AdminInstances>(Millis(5000));
+        if (!chunk) break;
+        all.insert(all.end(), chunk->entries.begin(), chunk->entries.end());
+        if (!chunk->more) break;
+    }
+    admin->close();
+    co_return all;
+}
+
+const proto::AdminInstanceEntry* copy_keyed(const std::vector<proto::AdminInstanceEntry>& all, const std::string& key) {
+    for (const auto& e : all)
+        if (e.map == 6 && e.key == key) return &e;
+    return nullptr;
+}
+
+// A and B with key x, C with key y walk into the crypt gate: A and B share a copy (they see each other and the same
+// Bat), C has its own (neither, and another Bat). D with key x is refused: no MapChange, test.instance_full. The admin
+// port lists both copies. A relogs: back in its copy. Everyone leaves; 5 s later the copy is gone (admin list) and A
+// relogs at the crypt's exit on map 1.
+asio::awaitable<void> instances(Ctx& x) {
+    const std::string kx = "x-" + x.o.runId, ky = "y-" + x.o.runId;
+    proto::EnterWorldOk ea, eb, ec, ed;
+    auto a = co_await x.enter("s41a", ea);
+    auto b = co_await x.enter("s41b", eb);
+    auto c = co_await x.enter("s41c", ec);
+    auto d = co_await x.enter("s41d", ed);
+    if (!a || !b || !c || !d) co_return;
+    x.check.expect(ea.map == 1 && eb.map == 1 && ec.map == 1 && ed.map == 1, "A, B, C and D enter map 1");
+    using namespace asio::experimental::awaitable_operators;
+    co_await (to_crypt(*a, ea.pos, kx) && to_crypt(*b, eb.pos, kx) && to_crypt(*c, ec.pos, ky));
+    co_await sleep_for(Millis(1500)); // the last one's Spawns
+    const CryptView va = crypt_view(co_await drain(*a, Millis(300))), vb = crypt_view(co_await drain(*b, Millis(300))),
+                    vc = crypt_view(co_await drain(*c, Millis(300)));
+    x.check.expect(va.change && vb.change && vc.change && same_pos(va.change->pos, {128, 0, 128}),
+                   "A, B and C: MapChange{6} at the portal's (128, 0, 128)");
+    x.check.expect(va.players.contains(eb.entityId) && vb.players.contains(ea.entityId),
+                   "same key: A and B are in one copy and see each other");
+    x.check.expect(!vc.players.contains(ea.entityId) && !vc.players.contains(eb.entityId) &&
+                       !va.players.contains(ec.entityId) && !vb.players.contains(ec.entityId),
+                   "other key: C is in another copy, seeing neither A nor B, seen by neither");
+    x.check.expect(va.npcs.size() == 1 && va.npcs == vb.npcs && vc.npcs.size() == 1 && vc.npcs != va.npcs,
+                   "each copy has its own Bat: A and B see the same one, C another (" + std::to_string(va.npcs.size()) +
+                       ", " + std::to_string(vc.npcs.size()) + ")");
+
+    // D, key x: the copy holds 2 already.
+    co_await to_crypt(*d, ed.pos, kx);
+    const auto dm = co_await drain(*d, Millis(1500));
+    bool full = false;
+    for (const auto& ev : only<proto::ServerEvent>(dm))
+        full |= ev.name == "test.instance_full" && ev.json.find(kx) != std::string::npos && ev.json.find("\"map\":6") != std::string::npos;
+    x.check.expect(!crypt_view(dm).change && only<proto::MapChange>(dm).empty(), "D, key x: refused, no MapChange");
+    x.check.expect(full, "D gets test.instance_full {map = 6, key = x} (instance.full on its map's bus)");
+
+    if (const auto listed = co_await admin_instances(x)) {
+        const auto* cx = copy_keyed(*listed, kx);
+        const auto* cy = copy_keyed(*listed, ky);
+        const bool start = std::any_of(listed->begin(), listed->end(), [](const auto& e) { return e.map == 1 && e.instance == 0; });
+        x.check.expect(cx && cx->players == 2 && cx->npcs == 1 && cx->mapName == "Crypt" && cx->instance > 0 &&
+                           cx->createdAtMs > 1700000000000ull && cx->emptySinceMs == 0 && cy && cy->players == 1 &&
+                           cy->instance != cx->instance && start,
+                       "admin port lists map 1's context and both copies (x: 2 players, 1 NPC; y: 1 player)");
+        if (cx) std::printf("  admin: copy %u key %s players %u npcs %u\n", cx->instance, cx->key.c_str(), cx->players, cx->npcs);
+    } else {
+        std::printf("  WORLD_ADMIN_SECRET not set: the admin instance list is not checked\n");
+    }
+
+    // A relogs: its save names the copy, which is live with room (B is still in it).
+    a->close();
+    co_await sleep_for(Millis(500));
+    proto::EnterWorldOk again;
+    auto a2 = co_await x.enter("s41a", again);
+    x.check.expect(a2 && again.map == 6 && same_pos(again.pos, {128, 0, 128}),
+                   "relog inside a live copy: back on map 6 at " + fmt(again.pos) + " (map " + std::to_string(again.map) + ")");
+    const auto rejoin = a2 ? co_await drain(*a2, Millis(1000)) : std::vector<proto::Message>{};
+    bool seesB = false;
+    for (const auto& s : only<proto::Spawn>(rejoin)) seesB |= s.entityId == eb.entityId;
+    x.check.expect(seesB, "the relogged A sees B again: the same copy");
+
+    // Everyone out; the empty copy x is destroyed 5 s later; A then relogs at the crypt's exit.
+    for (auto* p : {&a2, &b, &c, &d})
+        if (*p) (*p)->close();
+    co_await sleep_for(Millis(7000));
+    if (const auto listed = co_await admin_instances(x))
+        x.check.expect(!copy_keyed(*listed, kx) && !copy_keyed(*listed, ky), "5 s empty: both copies are gone from the admin list");
+    proto::EnterWorldOk out;
+    auto a3 = co_await x.enter("s41a", out);
+    x.check.expect(a3 && out.map == 1 && same_pos(out.pos, {1030, 0, 1060}) && std::fabs(out.heading - 3.14f) < 0.01f,
+                   "relog after the copy was destroyed: the crypt's exit, map 1 at (1030, 0, 1060) (got map " +
+                       std::to_string(out.map) + " " + fmt(out.pos) + ")");
+    if (a3) a3->close();
+}
+
+// 42: a server restart loses every copy. Phase 1: a bot walks into the crypt (key r) and logs out there (saved with its
+// instance id); integration.sh restarts the world; phase 2: the same character enters at the crypt's exit.
+asio::awaitable<void> instance_restart(Ctx& x) {
+    proto::EnterWorldOk e;
+    auto c = co_await x.enter("s42", e);
+    if (!c) co_return;
+    co_await to_crypt(*c, e.pos, "r-" + x.o.runId);
+    const auto mc = co_await c->wait_for<proto::MapChange>(Millis(3000));
+    x.check.expect(mc && mc->map == 6, "into the crypt: MapChange{6}");
+    c->close();
+}
+
+asio::awaitable<void> instance_restart_verify(Ctx& x) {
+    proto::EnterWorldOk e;
+    auto c = co_await x.enter("s42", e);
+    x.check.expect(c && e.map == 1 && same_pos(e.pos, {1030, 0, 1060}),
+                   "after a restart the saved copy is gone: the crypt's exit, map 1 at (1030, 0, 1060) (got map " +
+                       std::to_string(e.map) + " " + fmt(e.pos) + ")");
+    if (c) c->close();
+}
+
 } // namespace
 
 int run_scenario(const Options& o) {
@@ -2130,6 +2285,8 @@ int run_scenario(const Options& o) {
         {"chat-zone", chat_zone},       {"chat-ignore", chat_ignore},   {"chat-mute-setup", chat_mute_setup},
         {"chat-mute", chat_mute},       {"chat-limits", chat_limits},   {"chat-auth", chat_auth},
         {"chat-down", chat_down},       {"admin", admin_port},          {"admin-off", admin_off},
+        {"instances", instances},
+        {"instance-restart", instance_restart}, {"instance-restart-verify", instance_restart_verify},
     };
     auto it = all.find(o.scenario);
     if (it == all.end()) {

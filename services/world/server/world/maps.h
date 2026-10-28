@@ -24,8 +24,9 @@ public:
     // tiles, or into another portal, a spawn file with a bad name, for a tile not on the map or that fails to parse, a
     // spawn id used twice on a map, a heights file that fails to decode, a navtile Nav rejects, or an interactables
     // file (<folder>/.server/interactables/<tx>_<tz>.json, map::parse_interactables) with a bad name, for a tile not
-    // on the map, that fails to parse or repeats an id used on the map. A map with a bad manifest or areas.json is not
-    // loaded.
+    // on the map, that fails to parse or repeats an id used on the map, or an instance map whose "exit" is not on a
+    // loaded world map's tiles or is inside a portal there (map::exit_error). A map with a bad manifest or areas.json
+    // is not loaded.
     static Maps load(const std::filesystem::path& root, std::vector<std::string>& errors);
     void add(map::MapInfo info) { maps_[info.id] = std::move(info); } // tests and load
 

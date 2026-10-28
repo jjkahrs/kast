@@ -2,9 +2,11 @@
 // persistence.
 // Threads: io (network + tick), DB worker, token verifier.
 #include "app/game_server.h"
+#include "crash_dialogs.h"
 #include "auth/token_service.h"
 #include "core/config.h"
 #include "core/log.h"
+#include "db/char_repo.h"
 #include "db/db_worker.h"
 #include "db/migrate.h"
 #include "lua/components.h"
@@ -20,6 +22,7 @@
 using namespace kast;
 
 int main() {
+    disableCrashDialogsIfRequested();
     const ConfigResult loaded = load_config(process_env);
     if (!loaded.errors.empty()) {
         std::fprintf(stderr, "Invalid configuration:\n");
@@ -37,6 +40,8 @@ int main() {
     const world::Maps maps = world::Maps::load(cfg.mapRoot, mapErrors);
     if (mapErrors.empty() && !maps.by_id(cfg.startMap))
         mapErrors.push_back("START_MAP " + std::to_string(cfg.startMap) + ": no such map under MAP_ROOT");
+    else if (mapErrors.empty() && maps.info(cfg.startMap).instanced())
+        mapErrors.push_back("START_MAP " + std::to_string(cfg.startMap) + ": an instance map; START_MAP must be a world map");
     for (const auto& [id, m] : maps.all())
         if (m.spawn[1] < cfg.minY || m.spawn[1] > cfg.maxY)
             mapErrors.push_back("map " + std::to_string(id) + ": spawn y outside [MIN_Y, MAX_Y]");
@@ -46,12 +51,13 @@ int main() {
         return 1;
     }
     nlohmann::json loadedMaps = nlohmann::json::array();
-    for (const auto& [id, m] : maps.all()) loadedMaps.push_back({{"id", id}, {"name", m.name}, {"tileRects", m.tiles.size()}, {"areas", m.areas.list.size()}, {"spawns", m.spawns.size()}});
+    for (const auto& [id, m] : maps.all()) loadedMaps.push_back({{"id", id}, {"name", m.name}, {"tileRects", m.tiles.size()}, {"areas", m.areas.list.size()}, {"spawns", m.spawns.size()}, {"type", m.instanced() ? "instance" : "world"}});
     log::info("maps loaded", {{"mapRoot", cfg.mapRoot}, {"startMap", cfg.startMap}, {"activationTiles", cfg.activationTiles}, {"maps", loadedMaps}});
 
     // Lua component definitions: a broken one stops the start too.
     std::error_code ec;
     const bool haveLua = std::filesystem::is_directory(cfg.luaRoot, ec);
+    lua::cache_lua_files(); // every map context and instance copy loads the same LUA_ROOT
     lua::DefsResult defs;
     if (haveLua) defs = lua::load_component_defs(cfg.luaRoot, world::kReservedComponentNames);
     else log::info("no Lua components or systems (LUA_ROOT is not a folder)", {{"luaRoot", cfg.luaRoot}});
@@ -59,10 +65,14 @@ int main() {
     db::library_init();
     const db::ConnectOptions dbOpts{cfg.dbHost, cfg.dbPort, cfg.dbUser, cfg.dbPassword, cfg.dbName,
                                     cfg.dbConnectTimeoutSec, 5};
+    uint64_t firstInstanceId = 1;
     try {
         db::Connection conn(dbOpts);
         const auto applied = db::migrate(conn, cfg.migrationsDir);
         log::info("migrations done", {{"applied", applied.size()}});
+        // Above every saved id, so a relog never joins a new copy that took an old copy's id.
+        firstInstanceId = uint64_t{db::CharRepo(conn, cfg.realmId).max_instance_id()} + 1;
+        log::info("instance ids start", {{"firstInstanceId", firstInstanceId}});
     } catch (const std::exception& e) {
         log::error("startup failed: database/migrations", {{"error", e.what()}});
         return 1;
@@ -79,7 +89,7 @@ int main() {
                              Millis(cfg.jwksTimeoutMs)},
                             post);
         const size_t defCount = defs.defs.size();
-        GameServer server(io, cfg, maps, tls, dbWorker, tokens, std::move(defs.defs));
+        GameServer server(io, cfg, maps, tls, dbWorker, tokens, std::move(defs.defs), firstInstanceId);
         std::vector<std::string> luaErrors = std::move(defs.errors);
         // Also without LUA_ROOT: a GAME_STATE_MACHINES name then has no definition, which refuses the start.
         for (std::string& e : server.load_scripts()) luaErrors.push_back(std::move(e));

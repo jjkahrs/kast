@@ -57,10 +57,30 @@ void move_entity(entt::registry& from, entt::registry& to, entt::entity e, const
 
 std::pair<uint32_t, uint32_t> Shared::block() {
     std::lock_guard lk(mu_);
+    if (!ranges_.empty()) {
+        const auto range = ranges_.back();
+        ranges_.pop_back();
+        return range;
+    }
     constexpr uint32_t kIndices = entt::entt_traits<entt::entity>::entity_mask; // index tombstone excluded
     if (kIndices - next_ < kIdBlock) throw std::length_error("out of entity ids");
     next_ += kIdBlock;
     return {next_ - kIdBlock, next_};
+}
+
+void Shared::give_back(std::vector<entt::entity> freed, std::pair<uint32_t, uint32_t> a, std::pair<uint32_t, uint32_t> b) {
+    std::lock_guard lk(mu_);
+    freed_.insert(freed_.end(), freed.begin(), freed.end());
+    for (const auto& range : {a, b})
+        if (range.first != range.second) ranges_.push_back(range);
+}
+
+std::vector<entt::entity> Shared::take_freed() {
+    std::lock_guard lk(mu_);
+    const size_t n = std::min<size_t>(freed_.size(), kIdBlock);
+    std::vector<entt::entity> out(freed_.end() - std::ptrdiff_t(n), freed_.end());
+    freed_.resize(freed_.size() - n);
+    return out;
 }
 
 entt::entity IdPool::generate(Shared& shared) {
@@ -82,9 +102,10 @@ proto::Vec3 clamp_to_map(const Maps& maps, const MoveRules& rules, uint16_t map,
     return {x, std::clamp(*maps.ground(map, x, z), rules.minY, rules.maxY), z};
 }
 
-MapContext::MapContext(uint16_t map, const WorldRules& rules, const Maps& maps, Shared& shared, Send send,
-                       SendMany sendMany, Save save, lua::Defs defs, TimePoint now)
-    : map_(map), rules_(rules), maps_(maps), shared_(shared), out_(std::move(send)), outMany_(std::move(sendMany)),
+MapContext::MapContext(uint16_t map, uint32_t instance, std::optional<std::string> key, const WorldRules& rules,
+                       const Maps& maps, Shared& shared, Send send, SendMany sendMany, Save save, lua::Defs defs,
+                       TimePoint now)
+    : map_(map), instance_(instance), key_(std::move(key)), rules_(rules), maps_(maps), shared_(shared), out_(std::move(send)), outMany_(std::move(sendMany)),
       outSave_(std::move(save)),
       send_([this](uint32_t sid, const proto::Message& m) {
           if (!holding_) return out_(sid, m);
@@ -111,8 +132,12 @@ MapContext::MapContext(uint16_t map, const WorldRules& rules, const Maps& maps, 
             .map = [this](uint16_t id) { return maps_.by_id(id); },
             .ground = [this](uint16_t on, float x, float z) { return maps_.ground(on, x, z); },
             .path = [this](uint16_t on, proto::Vec3 from, proto::Vec3 to) { return maps_.nav().path(on, from, to); },
-            .transfer = [this](entt::entity e, uint16_t to, proto::Vec3 pos,
-                               float heading) { return request_transfer(e, {to, pos, heading}); },
+            .transfer = [this](entt::entity e, uint16_t to, proto::Vec3 pos, float heading,
+                               std::optional<std::string> key) { return request_transfer(e, {to, pos, heading}, std::move(key)); },
+            .instance = [this]() -> std::optional<lua::InstanceInfo> {
+                if (!instance_) return std::nullopt;
+                return lua::InstanceInfo{instance_, key_, map_};
+            },
             .spawn = [this](uint32_t record) { return spawner_.records.at(record).spawn; },
             .count = [this] { return npc_count(); },
             .post = [this](lua::Post post) { outbox_.posts.push_back(std::move(post)); },
@@ -128,7 +153,10 @@ MapContext::MapContext(uint16_t map, const WorldRules& rules, const Maps& maps, 
         }
     lua_.fsm().forward_game_machines(
         [this](const std::string& machine, const std::string& to) { outbox_.gameChanges.emplace_back(machine, to); });
-    log::debug("map context started", {{"map", map_}, {"name", maps_.info(map_).name}});
+    if (instance_)
+        log::info("instance created", {{"map", map_}, {"name", maps_.info(map_).name}, {"instance", instance_},
+                                       {"key", key_ ? nlohmann::json(*key_) : nlohmann::json()}});
+    else log::debug("map context started", {{"map", map_}, {"name", maps_.info(map_).name}});
 }
 
 std::vector<std::string> MapContext::load_scripts(const std::filesystem::path& luaRoot, std::vector<std::string> gameMachines,
@@ -190,7 +218,7 @@ entt::entity MapContext::spawn(uint32_t sessionId, const db::CharRow& row, proto
     reg_.emplace<SessionLink>(e, sessionId);
     reg_.emplace<CharacterRef>(e, row.id, row.name, row.options);
     reg_.emplace<Transform>(e, pos, heading);
-    reg_.emplace<MapRef>(e, map_);
+    reg_.emplace<MapRef>(e, map_, instance_);
     reg_.emplace<MoveState>(e, MoveBudget{0, now});
     reg_.emplace<PendingMoves>(e);
     reg_.emplace<PendingSay>(e);
@@ -227,7 +255,7 @@ void MapContext::despawn(entt::entity e) {
     const auto& tf = reg_.get<Transform>(e);
     if (const uint64_t dropped = reg_.get<ClientEventLimit>(e).dropped)
         log::info("client events dropped", {{"char", ch.charId}, {"count", dropped}});
-    save_({ch.charId, map_, tf.pos, tf.heading, lua::components_column(reg_, e, defs_)});
+    save_({ch.charId, map_, tf.pos, tf.heading, lua::components_column(reg_, e, defs_), instance_});
     leave_views(e);
     activation_leave(reg_, activation_, spawner_, grid_, e);
     grid_.remove(wire_id(e), reg_.get<AoiCell>(e).cell);
@@ -237,16 +265,48 @@ void MapContext::despawn(entt::entity e) {
 
 proto::Vec3 MapContext::clamp(proto::Vec3 pos) const { return clamp_to_map(maps_, rules_.move, map_, pos); }
 
-bool MapContext::request_transfer(entt::entity e, const Destination& to) {
+bool MapContext::request_transfer(entt::entity e, Destination to, std::optional<std::string> key) {
     if (!maps_.owns(to.map, map::tile_of(to.pos.x, to.pos.z))) {
         // ponytail: one process owns every tile; future = save + Redirect{host,port,ticket} to the owning process.
         log::warn("transfer refused: destination tile not owned by this process",
                   {{"entity", wire_id(e)}, {"map", to.map}, {"x", to.pos.x}, {"z", to.pos.z}});
         return false;
     }
-    if (to.map == map_) transfer(e, to);
-    else outbox_.transfers.emplace_back(e, to);
+    const bool instanced = maps_.info(to.map).instanced();
+    if (to.map == map_ && (!instanced || !key || key == key_)) {
+        transfer(e, to);
+        return true;
+    }
+    if (instanced) {
+        to.key = key ? std::move(key) : lua_.instance_key(e, to.map);
+        if (!reg_.valid(e)) return false; // the hook destroyed it
+        if (to.key && reg_.all_of<SessionLink>(e) && full(to.map, *to.key)) {
+            refuse_full(e, to.map, *to.key);
+            return false;
+        }
+    }
+    outbox_.transfers.emplace_back(e, std::move(to));
     return true;
+}
+
+size_t MapContext::npcs_here() const {
+    const auto* npcs = reg_.storage<Npc>(); // a const registry: null before the first NPC
+    return npcs ? npcs->size() : 0;
+}
+
+bool MapContext::full(uint16_t map, const std::string& key) const {
+    const auto max = maps_.info(map).maxPlayers;
+    const auto it = shared_.copies.find({map, key});
+    if (!max || it == shared_.copies.end()) return false; // no limit, or a new copy
+    size_t players = it->second.players;
+    for (const auto& [q, to] : outbox_.transfers)
+        players += to.map == map && to.key == key && reg_.valid(q) && reg_.all_of<SessionLink>(q);
+    return players >= *max;
+}
+
+void MapContext::refuse_full(entt::entity e, uint16_t map, const std::string& key) {
+    log::info("transfer refused: instance full", {{"entity", wire_id(e)}, {"map", map}, {"key", key}});
+    lua_.bus().publish("instance.full", {{"entity", wire_id(e)}, {"map", map}, {"key", key}}, "world");
 }
 
 void MapContext::transfer(entt::entity e, const Destination& to) {
@@ -305,7 +365,7 @@ void MapContext::depart(entt::entity e, const Destination& to) {
 }
 
 void MapContext::arrive(entt::entity e, const Destination& to) {
-    reg_.get<MapRef>(e).map = map_;
+    reg_.get<MapRef>(e) = {map_, instance_};
     reg_.get<Transform>(e) = {to.pos, to.heading};
     auto& cell = reg_.get<AoiCell>(e);
     cell.cell = grid_.cell_of(map_, to.pos.x, to.pos.z);
@@ -339,7 +399,7 @@ entt::entity MapContext::create_npc(std::string name, std::string templateName, 
     const auto e = create(id);
     reg_.emplace<Npc>(e, std::move(name), std::move(templateName), std::move(npc));
     reg_.emplace<Transform>(e, at, heading);
-    reg_.emplace<MapRef>(e, map_);
+    reg_.emplace<MapRef>(e, map_, instance_);
     const CellKey cell = grid_.cell_of(map_, at.x, at.z);
     reg_.emplace<AoiCell>(e, cell);
     reg_.emplace<Viewers>(e);
@@ -363,8 +423,9 @@ void MapContext::spawn_destroyed(uint32_t record) {
 
 void MapContext::destroy_npc(entt::entity e) {
     if (const auto* ref = reg_.try_get<SpawnRef>(e)) {
-        if (const uint16_t home = spawner_.records[ref->record].map; home == map_) spawn_destroyed(ref->record);
-        else outbox_.respawns.emplace_back(home, ref->record); // it came from another map: respawns there
+        const uint16_t home = spawner_.records[ref->record].map;
+        if (home == map_ && ref->instance == instance_) spawn_destroyed(ref->record);
+        else outbox_.respawns.emplace_back(home, ref->instance, ref->record); // from another context: respawns there
     }
     leave_views(e);
     grid_.remove(wire_id(e), reg_.get<AoiCell>(e).cell);
@@ -401,7 +462,7 @@ void MapContext::spawn_due(TimePoint now) {
         if (!def) throw std::logic_error("spawn \"" + s.id + "\": npc \"" + s.npc + "\" not loaded");
         return create_npc(def->name, def->templateName, proto::Vec3{s.pos[0], s.pos[1], s.pos[2]}, s.heading, def->name,
                           def->components); // fresh definition data on every respawn
-    });
+    }, instance_);
 }
 
 void MapContext::remove_npcs() {

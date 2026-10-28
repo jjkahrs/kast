@@ -80,6 +80,43 @@ describe('realms', () => {
     expect(rows[0]!.after).toEqual({ characterId: 11, reason: 'stuck', kicked: 1 });
   });
 
+  it('GMs and admins list the live map contexts and instance copies; refresh shows the change', async () => {
+    ctx.world.instances = [
+      { map: 1, mapName: 'Start', instance: 0, key: '', players: 3, npcs: 40, createdAtMs: 1_900_000_000_000, emptySinceMs: 0 },
+      { map: 6, mapName: 'Crypt', instance: 77, key: 'party-7', players: 0, npcs: 1, createdAtMs: 1_900_000_001_000, emptySinceMs: 1_900_000_002_000 },
+    ];
+    const gm = await ctx.login(GM);
+    expect((await gm.get(`/api/realms/${ctx.realmId}/instances`)).body.instances).toEqual([
+      {
+        mapId: 1,
+        mapName: 'Start',
+        instanceId: 0,
+        key: '',
+        players: 3,
+        npcs: 40,
+        createdAt: new Date(1_900_000_000_000).toISOString(),
+        emptySince: null,
+      },
+      {
+        mapId: 6,
+        mapName: 'Crypt',
+        instanceId: 77,
+        key: 'party-7',
+        players: 0,
+        npcs: 1,
+        createdAt: new Date(1_900_000_001_000).toISOString(),
+        emptySince: new Date(1_900_000_002_000).toISOString(),
+      },
+    ]);
+    ctx.world.instances.pop(); // the copy timed out
+    const admin = await ctx.login(ADMIN);
+    expect((await admin.get(`/api/realms/${ctx.realmId}/instances`)).body.instances.map((i: { mapId: number }) => i.mapId)).toEqual([1]);
+    const down = await ctx.addRealm('Down', 1);
+    expectError(await admin.get(`/api/realms/${down}/instances`), 503, 'realm_unreachable');
+    expectError(await admin.get('/api/realms/999/instances'), 404, 'realm_not_found');
+    expectError(await gm.get('/api/realms/x/instances'), 400, 'validation_error');
+  });
+
   it('online on a down realm is 503 realm_unreachable', async () => {
     const down = await ctx.addRealm('Down', 1);
     const admin = await ctx.login(ADMIN);

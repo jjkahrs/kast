@@ -4,7 +4,7 @@ import { realmUnreachable } from './errors.js';
 
 // World admin port protocol (docs/services/world/protocol.html#admin): TLS, frames of
 // u16 payloadLength, u16 opcode, payload (little-endian); str = u16 byte length + UTF-8 bytes.
-const PROTOCOL_VERSION = 9;
+const PROTOCOL_VERSION = 10; // the admin port's own (kAdminProtocolVersion): 10 added the instance list
 export const OP = {
   ping: 0x0003,
   pong: 0x0004,
@@ -15,6 +15,8 @@ export const OP = {
   online: 0x0301,
   kick: 0x0302,
   kicked: 0x0303,
+  instancesReq: 0x0304,
+  instances: 0x0305,
 } as const;
 
 export interface Endpoint {
@@ -32,6 +34,21 @@ export interface OnlineEntry {
   connectedAt: string;
 }
 
+/**
+ * A live map context on a world server: a world map's (instanceId 0, key '') or an instance copy's
+ * (docs/services/world/instances.html). emptySince: when an empty copy's timer started; null while it has players.
+ */
+export interface InstanceEntry {
+  mapId: number;
+  mapName: string;
+  instanceId: number;
+  key: string;
+  players: number;
+  npcs: number;
+  createdAt: string;
+  emptySince: string | null;
+}
+
 export type KickTarget = { accountId: number; characterId?: never } | { characterId: number; accountId?: never };
 
 export interface WorldAdminClient {
@@ -39,6 +56,8 @@ export interface WorldAdminClient {
   online(endpoint: Endpoint): Promise<OnlineEntry[]>;
   /** Returns how many sessions were disconnected. */
   kick(endpoint: Endpoint, target: KickTarget, reason: string): Promise<number>;
+  /** Every live map context, in map then instance order. */
+  instances(endpoint: Endpoint): Promise<InstanceEntry[]>;
 }
 
 export function encodeFrame(op: number, payload: Buffer = Buffer.alloc(0)): Buffer {
@@ -190,6 +209,38 @@ export function createWorldAdminClient(deps: {
               mapId: r.u16(),
               sessionId: r.u32(),
               connectedAt: new Date(r.u64()).toISOString(),
+            });
+          }
+          r.end();
+        }
+        return entries;
+      }),
+
+    instances: (endpoint) =>
+      withLink(endpoint, async (link) => {
+        link.send(OP.instancesReq);
+        const entries: InstanceEntry[] = [];
+        for (let more = true; more; ) {
+          const r = await link.recv(OP.instances);
+          more = r.u8() === 1;
+          for (let n = r.u16(); n > 0; n--) {
+            const mapId = r.u16();
+            const mapName = r.str();
+            const instanceId = r.u32();
+            const key = r.str();
+            const players = r.u32();
+            const npcs = r.u32();
+            const createdAt = new Date(r.u64()).toISOString();
+            const emptySinceMs = r.u64();
+            entries.push({
+              mapId,
+              mapName,
+              instanceId,
+              key,
+              players,
+              npcs,
+              createdAt,
+              emptySince: emptySinceMs ? new Date(emptySinceMs).toISOString() : null,
             });
           }
           r.end();

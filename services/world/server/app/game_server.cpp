@@ -5,7 +5,7 @@
 namespace kast {
 namespace {
 
-world::WorldRules world_rules(const Config& c) {
+world::WorldRules world_rules(const Config& c, uint64_t firstInstanceId) {
     world::WorldRules r;
     r.move = {c.maxSpeed, c.speedTolerance, c.moveBurstSec, c.minY, c.maxY, c.groundTolerance, c.maxAir, c.moveNavCheck};
     r.chat.maxBytes = c.chatMaxBytes;
@@ -20,6 +20,7 @@ world::WorldRules world_rules(const Config& c) {
     r.maxNpcs = c.maxNpcs;
     r.activationTiles = static_cast<int>(c.activationTiles);
     r.mapThreads = static_cast<int>(c.mapThreads);
+    r.firstInstanceId = firstInstanceId;
     return r;
 }
 
@@ -49,9 +50,9 @@ const char* role_name(proto::Role r) {
 } // namespace
 
 GameServer::GameServer(asio::io_context& io, const Config& cfg, const world::Maps& maps, asio::ssl::context& tls,
-                       db::DbWorker& db, TokenService& tokens, lua::Defs defs)
+                       db::DbWorker& db, TokenService& tokens, lua::Defs defs, uint64_t firstInstanceId)
     : io_(io), cfg_(cfg), maps_(maps), tls_(tls), db_(db), tokens_(tokens), limits_(session_limits(cfg)), acceptor_(io),
-      world_(world_rules(cfg), maps,
+      world_(world_rules(cfg, firstInstanceId), maps,
              [this](uint32_t sid, const proto::Message& m) {
                  if (auto* c = find(sid)) c->session->send(m);
              },
@@ -75,7 +76,8 @@ GameServer::GameServer(asio::io_context& io, const Config& cfg, const world::Map
         adminLimits.simLatency = adminLimits.simJitter = Millis(0); // the lag simulator is for game clients
         adminPort_ = std::make_unique<AdminPort>(
             io, tls, adminLimits, AdminPort::Options{cfg.adminHost, cfg.adminPort, cfg.adminSecret},
-            [this] { return admin_online(); }, [this](const proto::AdminKick& k) { return admin_kick(k); });
+            [this] { return admin_online(); }, [this](const proto::AdminKick& k) { return admin_kick(k); },
+            [this] { return admin_instances(); });
     }
     if (cfg.chatLinkHost.empty()) return;
     // The dev setup's chat service presents this server's own certificate (they share TLS_DEV_CERT_DIR).
@@ -350,6 +352,17 @@ std::vector<proto::AdminOnlineEntry> GameServer::admin_online() const {
         else
             out.push_back({c.accountId, 0, "", 0, id, static_cast<uint64_t>(ms)});
     }
+    return out;
+}
+
+std::vector<proto::AdminInstanceEntry> GameServer::admin_instances() const {
+    const auto ms = [](SysTime t) {
+        return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(t.time_since_epoch()).count());
+    };
+    std::vector<proto::AdminInstanceEntry> out;
+    for (const auto& c : world_.contexts())
+        out.push_back({c.map, maps_.info(c.map).name, c.instance, c.key.value_or(""), static_cast<uint32_t>(c.players),
+                       static_cast<uint32_t>(c.npcs), ms(c.createdAt), c.emptySince ? ms(*c.emptySince) : 0});
     return out;
 }
 

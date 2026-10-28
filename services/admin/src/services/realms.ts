@@ -4,7 +4,7 @@ import type { Clock } from '../clock.js';
 import { AppError, realmUnreachable } from '../errors.js';
 import { listRealmEndpoints, replaceRealmEndpoints, type RealmEndpoint } from '../repositories/realmEndpoints.js';
 import type { SessionContext } from './session.js';
-import type { KickTarget, OnlineEntry, WorldAdminClient } from '../worldAdmin.js';
+import type { InstanceEntry, KickTarget, OnlineEntry, WorldAdminClient } from '../worldAdmin.js';
 
 /** Auth's admin realm view. */
 export interface Realm extends RealmEndpoint {
@@ -65,6 +65,9 @@ export function createRealmService(deps: { auth: AuthClient; world: WorldAdminCl
 
     online: async (ctx: SessionContext, realmId: number): Promise<OnlineEntry[]> =>
       world.online(await endpoint(ctx, realmId)),
+
+    instances: async (ctx: SessionContext, realmId: number): Promise<InstanceEntry[]> =>
+      world.instances(await endpoint(ctx, realmId)),
 
     kick: async (ctx: SessionContext, realmId: number, target: KickTarget, reason: string): Promise<number> =>
       world.kick(await endpoint(ctx, realmId), target, reason),

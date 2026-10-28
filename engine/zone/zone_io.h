@@ -39,7 +39,8 @@ std::optional<ZoneDoc> load_map(const Project& project, const std::string& folde
 std::optional<ZoneDoc> new_map(const Project& project, const std::string& folder, const std::string& name, uint16_t id,
                                int width, int depth, std::string& err);
 
-// Every problem that would stop the world server loading this map; empty if none.
+// Every problem that would stop the world server loading this map (an instance map's exit checked against the
+// project's other maps); empty if none.
 std::vector<ZoneError> validate(const Project& project, const ZoneDoc& doc);
 
 // The files of tile t on disk (heights, spawn, objects and interactables files, navtile), project-relative: what

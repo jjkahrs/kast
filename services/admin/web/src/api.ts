@@ -80,6 +80,17 @@ export interface OnlineEntry {
   sessionId: number;
   connectedAt: string;
 }
+/** A live map context: a world map's (instanceId 0) or an instance copy's. */
+export interface InstanceEntry {
+  mapId: number;
+  mapName: string;
+  instanceId: number;
+  key: string;
+  players: number;
+  npcs: number;
+  createdAt: string;
+  emptySince: string | null;
+}
 export interface AuditEntry {
   id: number;
   actorAccountId: number;

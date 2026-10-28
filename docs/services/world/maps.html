@@ -9,7 +9,7 @@
 <body>
 <header class="top"><a class="brand" href="../../index.html">Kast Docs</a><nav><a href="../../editor/index.html">Editor</a><a href="../../engine/index.html">Engine</a><a href="../auth/index.html">Auth Server</a><a href="index.html">World Server</a><a href="../chat/index.html">Chat Server</a><a href="../admin/index.html">Admin App</a><a href="../../development/tests.html">Development</a></nav></header>
 <div class="layout">
-<nav class="side"><h2>World Server</h2><ul><li><a href="index.html">Overview</a></li><li><a href="setup.html">Setup and commands</a></li><li><a href="configuration.html">Configuration</a></li><li><a href="security.html">Security behaviour</a></li><li><a href="maps.html" class="active">Maps</a></li><li><a href="areas.html">Areas</a></li><li><a href="persistence.html">Persistence</a></li><li><a href="lua.html">Lua components and systems</a></li><li><a href="npcs.html">NPCs</a></li><li><a href="events.html">Events</a></li><li><a href="state-machines.html">State machines</a></li><li><a href="operations.html">Operations</a></li><li><a href="tests.html">Tests</a></li><li><a href="simplifications.html">Deliberate simplifications</a></li><li><a href="protocol.html">Protocol</a></li></ul></nav>
+<nav class="side"><h2>World Server</h2><ul><li><a href="index.html">Overview</a></li><li><a href="setup.html">Setup and commands</a></li><li><a href="configuration.html">Configuration</a></li><li><a href="security.html">Security behaviour</a></li><li><a href="maps.html" class="active">Maps</a></li><li><a href="areas.html">Areas</a></li><li><a href="instances.html">Instances</a></li><li><a href="persistence.html">Persistence</a></li><li><a href="lua.html">Lua components and systems</a></li><li><a href="npcs.html">NPCs</a></li><li><a href="events.html">Events</a></li><li><a href="state-machines.html">State machines</a></li><li><a href="operations.html">Operations</a></li><li><a href="tests.html">Tests</a></li><li><a href="simplifications.html">Deliberate simplifications</a></li><li><a href="protocol.html">Protocol</a></li></ul></nav>
 <main>
 <h1 id="maps">Maps</h1>
 <p>The world is a set of maps (continents, dungeons), all run by this one process. A map is seamless inside; maps are
@@ -29,6 +29,9 @@ joined only by transfers. Players and NPCs on different maps never see each othe
   &quot;material&quot;: &quot;materials/terrain_grass.mat&quot;,
   &quot;nav&quot;: {&quot;agentRadius&quot;: 0.4, &quot;agentHeight&quot;: 1.8, &quot;maxClimb&quot;: 0.5, &quot;maxSlopeDeg&quot;: 45, &quot;cellSize&quot;: 0.5} }
 </code></pre>
+<p>A map is a <em>world</em> map (the default: one context for everyone) or, with <code>"type": "instance"</code>, an
+<a href="instances.html">instance map</a>, run as one copy per instance key, with <code>maxPlayers</code>, <code>emptyTimeoutSec</code> and a required
+<code>exit</code>.</p>
 <ul>
 <li><strong>Tiles:</strong> a map is made of 256 m tiles; tile <code>(tx, tz)</code> = <code>(floor(x / 256), floor(z / 256))</code>, so x = 256 is tile 1.
   The map's origin is the corner of tile (0, 0). <code>tiles</code> lists inclusive rectangles <code>[x0, z0, x1, z1]</code>; the map is
@@ -36,17 +39,21 @@ joined only by transfers. Players and NPCs on different maps never see each othe
 <li><strong>Identity:</strong> <code>id</code> (0-65535) is what the database, the wire and Lua use. It must be unique across maps; the folder
   name only locates the files. <code>version</code> must be 1.</li>
 <li><strong>Required:</strong> <code>version</code>, <code>id</code>, <code>tiles</code> and <code>spawn.pos</code> (on a declared tile). <code>name</code>, <code>spawn.heading</code>, <code>heightRange</code>,
-  <code>material</code>, <code>terrainUv</code> (<code>"tiled"</code> or <code>"map"</code>; anything else fails the map) and <code>nav</code> are optional, and unknown keys
+  <code>material</code>, <code>terrainUv</code> (<code>"tiled"</code> or <code>"map"</code>; anything else fails the map), <code>nav</code> and <code>type</code> (<code>"world"</code> or <code>"instance"</code>, with the
+  <a href="instances.html#manifest">instance fields</a>, which on a world map fail it) are optional, and unknown keys
   (such as the editor Zone Builder's <code>terrainColors</code>) are ignored. The game client's terrain uses <code>heightRange</code>,
   <code>material</code>, <code>terrainUv</code> and <code>nav.maxSlopeDeg</code> (<a href="../../engine/terrain.html">Engine, Terrain</a>); the server uses <code>heightRange</code> and the heightmaps for the <a href="#ground">ground</a>. <code>map/heights.h</code> (heightmap decoding and the shared
   ground triangles) is part of <code>kast_map</code>, so the server build needs vcpkg's <code>stb</code>.</li>
 <li><strong>Startup:</strong> every map is loaded and logged (<code>maps loaded</code>). Any bad manifest (with the file and the problem, such as
-  <code>maps/cave/map.json: tiles[0]: x0 &lt;= x1 and z0 &lt;= z1 required</code>), a duplicate id, no maps, a missing <code>START_MAP</code>, a
+  <code>maps/cave/map.json: tiles[0]: x0 &lt;= x1 and z0 &lt;= z1 required</code>), a duplicate id, no maps, a missing <code>START_MAP</code> or one
+  that is an instance map, an instance map's <code>exit</code> off a loaded world map's tiles or in a portal there, a
   spawn y outside <code>MIN_Y</code>/<code>MAX_Y</code>, or a bad <a href="#objects">interactables</a> file refuses the start.</li>
 <li><strong>Bounds:</strong> a move onto a tile the map does not declare is rejected with <code>Correction</code>.</li>
 <li><strong>Characters:</strong> <code>characters.map_id</code> (<code>migrations/003_character_map.sql</code>) is saved with the position. On enter, a map
   that is no longer loaded, or a position no longer on its map, puts the character at <code>START_MAP</code>'s spawn (logged).
-  Rows from before the migration have <code>map_id</code> 0, read as <code>START_MAP</code> with their position kept.</li>
+  Rows from before the migration have <code>map_id</code> 0, read as <code>START_MAP</code> with their position kept. On an instance map,
+  <code>characters.instance_id</code> names the copy: a live one with room is rejoined, else the map's <code>exit</code>
+  (<a href="instances.html#relog">Instances</a>).</li>
 <li><strong>Transfers:</strong> <code>World::transfer(e, {map, pos, heading})</code> (and <code>kast.transfer</code> from Lua) is the only way to change map,
   for players and NPCs alike, and also teleports within a map. It moves the entity at once, resets a player's move
   budget and sends it <code>MapChange</code>, then <code>Despawn</code> for its old neighbours, who get its <code>Despawn</code>. The next interest pass
