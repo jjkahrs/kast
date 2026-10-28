@@ -412,7 +412,8 @@ local function equipStage()
     if phase == "arrive" and elapsed > 2 then
         if STAGE == "equip_tooltip" then
             kast.publish("bag.toggle")
-            phase, waitUntil = "shown", elapsed + 1.5
+            -- --sim-mouse moves 20 frames after HOVER: past 1.5 s at a Debug frame rate, so wait for the hover itself.
+            phase, waitUntil = "shown", elapsed + 10
             return log("HOVER")
         end
         if STAGE == "equip_persist" then
@@ -448,7 +449,7 @@ local function equipStage()
         phase = "done"
         log("after C, chat, C: %d character toggle(s), chat field '%s'", windowToggles, kast.gui.value("chat_input") or "?")
         shoot("keys")
-    elseif phase == "shown" and elapsed >= waitUntil then
+    elseif phase == "shown" and (elapsed >= waitUntil or STAGE == "equip_tooltip" and (kast.gui.hovered() or ""):find("^slot_2")) then
         phase = "done"
         log("hovered %s", tostring(kast.gui.hovered()))
         shoot(STAGE)
