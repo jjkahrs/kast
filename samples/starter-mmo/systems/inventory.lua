@@ -398,6 +398,17 @@ return {
         lastHit[e] = nil
     end,
 
+    -- Each map has its own Lua state (docs/services/world/maps.html#map-contexts): the time since the last hit goes
+    -- with the character (each map counts its own now).
+    onMapLeave = function(e)
+        local since = lastHit[e] and now - lastHit[e]
+        lastHit[e] = nil
+        return {sinceHit = since}
+    end,
+    onMapEnter = function(e, carried)
+        if carried and carried.sinceHit then lastHit[e] = now - carried.sinceHit end
+    end,
+
     update = function(dt)
         now = now + dt
         for npc, corpse in pairs(corpses) do

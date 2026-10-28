@@ -16,7 +16,9 @@ constexpr double kMaxExactInteger = 9007199254740992.0; // 2^53: Lua numbers are
 
 constexpr int kHookInstructions = 10000; // between clock checks
 using Clock = std::chrono::steady_clock;
-Clock::time_point g_deadline = Clock::time_point::max(); // ponytail: Lua runs on the tick thread only, one entry at a time
+// One per thread, shared by every Lua state (each map context has one): a thread enters one state at a time, and an
+// entry never reaches into another context's state, so the outermost entry's budget is the one that counts.
+thread_local Clock::time_point g_deadline = Clock::time_point::max();
 
 void watchdog(lua_State* L, lua_Debug*) {
     if (Clock::now() < g_deadline) return;

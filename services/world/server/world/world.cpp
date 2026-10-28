@@ -4,61 +4,80 @@
 
 #include <algorithm>
 #include <format>
+#include <set>
 #include <stdexcept>
 
 namespace kast::world {
 
-namespace {
-// Marks every replicated component e has, for component_replication_system to send (writers outside kast mark here).
-void mark_replicated(entt::registry& reg, entt::entity e, const lua::Defs& defs) {
-    for (const auto& def : defs)
-        if (def->replicate != lua::Replicate::none && lua::pool(reg, def->name).contains(e)) mark_dirty(reg, e, def->name);
-}
-} // namespace
-
 World::World(WorldRules rules, const Maps& maps, Send send, SendMany sendMany, Save save, lua::Defs defs)
-    : rules_(rules), maps_(maps), send_(std::move(send)), sendMany_(std::move(sendMany)), save_(std::move(save)), defs_(defs),
-      grid_(rules.cellSize, rules.viewRadius),
-      lua_(reg_, std::move(defs),
-           {.create = [this](std::string name, std::string templateName, std::optional<uint16_t> map,
-                             std::optional<proto::Vec3> pos, float heading, std::string npc, const lua::Json& components) {
-                return create_npc(std::move(name), std::move(templateName), map, pos, heading, std::move(npc), components);
-            },
-            .destroy = [this](entt::entity e) { destroy_npc(e); },
-            .clamp = [this](uint16_t map, proto::Vec3 pos) { return clamp_to_map(map, pos); },
-            .map = [this](uint16_t id) { return maps_.by_id(id); },
-            .ground = [this](uint16_t map, float x, float z) { return maps_.ground(map, x, z); },
-            .path = [this](uint16_t map, proto::Vec3 from, proto::Vec3 to) { return maps_.nav().path(map, from, to); },
-            .transfer = [this](entt::entity e, uint16_t map, proto::Vec3 pos,
-                               float heading) { return transfer(e, {map, pos, heading}); },
-            .spawn = [this](uint32_t record) { return spawner_.records.at(record).spawn; },
-            .max = rules.maxNpcs}) {
-    activation_.radius = rules.activationTiles;
-    for (const auto& [id, info] : maps_.all())
-        for (const map::Spawn& s : info.spawns) {
-            activation_.unloaded[Activation::key(id, map::tile_of(s.pos[0], s.pos[2]))].push_back(
-                uint32_t(spawner_.records.size()));
-            spawner_.records.push_back({id, &s});
-        }
+    : rules_(rules), maps_(maps), send_(std::move(send)), sendMany_(std::move(sendMany)), save_(std::move(save)),
+      defs_(std::move(defs)),
+      realm_(realmReg_, {},
+             {.create = {}, // the realm has no entities: nothing to create, destroy, transfer or spawn
+              .destroy = {},
+              .clamp = [this](uint16_t map, proto::Vec3 pos) { return clamp_to_map(map, pos); },
+              .map = [this](uint16_t id) { return maps_.by_id(id); },
+              .ground = [this](uint16_t map, float x, float z) { return maps_.ground(map, x, z); },
+              .path = [this](uint16_t map, proto::Vec3 from, proto::Vec3 to) { return maps_.nav().path(map, from, to); },
+              .transfer = {},
+              .spawn = {},
+              .count = [this] { return shared_.npcs; },
+              .post = [this](lua::Post post) { realmPosts_.push_back(std::move(post)); },
+              .max = rules.maxNpcs}) {
+    // Delivered on each map's bus at its next drain, as when every Lua system shared the game machines' bus.
+    realmChanged_ = realm_.bus().subscribe(lua::kStateChangedEvent, [this](const nlohmann::json& p) {
+        for (auto& [id, ctx] : contexts_) ctx->bus().publish(lua::kStateChangedEvent, p, "realm");
+    });
+    log::debug("realm context started");
+}
+
+World::~World() = default;
+
+MapContext& World::context(uint16_t map) {
+    if (auto it = contexts_.find(map); it != contexts_.end()) return *it->second;
+    MapContext& ctx = *contexts_
+                           .emplace(map, std::make_unique<MapContext>(map, rules_, maps_, shared_, send_, sendMany_,
+                                                                      save_, defs_, now_))
+                           .first->second;
+    if (luaRoot_) // the same files every context loaded: any error was a startup error already
+        for (const std::string& e : ctx.load_scripts(*luaRoot_, gameMachines_, realm_.fsm().game_states()))
+            log::error("Lua error", {{"map", map}, {"error", e}});
+    return ctx;
+}
+
+MapContext* World::find(entt::entity e) const {
+    for (const auto& [id, ctx] : contexts_)
+        if (ctx->registry().valid(e)) return ctx.get();
+    return nullptr;
 }
 
 std::vector<std::string> World::load_scripts(const std::filesystem::path& luaRoot, std::vector<std::string> gameMachines) {
-    std::vector<std::string> errors = lua_.load(luaRoot, std::move(gameMachines));
-    for (const SpawnRecord& r : spawner_.records)
-        if (!lua_.npc(r.spawn->npc))
-            errors.push_back(std::format("{}: spawn \"{}\": unknown npc \"{}\" (no definition in npcs/)", r.spawn->file,
-                                         r.spawn->id, r.spawn->npc));
-    return errors;
+    context(rules_.startMap); // created before luaRoot_ is set: loaded below with the others
+    luaRoot_ = luaRoot;
+    gameMachines_ = std::move(gameMachines);
+    std::vector<std::string> errors = realm_.load_game_machines(luaRoot, gameMachines_);
+    for (auto& [id, ctx] : contexts_)
+        for (std::string& e : ctx->load_scripts(luaRoot, gameMachines_, realm_.fsm().game_states()))
+            errors.push_back(std::move(e));
+    std::vector<std::string> unique; // every context reads the same files, and the realm the same fsms/
+    for (std::string& e : errors)
+        if (std::ranges::find(unique, e) == unique.end()) unique.push_back(std::move(e));
+    return unique;
 }
 
 void World::shutdown_scripts() {
-    const auto view = reg_.view<CharacterRef>();
-    for (const std::vector<entt::entity> chars(view.begin(), view.end()); entt::entity e : chars) {
-        lua_.leave(e);
-        reg_.emplace<ScriptsLeft>(e);
-    }
-    lua_.shutdown();
-    client_event_system(reg_, lua_.take_client_events(), send_, sendMany_); // before the despawns
+    for (auto& [id, ctx] : contexts_) ctx->shutdown_scripts();
+    realm_.shutdown();
+    serial(false); // the broadcasts reach the other maps' players before the despawns
+}
+
+std::vector<lua::SystemStatus> World::script_status() const {
+    std::vector<lua::SystemStatus> merged = context(rules_.startMap).script_status();
+    for (const auto& [id, ctx] : contexts_)
+        for (const lua::SystemStatus& s : ctx->script_status())
+            for (lua::SystemStatus& m : merged)
+                if (m.path == s.path && m.ok && !s.ok) m = s;
+    return merged;
 }
 
 entt::entity World::spawn(uint32_t sessionId, const db::CharRow& row, TimePoint now) {
@@ -77,218 +96,153 @@ entt::entity World::spawn(uint32_t sessionId, const db::CharRow& row, TimePoint 
     if (const float ground = *maps_.ground(map, pos.x, pos.z); pos.y < ground - rules_.move.groundTolerance)
         pos.y = ground; // saved under the ground (heights edited since): onto it
     pos.y = std::clamp(pos.y, rules_.move.minY, rules_.move.maxY);
-
-    const auto e = reg_.create();
-    reg_.emplace<SessionLink>(e, sessionId);
-    reg_.emplace<CharacterRef>(e, row.id, row.name, row.options);
-    reg_.emplace<Transform>(e, pos, heading);
-    reg_.emplace<MapRef>(e, map);
-    reg_.emplace<MoveState>(e, MoveBudget{0, now});
-    reg_.emplace<PendingMoves>(e);
-    reg_.emplace<PendingSay>(e);
-    reg_.emplace<ChatLimit>(e, WindowLimiter(rules_.chatRateCount, rules_.chatRateWindow));
-    reg_.emplace<PendingClientEvents>(e);
-    reg_.emplace<ClientEventLimit>(e, WindowLimiter(rules_.clientEventRateCount, rules_.clientEventRateWindow));
-    reg_.emplace<PendingInteracts>(e);
-    const CellKey cell = grid_.cell_of(map, pos.x, pos.z);
-    reg_.emplace<AoiCell>(e, cell);
-    reg_.emplace<Visible>(e);
-    reg_.emplace<SaveTimer>(e, now);
-    reg_.emplace<ReplicatedState>(e);
-    grid_.insert(wire_id(e), cell);
-    set_area(reg_, maps_, lua_.bus(), e);
-    ++population_;
-    send_(sessionId, proto::EnterWorldOk{wire_id(e), map, pos, heading});
-    activation_enter(reg_, activation_, spawner_, grid_, e);
-    spawn_due(now);
-    lua::restore_components(reg_, e, defs_, row.components, [&](const std::string& fix) {
-        log::warn("persisted component fixed on load", {{"char", row.id}, {"fix", fix}});
-    });
-    mark_replicated(reg_, e, defs_);
-    lua_.enter(e);
+    const entt::entity e = context(map).spawn(sessionId, row, pos, heading, now);
+    serial(false);
     return e;
 }
 
 void World::despawn(entt::entity e) {
-    if (!reg_.valid(e)) return;
-    if (!reg_.all_of<ScriptsLeft>(e)) {
-        lua_.leave(e);
-        client_event_system(reg_, lua_.take_client_events(), send_, sendMany_); // before the Despawn, while e can still be seen
+    if (MapContext* ctx = find(e)) {
+        ctx->despawn(e);
+        serial(false);
     }
-    const auto& ch = reg_.get<CharacterRef>(e);
-    const auto& tf = reg_.get<Transform>(e);
-    if (const uint64_t dropped = reg_.get<ClientEventLimit>(e).dropped)
-        log::info("client events dropped", {{"char", ch.charId}, {"count", dropped}});
-    save_({ch.charId, reg_.get<MapRef>(e).map, tf.pos, tf.heading, lua::components_column(reg_, e, defs_)});
-    leave_views(e);
-    activation_leave(reg_, activation_, spawner_, grid_, e);
-    grid_.remove(wire_id(e), reg_.get<AoiCell>(e).cell);
-    reg_.destroy(e);
-    --population_;
-}
-
-proto::Vec3 World::clamp_to_map(uint16_t map, proto::Vec3 pos) const {
-    const auto [x, z] = maps_.info(map).clamp(pos.x, pos.z);
-    // ponytail: no flying NPCs; add a flag when one exists
-    return {x, std::clamp(*maps_.ground(map, x, z), rules_.move.minY, rules_.move.maxY), z};
-}
-
-bool World::transfer(entt::entity e, const Destination& to) {
-    const uint32_t id = wire_id(e);
-    if (!maps_.owns(to.map, map::tile_of(to.pos.x, to.pos.z))) {
-        // ponytail: one process owns every tile; future = save + Redirect{host,port,ticket} to the owning process.
-        log::warn("transfer refused: destination tile not owned by this process",
-                  {{"entity", id}, {"map", to.map}, {"x", to.pos.x}, {"z", to.pos.z}});
-        return false;
-    }
-    const proto::Vec3 pos = clamp_to_map(to.map, to.pos); // owned, so on the map: only y changes, onto the ground
-    reg_.get<MapRef>(e).map = to.map;
-    reg_.get<Transform>(e) = {pos, to.heading};
-    auto& cell = reg_.get<AoiCell>(e);
-    grid_.remove(id, cell.cell);
-    cell.cell = grid_.cell_of(to.map, pos.x, pos.z);
-    grid_.insert(id, cell.cell);
-    activation_move(reg_, activation_, spawner_, grid_, e);
-    // Moves in flight from the old place are of the old epoch: dropped without a Correction (MapChange tells the new one).
-    uint32_t epoch = 0;
-    if (auto* ms = reg_.try_get<MoveState>(e)) {
-        ms->budget = {0, now_};
-        epoch = ++ms->epoch;
-    }
-    reg_.remove<Moved>(e); // a move this tick must not reach the new neighbours in an EntityMoves
-    // Out of every view at once, both ways: the mover gets MapChange, then a Despawn per old neighbour; they get its
-    // Despawn. The next aoi pass sends Spawns for whoever is in range now, on the new map or (a teleport within
-    // the map) the same neighbours again at the new position. No Moved: no EntityMoves may show anyone where it went.
-    if (const auto* link = reg_.try_get<SessionLink>(e)) {
-        reg_.emplace_or_replace<Dirty>(e);
-        send_(link->sessionId, proto::MapChange{to.map, pos, to.heading, epoch});
-        for (uint32_t other : reg_.get<Visible>(e).ids) send_(link->sessionId, proto::Despawn{other});
-        set_area(reg_, maps_, lua_.bus(), e);
-    }
-    leave_views(e);
-    return true;
 }
 
 entt::entity World::create_npc(std::string name, std::string templateName, std::optional<uint16_t> map,
                                std::optional<proto::Vec3> pos, float heading, std::string npc,
                                const lua::Json& components) {
-    const auto& info = maps_.info(map.value_or(rules_.startMap));
-    const proto::Vec3 at = clamp_to_map(info.id, pos.value_or(proto::Vec3{info.spawn[0], info.spawn[1], info.spawn[2]}));
-    const auto e = reg_.create();
-    reg_.emplace<Npc>(e, std::move(name), std::move(templateName), std::move(npc));
-    reg_.emplace<Transform>(e, at, heading);
-    reg_.emplace<MapRef>(e, info.id);
-    const CellKey cell = grid_.cell_of(info.id, at.x, at.z);
-    reg_.emplace<AoiCell>(e, cell);
-    reg_.emplace<Viewers>(e);
-    reg_.emplace<ReplicatedState>(e);
-    grid_.insert(wire_id(e), cell);
-    activation_enter(reg_, activation_, spawner_, grid_, e);
-    for (const auto& [type, value] : components.items()) lua::pool(reg_, type).emplace(e, lua::ComponentData{value});
-    mark_replicated(reg_, e, defs_);
-    if (components.contains(lua::kStateMachineComponent)) lua_.fsm().syncEntity(e); // as kast.add + kast.set would
+    const entt::entity e = context(map.value_or(rules_.startMap))
+                               .create_npc(std::move(name), std::move(templateName), pos, heading, std::move(npc),
+                                           components);
+    serial(false);
     return e;
 }
 
 void World::destroy_npc(entt::entity e) {
-    if (const auto* ref = reg_.try_get<SpawnRef>(e)) {
-        SpawnRecord& r = spawner_.records[ref->record];
-        r.alive = false;
-        r.respawnAt = r.spawn->respawnSec < 0
-                          ? TimePoint::max()
-                          : now_ + std::chrono::duration_cast<TimePoint::duration>(std::chrono::duration<double>(r.spawn->respawnSec));
-        if (r.spawn->respawnSec >= 0) spawner_.pending.push_back(ref->record);
+    if (MapContext* ctx = find(e)) {
+        ctx->destroy_npc(e);
+        serial(false);
     }
-    leave_views(e);
-    grid_.remove(wire_id(e), reg_.get<AoiCell>(e).cell);
-    reg_.destroy(e);
-}
-
-void World::leave_views(entt::entity e) {
-    const uint32_t id = wire_id(e);
-    const auto unsee = [&](uint32_t viewer) { // a player that saw e
-        auto& vis = reg_.get<Visible>(entt::entity{viewer});
-        erase_sorted(vis.ids, id);
-        erase_sorted(vis.entered, id); // gone in the tick it came into view: no component full set either
-        send_(reg_.get<SessionLink>(entt::entity{viewer}).sessionId, proto::Despawn{id});
-    };
-    if (auto* viewers = reg_.try_get<Viewers>(e)) { // an NPC
-        for (uint32_t viewer : viewers->ids) unsee(viewer);
-        viewers->ids.clear();
-        return;
-    }
-    auto& vis = reg_.get<Visible>(e); // a player: range is symmetric, so the players it sees see it
-    for (uint32_t other : vis.ids) {
-        if (auto* viewers = reg_.try_get<Viewers>(entt::entity{other})) erase_sorted(viewers->ids, id); // an NPC it saw
-        else unsee(other);
-    }
-    vis.ids.clear();
-    vis.entered.clear();
-}
-
-void World::spawn_due(TimePoint now) {
-    spawner_system(reg_, spawner_, rules_.maxNpcs, now, [this](const SpawnRecord& r) {
-        const auto& s = *r.spawn;
-        const lua::NpcDef* def = lua_.npc(s.npc); // load_scripts refused the start without one
-        if (!def) throw std::logic_error("spawn \"" + s.id + "\": npc \"" + s.npc + "\" not loaded");
-        return create_npc(def->name, def->templateName, r.map, proto::Vec3{s.pos[0], s.pos[1], s.pos[2]}, s.heading,
-                          def->name, def->components); // fresh definition data on every respawn
-    });
 }
 
 void World::remove_npcs() {
-    const auto view = reg_.view<Npc>();
-    for (const std::vector<entt::entity> npcs(view.begin(), view.end()); entt::entity e : npcs) destroy_npc(e);
+    for (auto& [id, ctx] : contexts_) ctx->remove_npcs();
+}
+
+bool World::transfer(entt::entity e, const Destination& to) {
+    const bool moved = move_to(e, to);
+    serial(false);
+    return moved;
+}
+
+bool World::move_to(entt::entity e, const Destination& to) {
+    MapContext* from = find(e);
+    if (!from) return false;
+    if (!maps_.owns(to.map, map::tile_of(to.pos.x, to.pos.z))) {
+        // ponytail: one process owns every tile; future = save + Redirect{host,port,ticket} to the owning process.
+        log::warn("transfer refused: destination tile not owned by this process",
+                  {{"entity", wire_id(e)}, {"map", to.map}, {"x", to.pos.x}, {"z", to.pos.z}});
+        return false;
+    }
+    if (to.map == from->map()) {
+        from->transfer(e, to);
+        return true;
+    }
+    MapContext& dest = context(to.map);
+    const lua::Carried carried = from->leave_map(e);
+    if (!from->registry().valid(e)) return false; // onMapLeave destroyed it
+    const Destination at{to.map, clamp_to_map(to.map, to.pos), to.heading}; // owned, so on the map: y onto the ground
+    from->depart(e, at);
+    move_entity(from->registry(), dest.registry(), e, defs_);
+    dest.arrive(e, at);
+    dest.enter_map(e, carried);
+    return true;
+}
+
+void World::serial(bool endOfTick) {
+    std::vector<std::pair<uint16_t, MapContext::Outbox>> boxes; // taken first: what this work queues waits for the next
+    for (auto& [id, ctx] : contexts_)
+        if (MapContext::Outbox box = ctx->take_outbox(); !box.empty()) boxes.emplace_back(id, std::move(box));
+    // Every context reads the same mirror, so the same change from several of them is one intent: applied once.
+    std::set<std::pair<std::string, std::string>> gameChanges;
+    for (auto& [from, box] : boxes) {
+        for (const auto& [e, to] : box.transfers) move_to(e, to); // e may be gone since (logged out, destroyed)
+        for (MapContext::Create& c : box.creates)
+            context(c.map).create_npc(std::move(c.name), std::move(c.templateName), c.pos, c.heading, std::move(c.npc),
+                                      c.components, c.id);
+        for (const auto& [map, record] : box.respawns) context(map).spawn_destroyed(record);
+        for (const auto& [machine, to] : box.gameChanges) {
+            if (!gameChanges.emplace(machine, to).second) continue;
+            try {
+                realm_.fsm().change(machine, to); // checked against the mirror; the realm warns if no longer allowed
+            } catch (const std::exception& ex) {
+                log::warn(std::format("Game machine change to \"{}\" skipped: {}", to, ex.what()));
+            }
+        }
+        for (const auto& [id, ctx] : contexts_)
+            if (id != from && !box.broadcasts.empty()) ctx->send_client_events(box.broadcasts);
+        for (lua::Post& post : box.posts) posts_.emplace_back(from, std::move(post));
+    }
+    if (std::vector<lua::ClientEvent> events = realm_.take_client_events(); !events.empty())
+        for (auto& [id, ctx] : contexts_) ctx->send_client_events(events); // each context sends to its own players
+    for (lua::Post& post : std::exchange(realmPosts_, {})) posts_.emplace_back("realm", std::move(post));
+    if (endOfTick)
+        for (const auto& [from, post] : std::exchange(posts_, {})) deliver(from, post);
+    for (auto& [id, ctx] : contexts_) ctx->mirror_game_machines(realm_.fsm().game_states());
+}
+
+void World::deliver(const nlohmann::json& from, const lua::Post& post) {
+    const nlohmann::json payload{{"from", from}, {"data", post.data}};
+    const std::string publisher = from.is_string() ? "realm" : "map " + from.dump();
+    switch (post.to) {
+    case lua::Post::To::map: context(post.map).bus().publish(post.event, payload, publisher); break;
+    case lua::Post::To::realm: realm_.bus().publish(post.event, payload, publisher); break;
+    case lua::Post::To::all:
+        for (auto& [id, ctx] : contexts_) ctx->bus().publish(post.event, payload, publisher);
+        realm_.bus().publish(post.event, payload, publisher);
+        break;
+    }
 }
 
 void World::push_move(entt::entity e, const proto::Move& m) {
-    if (reg_.valid(e)) reg_.get<PendingMoves>(e).moves.push_back(m);
+    if (MapContext* ctx = find(e)) ctx->push_move(e, m);
 }
 
-uint16_t World::map_of(entt::entity e) const { return reg_.get<MapRef>(e).map; }
-
 void World::push_say(entt::entity e, proto::Say say) {
-    if (reg_.valid(e)) reg_.get<PendingSay>(e).says.push_back(std::move(say));
+    if (MapContext* ctx = find(e)) ctx->push_say(e, std::move(say));
 }
 
 void World::push_client_event(entt::entity e, std::string name, nlohmann::json data, uint32_t requestId) {
-    if (reg_.valid(e)) reg_.get<PendingClientEvents>(e).events.push_back({std::move(name), std::move(data), requestId});
+    if (MapContext* ctx = find(e)) ctx->push_client_event(e, std::move(name), std::move(data), requestId);
 }
 
 void World::push_interact(entt::entity e, uint32_t objectId) {
-    if (reg_.valid(e)) reg_.get<PendingInteracts>(e).objectIds.push_back(objectId);
+    if (MapContext* ctx = find(e)) ctx->push_interact(e, objectId);
 }
 
-// area runs right after movement: a player who walked into a portal is transferred before aoi, so this tick's view
-// diff already sends the Spawns on the new map (MapChange and the old Despawns went out in transfer).
-// The spawner runs right before Lua, so a system's update already sees (and can move) the NPCs due this tick; like the
-// ones Lua creates, players get their Spawn in the next tick's aoi diff.
-// Activation runs once, after Lua's NPC moves are re-bucketed: every player and NPC that changed tile this tick (a
-// tile loading now has its NPCs spawned by the next tick's spawner). Transfers and logins activate at once.
-// Lua runs after movement and chat (it sees this tick's positions) and before replication and save (its changes go
-// out and get saved this tick). aoi stays before both replications, so a Spawn always precedes component data; the
-// NPCs Lua creates or moves out of a view show up in the next tick's aoi diff. The events Lua published are delivered
-// right after update; client events go out after component replication, so a client already has the Spawn and the
-// latest component values they may refer to.
+uint16_t World::map_of(entt::entity e) const { return find(e)->map(); }
+
+size_t World::population() const {
+    size_t n = 0;
+    for (const auto& [id, ctx] : contexts_) n += ctx->population();
+    return n;
+}
+
+// The contexts run one after another, each step for every context before the next step, with a serial point between
+// (the parallel map update, phase 3, runs each step's contexts on worker threads instead):
+// - the realm's bus first: C++ subscribers, and the game machines' fsm.changed for every map's drain this tick;
+// - movement and areas: a portal onto another map is queued, and moved at the serial point right after, so the
+//   destination's aoi pass sends its Spawns this tick (and its area events reach both buses this tick);
+// - the rest of the tick (MapContext::tick_rest), in which Lua's kast.transfer, kast.create and game machine changes
+//   reaching past its map are queued for the serial point at the end of the tick, and kast.world.post for the next.
 void World::tick(TimePoint now) {
     now_ = now;
-    movement_system(reg_, rules_.move, maps_, send_, now);
-    for (const auto& [e, portal] : area_system(reg_, maps_, lua_.bus()))
-        transfer(e, {portal.map, {portal.pos[0], portal.pos[1], portal.pos[2]}, portal.heading});
-    aoi_system(reg_, grid_, send_);
-    chat_system(reg_, rules_.chat, mutes_, send_, sendMany_, now, std::chrono::system_clock::now());
-    client_event_in_system(reg_, lua_.bus(), now); // delivered by the drain after this tick's Lua update
-    interact_system(reg_, maps_, lua_.bus());      // likewise
-    spawn_due(now);
-    lua_.update(rules_.tickSeconds);
-    lua_.drain_events();
-    aoi_rebucket(reg_, grid_); // NPCs Lua moved: in their new cell for the next tick's view diff
-    activation_system(reg_, activation_, spawner_, grid_);
-    replication_system(reg_, send_);
-    component_replication_system(reg_, defs_, send_, sendMany_);
-    client_event_system(reg_, lua_.take_client_events(), send_, sendMany_);
-    save_system(reg_, defs_, save_, rules_.saveInterval, now);
-    end_of_tick_system(reg_);
+    realm_.drain_events();
+    serial(false); // work C++ calls queued since the last tick
+    for (auto& [id, ctx] : contexts_) ctx->tick_move(now);
+    serial(false);
+    for (auto& [id, ctx] : contexts_) ctx->tick_rest(now, mutes_);
+    serial(true);
 }
 
 } // namespace kast::world

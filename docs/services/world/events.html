@@ -12,10 +12,16 @@
 <nav class="side"><h2>World Server</h2><ul><li><a href="index.html">Overview</a></li><li><a href="setup.html">Setup and commands</a></li><li><a href="configuration.html">Configuration</a></li><li><a href="security.html">Security behaviour</a></li><li><a href="maps.html">Maps</a></li><li><a href="areas.html">Areas</a></li><li><a href="persistence.html">Persistence</a></li><li><a href="lua.html">Lua components and systems</a></li><li><a href="npcs.html">NPCs</a></li><li><a href="events.html" class="active">Events</a></li><li><a href="state-machines.html">State machines</a></li><li><a href="operations.html">Operations</a></li><li><a href="tests.html">Tests</a></li><li><a href="simplifications.html">Deliberate simplifications</a></li><li><a href="protocol.html">Protocol</a></li></ul></nav>
 <main>
 <h1 id="events">Events</h1>
-<p>The server has one event bus with the engine's API and rules (<a href="../../engine/events.html">Engine, Events</a>). Systems use it to talk to each
-other, and server C++ can publish and subscribe through <code>World::bus()</code>. Events never reach clients on their own: only
-the three send functions put anything on the network.</p>
+<p>Each <a href="maps.html#map-contexts">map context</a> has its own event bus, with the engine's API and rules (<a href="../../engine/events.html">Engine, Events</a>), and so
+does the realm context. Systems use their map's to talk to each other, and server C++ can publish and subscribe through
+<code>World::bus(map)</code> (<code>World::bus()</code>: <code>START_MAP</code>'s) and <code>World::realm_bus()</code>. Events never reach clients on their own:
+only the three send functions put anything on the network.</p>
 <ul>
+<li><strong>Between maps:</strong> <code>kast.publish</code> reaches only its own map's subscribers. <code>kast.world.post(target, event, data)</code>
+  (<a href="lua.html#post">Lua</a>) reaches another map's bus, the realm's (<code>"realm"</code>) or every running context's (<code>"all"</code>): it is
+  published there at the end of the tick and delivered at the next tick's drain, in post order, with the payload
+  <code>{from = &lt;map id or "realm"&gt;, data}</code>. The game machines' <code>fsm.changed</code> and a portal's <code>area.leave</code> / <code>area.enter</code>
+  go on the buses of the maps concerned (<a href="maps.html#map-contexts">Map contexts</a>).</li>
 <li><strong>Delivery:</strong> <code>kast.publish</code> only queues. The queue is drained once per tick, right after every system's <code>update</code>
   (step 6 below). Events are delivered in publish order, and each event's subscribers run in subscription order, C++
   and Lua alike. Events published during the drain (by a subscriber), or from <code>init</code>, <code>onEnter</code> or <code>onLeave</code>, wait for
@@ -35,7 +41,9 @@ the three send functions put anything on the network.</p>
   the <code>Spawn</code> and the latest component values. Sends from <code>onLeave</code> go out at the despawn, before that character's
   <code>Despawn</code>; sends from <code>onEnter</code> go out on the next tick.</li>
 <li><strong>Targets:</strong> a bad id (not a whole number from 0 to 2^32-1) raises <code>kast.sendTo: invalid entity id &lt;value&gt;</code>. A
-  valid id whose character or NPC is not in the world when the events go out (it left meanwhile) sends nothing.</li>
+  valid id whose character or NPC is not in the world when the events go out (it left meanwhile) sends nothing, and
+  so does one on another map: <code>kast.sendTo</code>, <code>sendNearby</code> and <code>reply</code> reach the sender's map only. <code>kast.broadcast</code>
+  reaches every map: its own map's players in call order, the other maps' at the end of the tick.</li>
 <li><strong>Size:</strong> an event whose frame would pass 65535 bytes raises <code>kast.sendTo: event "&lt;name&gt;" is too large to send</code> at
   the call.</li>
 </ul>

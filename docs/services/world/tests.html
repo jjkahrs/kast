@@ -36,6 +36,21 @@
   nothing spawns twice; <code>kast.create</code> NPCs sleep, and wake when moved onto a near tile; a logout puts the tiles to sleep;
   <code>ACTIVATION_TILES</code> 2 loads tiles two off. <code>checkConfig</code> refuses <code>ACTIVATION_TILES</code> 0, -1, abc, 1.5 and 33. Checks written for
   always-on spawns put a watcher player on every spawn spot first (<code>watch_spawns</code>).</li>
+<li><strong>Map contexts</strong> (<code>lua_checks.cpp</code>; <a href="maps.html#map-contexts">Map contexts</a>): <code>checkMapContexts</code> on three maps: the realm's and
+  <code>START_MAP</code>'s contexts start with the scripts and the others on first use, each with a <code>map context started</code> debug line;
+  the game machine enters once (in the realm) however many map contexts load <code>fsms/</code>; each map runs its own copy of a system;
+  each map's NPCs are in its own registry; 1,000 NPCs created and destroyed in each of the three contexts, twice, have 3,000
+  different ids, each valid in exactly one context; the Spawns a player gets carry them, each once; an NPC moved to another map
+  keeps its id. <code>checkWorldPost</code>: <code>kast.world.post</code> to a map id, <code>"realm"</code> and <code>"all"</code> is delivered on the next tick
+  only, in post order per bus, as <code>{from = 1, data}</code> (a C++ subscriber on the realm's bus, a Lua one on each map's); a game
+  machine's callback posting from the realm gives <code>from = "realm"</code>; a bad target (9, 1.5, a string, nil), a bad event name and
+  bad data (infinity, a cycle) raise. <code>checkStarterMmoMapCrossing</code> (the starter-mmo sample plus a probe system): a Warrior with
+  a bag, an active quest and Shield Wall up walks Meadow → Cavern → Meadow through the gates; on each crossing
+  <code>onMapLeave</code> runs once on the map left and <code>onMapEnter</code> once on the map entered, with what <code>onMapLeave</code>
+  returned; every Lua component is the same; <code>MapChange</code> comes before the Despawns and Spawns, all in the portal tick; the
+  watchers on both maps see the same wire id; Shield Wall is still cooling down on both maps and its buff fades in the Cavern;
+  a Bat killed there counts for the quest. The checks that read an entity on another map use that map's registry
+  (<code>World::registry(map)</code>, <code>registry_of(e)</code>) and bus; game machines are driven through <code>World::realm_fsm()</code>.</li>
 <li><strong>Activation cost</strong> (ctest <code>activation_bench</code>, <code>world_self_check --activation-bench</code>): the median <code>World::tick</code> over 200
   ticks (after 50 to warm up) on the injected clock, the sample <code>lua/</code> running, 100 idle players on one tile of a 32&times;32
   tile map, (a) alone and (b) with 10,000 patrolling spawn-file Guards on 100 tiles 9 or more tiles away. Before (b) a

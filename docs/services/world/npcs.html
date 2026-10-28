@@ -29,8 +29,10 @@ kast.destroy(guard)                                                 -- Despawn t
   <code>template</code> (non-empty, at most 255 bytes; no components); both or neither raises (<code>kast.create: opts needs exactly
   one of npc (an npcs/ definition) and template</code>), as does an unknown <code>npc</code>. <code>components</code> has a definition's
   <code>components</code> shape and is merged per field over the definition's data (or over the field defaults with <code>template</code>),
-  with the same checks (<code>kast.create: "Health": "current" must be &gt;= 0</code>). <code>map</code> defaults to <code>START_MAP</code> and must be a
-  loaded map's id. <code>position</code> (<code>{x, y, z}</code>, finite numbers) defaults to that
+  with the same checks (<code>kast.create: "Health": "current" must be &gt;= 0</code>). <code>map</code> defaults to the map of the context the
+  system runs in (<a href="maps.html#map-contexts">Map contexts</a>; <code>World::create_npc</code> from C++: <code>START_MAP</code>) and must be a loaded
+  map's id. On another map the NPC is created there at the end of the tick: its id is returned now, but it is not in this
+  context. <code>MAX_NPCS</code> counts every map's NPCs. <code>position</code> (<code>{x, y, z}</code>, finite numbers) defaults to that
   map's spawn point and <code>heading</code> (radians) to 0. A position off the map is clamped to the nearest point on a declared
   tile, and y is the <a href="maps.html#ground">ground</a> there (no flying NPCs). Any other key in <code>opts</code>, a bad value, or <code>MAX_NPCS</code> NPCs
   already in the world raises an error at the call and creates nothing. It works from <code>init</code> on; the components are

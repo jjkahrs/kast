@@ -1,8 +1,9 @@
-// Server Lua systems: LUA_ROOT/systems/*.lua, run in alphabetical filename order on the tick thread, one Lua state,
-// each file in its own sandboxed environment. A file returns { init?, update(dt), shutdown?, onEnter?(e), onLeave?(e),
+// Server Lua systems: LUA_ROOT/systems/*.lua, run in alphabetical filename order on the tick thread, one Lua state per
+// map context (and one for the realm's game machines), each file in its own sandboxed environment. A file returns
+// { init?, update(dt), shutdown?, onEnter?(e), onLeave?(e), onMapLeave?(e), onMapEnter?(e, carried),
 // validateCharacter?(name, options) }
-// and reaches the world only through kast.* over the registry, the event bus and the state machines (docs/services/world/lua.html).
-// sol2 stays inside runtime.cpp: World holds a Runtime without seeing Lua types.
+// and reaches the world only through kast.* over its context's registry, event bus and state machines
+// (docs/services/world/lua.html). sol2 stays inside runtime.cpp: World holds a Runtime without seeing Lua types.
 #pragma once
 #include "components.h"
 #include "event_bus.h"
@@ -50,20 +51,37 @@ struct NpcDef {
 };
 using NpcDefs = std::map<std::string, NpcDef, std::less<>>; // by name
 
+// A kast.world.post(target, event, data), checked: for the event bus of one map's context, the realm's, or every
+// running context's.
+struct Post {
+    enum class To { map, realm, all };
+    To to = To::map;
+    uint16_t map = 0; // To::map: a loaded map
+    std::string event;
+    nlohmann::json data;
+};
+
+// What each system's onMapLeave returned (plain data), by system path, for its onMapEnter in the next context.
+using Carried = std::map<std::string, nlohmann::json>;
+
 // How kast.create / kast.destroy / kast.transfer / an NPC Transform set reach the world, which owns the maps, the AOI
 // grid and the sends.
 // Runtime checks every argument first; these only run for valid ones.
 struct NpcHooks {
     std::function<entt::entity(std::string name, std::string templateName, std::optional<uint16_t> map,
                                std::optional<proto::Vec3> pos, float heading, std::string npc, const Json& components)>
-        create; // map empty: START_MAP; pos empty: its spawn point; npc: the definition ("" for none)
+        create; // map empty: the context's own; pos empty: its spawn point; npc: the definition ("" for none). Unset: the
+                // realm context, which has no NPCs
     std::function<void(entt::entity)> destroy;                // an existing NPC
     std::function<proto::Vec3(uint16_t map, proto::Vec3)> clamp; // onto the (loaded) map's ground, within MIN_Y/MAX_Y
     std::function<const map::MapInfo*(uint16_t id)> map;      // nullptr: not loaded
     std::function<std::optional<float>(uint16_t map, float x, float z)> ground; // Maps::ground; nullopt: off the map
     std::function<std::vector<proto::Vec3>(uint16_t map, proto::Vec3 from, proto::Vec3 to)> path; // Nav::path
-    std::function<bool(entt::entity, uint16_t map, proto::Vec3 pos, float heading)> transfer; // World::transfer
+    // Within the map at once, onto another at the serial point (World::transfer); false: not owned (logged).
+    std::function<bool(entt::entity, uint16_t map, proto::Vec3 pos, float heading)> transfer;
     std::function<const map::Spawn*(uint32_t record)> spawn;  // a SpawnRef's spawn file entry
+    std::function<size_t()> count;                            // NPCs in every context (unset: this registry's)
+    std::function<void(Post)> post;                           // kast.world.post
     size_t max = 0;                                           // MAX_NPCS
 };
 
@@ -80,10 +98,19 @@ public:
     // state. Returns every error (a rejected definition, a listed machine without one, a bad system); non-empty means
     // the server must not start. A missing folder is no machines / items / NPC definitions / systems.
     std::vector<std::string> load(const std::filesystem::path& root, std::vector<std::string> gameMachines = {});
+    // The realm context's load: only the state machine definitions under root/fsms/, then the game machines enter
+    // their initial state. Errors as load's.
+    std::vector<std::string> load_game_machines(const std::filesystem::path& root, std::vector<std::string> gameMachines);
     // A runtime error in any of these disables only that system (logged with path:line) until restart.
     void update(float dt);
     void enter(entt::entity e); // onEnter: after the character spawned and its persisted components were restored
     void leave(entt::entity e); // onLeave: before it is saved and despawned
+    // onMapLeave: e is about to move to another map's context. Returns what each system returned (plain data, as an
+    // event payload; anything else disables that system), for enter_map there.
+    Carried leave_map(entt::entity e);
+    // onMapEnter(e, carried): e just moved here from another map's context; carried is what this system's onMapLeave
+    // returned there (nil for none).
+    void enter_map(entt::entity e, const Carried& carried);
     // Whether a character may be created with these (C++-checked) options: every system with a validateCharacter must
     // return true for (name, {key = value, ...}). No system has one: only empty options pass. An error rejects, and
     // disables that system like any callback's.

@@ -51,7 +51,7 @@ struct System {
     std::string path; // "systems/regen.lua"
     std::filesystem::path file;
     sol::environment env;
-    sol::protected_function update, shutdown, onEnter, onLeave, validateCharacter;
+    sol::protected_function update, shutdown, onEnter, onLeave, onMapLeave, onMapEnter, validateCharacter;
     std::vector<EventBus::Subscription> subscriptions; // kast.subscribe; cleared when the system is disabled
     bool ok = false;
     std::string error;
@@ -95,6 +95,7 @@ struct Runtime::Impl {
     sol::table api;
     sol::table fsmApi;                     // kast.fsm.*
     sol::table mapApi;                     // kast.map.*
+    sol::table worldApi;                   // kast.world.*
     EventBus bus;                          // after lua: Lua subscribers hold functions of that state
     StateMachines fsm{bus, reg};           // after lua: its definitions hold Lua callbacks
     std::vector<System> systems;           // after bus: their subscriptions unsubscribe from it
@@ -110,6 +111,8 @@ struct Runtime::Impl {
     std::vector<sol::table> spawns; // kast.get(e, "Spawn") by SpawnRef record, built on first use; after lua
     System* current = nullptr;
     bool returnedTrue = false; // the last call()'s first result was true
+    bool keepResult = false;   // call() keeps its first result in kept (onMapLeave)
+    sol::object kept;
     std::string callbackPath; // the definition file whose enter/exit is running, if no system is
 
     Impl(entt::registry& r, Defs d, NpcHooks n) : reg(r), defs(with_state_machine(std::move(d))), npcs(std::move(n)) {
@@ -117,6 +120,7 @@ struct Runtime::Impl {
         bind_api();
         bind_fsm_api();
         bind_map_api();
+        bind_world_api();
     }
 
     std::string who() const { return current ? current->path : callbackPath.empty() ? std::string("lua") : callbackPath; }
@@ -131,7 +135,10 @@ struct Runtime::Impl {
             const ScriptBudget budget(lua.lua_state());
             sol::protected_function_result result = fn(std::forward<Args>(args)...);
             if (!result.valid()) error = result.get<sol::error>().what();
-            else returnedTrue = result.return_count() > 0 && result.get_type(0) == sol::type::boolean && result.get<bool>(0);
+            else {
+                returnedTrue = result.return_count() > 0 && result.get_type(0) == sol::type::boolean && result.get<bool>(0);
+                if (keepResult && result.return_count() > 0) kept = result.get<sol::object>(0);
+            }
         } catch (const std::exception& e) { // sol2 conversions; nothing may escape to the tick
             error = std::format("{}: {}: {}", system.path, what, e.what());
         }
@@ -176,7 +183,8 @@ struct Runtime::Impl {
         system.update = update;
         for (auto [name, slot] : {std::pair{"init", static_cast<sol::protected_function*>(nullptr)},
                                   std::pair{"shutdown", &system.shutdown}, std::pair{"onEnter", &system.onEnter},
-                                  std::pair{"onLeave", &system.onLeave},
+                                  std::pair{"onLeave", &system.onLeave}, std::pair{"onMapLeave", &system.onMapLeave},
+                                  std::pair{"onMapEnter", &system.onMapEnter},
                                   std::pair{"validateCharacter", &system.validateCharacter}}) {
             sol::object fn = table[name];
             if (fn.get_type() == sol::type::lua_nil) continue;
@@ -219,6 +227,7 @@ struct Runtime::Impl {
         for (const auto& [key, value] : api) kast[key] = value;
         kast["fsm"] = read_only(fsmApi);
         kast["map"] = read_only(mapApi);
+        kast["world"] = read_only(worldApi);
         kast["items"] = item_table();
         env["kast"] = read_only(kast);
         return env;
@@ -552,7 +561,8 @@ struct Runtime::Impl {
         float heading = 0;
         if (const sol::object h = table["heading"]; h.get_type() != sol::type::lua_nil)
             heading = finite(L, "kast.create: ", "heading", h);
-        if (reg.view<world::Npc>().size() >= npcs.max)
+        if (!npcs.create) raise(L, "kast.create: the realm context has no NPCs; kast.world.post to a map instead");
+        if ((npcs.count ? npcs.count() : reg.view<world::Npc>().size()) >= npcs.max)
             raise(L, std::format("kast.create: too many NPCs (MAX_NPCS is {})", npcs.max));
         return wire(npcs.create(std::move(npcName), std::move(templateName), map, pos, heading, def ? def->name : "",
                                 *components));
@@ -626,6 +636,26 @@ struct Runtime::Impl {
             sol::table list = lua.create_table(int(points.size()), 0);
             for (const auto& p : points) list.add(lua.create_table_with("x", p.x, "y", p.y, "z", p.z));
             return sol::make_object(lua, list);
+        });
+    }
+
+    // kast.world.post(target, event, data): target a loaded map's id, "realm" or "all"; event and data as kast.publish's.
+    void bind_world_api() {
+        worldApi = lua.create_table();
+        worldApi.set_function("post", [this](sol::this_state L, const sol::object& target, const sol::object& name,
+                                             const sol::object& value) {
+            Post post;
+            const double id = target.get_type() == sol::type::number ? target.as<double>() : NAN;
+            if (target.get_type() == sol::type::string && target.as<std::string>() == "realm") post.to = Post::To::realm;
+            else if (target.get_type() == sol::type::string && target.as<std::string>() == "all") post.to = Post::To::all;
+            else if (id >= 0 && id <= 65535 && id == std::floor(id) && npcs.map(static_cast<uint16_t>(id)))
+                post.map = static_cast<uint16_t>(id);
+            else
+                raise(L, std::format("kast.world.post: target must be a loaded map's id, \"realm\" or \"all\", got {}",
+                                     to_string(L, target)));
+            post.event = event_name(L, "kast.world.post", name);
+            post.data = payload(L, "kast.world.post", value);
+            npcs.post(std::move(post));
         });
     }
 
@@ -953,6 +983,13 @@ std::vector<std::string> Runtime::load(const std::filesystem::path& root, std::v
     return errors;
 }
 
+std::vector<std::string> Runtime::load_game_machines(const std::filesystem::path& root, std::vector<std::string> gameMachines) {
+    impl_->luaRoot = root;
+    std::vector<std::string> errors = impl_->load_machines(root, std::move(gameMachines));
+    if (errors.empty()) impl_->fsm.enterAll();
+    return errors;
+}
+
 void Runtime::update(float dt) {
     for (System& s : impl_->systems) impl_->run(s, s.update, "update", dt);
 }
@@ -963,6 +1000,34 @@ void Runtime::enter(entt::entity e) {
 
 void Runtime::leave(entt::entity e) {
     for (System& s : impl_->systems) impl_->run(s, s.onLeave, "onLeave", wire(e));
+}
+
+Carried Runtime::leave_map(entt::entity e) {
+    Carried carried;
+    for (System& s : impl_->systems) {
+        impl_->keepResult = true;
+        impl_->run(s, s.onMapLeave, "onMapLeave", wire(e));
+        impl_->keepResult = false;
+        const sol::object data = std::exchange(impl_->kept, sol::object());
+        if (!s.ok || !data.valid() || data.get_type() == sol::type::lua_nil) continue;
+        nlohmann::json json;
+        if (std::string error; !lua_to_json(data, json, error)) {
+            impl_->disable(s, std::format("{}: onMapLeave must return plain data: {}", s.path, error));
+            log::error("Lua system disabled", {{"system", s.path}, {"callback", "onMapLeave"}, {"error", s.error}});
+            continue;
+        }
+        carried.emplace(s.path, std::move(json));
+    }
+    return carried;
+}
+
+void Runtime::enter_map(entt::entity e, const Carried& carried) {
+    for (System& s : impl_->systems) {
+        if (!s.ok || !s.onMapEnter.valid()) continue;
+        const auto it = carried.find(s.path);
+        impl_->run(s, s.onMapEnter, "onMapEnter", wire(e),
+                   it == carried.end() ? sol::make_object(impl_->lua, sol::lua_nil) : json_to_lua(impl_->lua, it->second));
+    }
 }
 
 bool Runtime::validate_character(const std::string& name, const proto::CharOptions& options) {

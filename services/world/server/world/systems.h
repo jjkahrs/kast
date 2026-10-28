@@ -51,9 +51,9 @@ struct Spawner {
     bool capped = false; // MAX_NPCS hit: warned once until spawning works again
 };
 
-// Creates the NPC of every due pending record (create, then SpawnRef{record}). At maxNpcs NPCs it creates nothing more
-// this tick and tries again the next.
-void spawner_system(entt::registry& reg, Spawner& spawner, size_t maxNpcs, TimePoint now,
+// Creates the NPC of every due pending record (create, then SpawnRef{record}). At maxNpcs NPCs (npcs: every context's,
+// which create counts up) it creates nothing more this tick and tries again the next.
+void spawner_system(entt::registry& reg, Spawner& spawner, const size_t& npcs, size_t maxNpcs, TimePoint now,
                     const std::function<entt::entity(const SpawnRecord&)>& create);
 
 // Tile activation (docs/services/world/maps.html#tile-activation). A tile is near a player when it is within radius
@@ -85,6 +85,9 @@ void movement_system(entt::registry& reg, const MoveRules& rules, const Maps& ma
 // Updates player e's AreaRef from its map and position. On a change it publishes "area.leave" for the old area, then
 // "area.enter" for the new one ({entity, map, area, name, flags}; none for "no area"). Returns the area it is in now.
 const map::Area* set_area(entt::registry& reg, const Maps& maps, EventBus& bus, entt::entity e);
+// Publishes "area.leave" for player e's area, if any, and forgets it (AreaRef {map, -1}): e leaves map's context, and
+// the next set_area, in the destination's, publishes only "area.enter".
+void leave_area(entt::registry& reg, const Maps& maps, EventBus& bus, entt::entity e, uint16_t map);
 // set_area for every player that moved this tick; returns those now in a portal area, with the portal, for the
 // caller to transfer.
 std::vector<std::pair<entt::entity, map::Portal>> area_system(entt::registry& reg, const Maps& maps, EventBus& bus);

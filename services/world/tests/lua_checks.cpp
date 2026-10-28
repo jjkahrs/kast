@@ -265,13 +265,28 @@ struct TestWorld {
         db::CharRow row{charId, 1, name, map, {x, 0, z}, 0.5f, components, std::move(options)};
         return world.spawn(sid, row, T0);
     }
+    // The registry of the map context e is in (each map has its own); START_MAP's if e is gone.
+    entt::registry& reg(entt::entity e) {
+        entt::registry* r = world.registry_of(e);
+        return r ? *r : world.registry();
+    }
+    // The state machines of the map context e is in (e must be in the world).
+    lua::StateMachines& fsm(entt::entity e) { return world.fsm(world.map_of(e)); }
+    // Every NPC in every map's context, in map order. Creates the contexts not there yet: for worlds with a player on
+    // every map.
+    std::vector<std::pair<entt::entity, world::Npc>> npcs() {
+        std::vector<std::pair<entt::entity, world::Npc>> out;
+        for (const auto& [id, info] : maps.all())
+            for (auto [e, n] : world.registry(id).view<world::Npc>().each()) out.emplace_back(e, n);
+        return out;
+    }
     // A Move of e's current epoch, as from a client that has heard every Correction so far.
     void move(entt::entity e, proto::Move m) {
-        m.epoch = world.registry().get<world::MoveState>(e).epoch;
+        m.epoch = reg(e).get<world::MoveState>(e).epoch;
         world.push_move(e, m);
     }
     Json value(entt::entity e, const std::string& name) {
-        auto& p = lua::pool(world.registry(), name);
+        auto& p = lua::pool(reg(e), name);
         return p.contains(e) ? p.get(e).value : Json();
     }
 };
@@ -1621,7 +1636,7 @@ void checkFsmRules() {
     TestWorld w({});
     const auto errors = w.world.load_scripts(r.root, {"door"});
     check(errors.empty(), "fsm rules: loads" + (errors.empty() ? "" : ": " + errors[0]));
-    auto& fsm = w.world.fsm();
+    auto& fsm = w.world.realm_fsm(); // the game machines run in the realm context
     check(said_at("fsms/door.lua: enter nil->closed entity nil").size() == 1 && said_at("fsms/door.lua:").size() == 1,
           "fsm: a game machine enters its initial state after init, once, with from = nil (kast.log prefixed by path)");
     std::vector<nlohmann::json> changed;
@@ -1699,7 +1714,7 @@ void checkFsmQueue() {
     std::vector<nlohmann::json> changed;
     EventBus::Subscription sub = w.world.bus().subscribe("fsm.changed", [&](const nlohmann::json& p) { changed.push_back(p); });
     clear_log();
-    check(w.world.fsm().change("q", "b"), "fsm queue: change returns true");
+    check(w.world.realm_fsm().change("q", "b"), "fsm queue: change returns true");
     const std::vector<size_t> order = {said_first("exit a"),      said_first("enter b"),     said_first("queued c true"),
                                        said_first("queued y true"), said_first("still b"),   said_first("enter b done"),
                                        said_first("exit b"),      said_first("enter c"),     said_first("queued c again true"),
@@ -1708,14 +1723,14 @@ void checkFsmQueue() {
     check(std::ranges::is_sorted(order) && order.back() != SIZE_MAX,
           "fsm queue: requests inside callbacks return true, wait for the transition, then apply in request order; the "
           "denied one warns");
-    check(w.world.fsm().state("q") == "c" && w.world.fsm().state("r") == "y", "fsm queue: final states");
+    check(w.world.realm_fsm().state("q") == "c" && w.world.realm_fsm().state("r") == "y", "fsm queue: final states");
     w.world.tick(T0);
     check(changed.size() == 3 && changed[0]["to"] == "b" && changed[1]["to"] == "c" && changed[2]["machine"] == "r",
           "fsm queue: one event per applied transition, in order");
 }
 
 // A failing or runaway callback is logged with path:line and a traceback; the transition commits and nothing is
-// disabled. A runaway callback that a system triggered also uses up that system's budget: the system is disabled.
+// disabled, also when a system triggered it (the game machine's callback runs in the realm context).
 void checkFsmCallbackErrors() {
     LogCapture capture;
     LuaRoot r;
@@ -1733,7 +1748,7 @@ return { update = function()
 end, onEnter = function(e) go = true end })");
     TestWorld w({});
     check(w.world.load_scripts(r.root, {"err"}).empty(), "fsm errors: loads");
-    auto& fsm = w.world.fsm();
+    auto& fsm = w.world.realm_fsm();
     std::vector<nlohmann::json> changed;
     EventBus::Subscription sub = w.world.bus().subscribe("fsm.changed", [&](const nlohmann::json& p) { changed.push_back(p); });
 
@@ -1753,12 +1768,16 @@ end, onEnter = function(e) go = true end })");
     check(said("systems/a_count.lua: tick 1"), "fsm: systems keep running after a callback error");
     for (const auto& s : w.world.script_status()) check(s.ok, "fsm errors: no system disabled: " + s.error);
 
-    // From inside a system's update: the shared 2 s budget runs out in the callback, so the system is disabled too.
+    // From inside a system's update: a game machine runs in the realm context (map contexts), so the change is
+    // applied there at the end of the tick and the runaway callback uses up the realm's own budget: stopped and logged
+    // as above, and the system that asked keeps running.
     w.spawn(1, 91, "Alice", 1000, 1000);
+    clear_log();
     w.world.tick(T0 + std::chrono::milliseconds(50));
     const auto status = w.world.script_status();
-    check(status.size() == 2 && status[0].ok && !status[1].ok && contains(status[1].error, "script ran longer than 2 seconds"),
-          "fsm: a runaway callback triggered by a system disables that system (shared budget), only that one");
+    check(status.size() == 2 && status[0].ok && status[1].ok &&
+              said(R"(State machine fsms/err.lua: enter "slow" failed: fsms/err.lua:6: script ran longer than 2 seconds)"),
+          "fsm: a runaway callback a system triggered runs (and is stopped) in the realm; no system is disabled");
     check(fsm.state("err") == "slow" && fsm.change("err", "ok"), "fsm: ... and the machine still works");
 }
 
@@ -2728,38 +2747,37 @@ void checkNpcSample() {
     TestWorld w(defs.defs, {}, std::move(maps));
     const auto errors = w.world.load_scripts(root, {"zone_cycle"});
     check(errors.empty(), "sample systems load: " + (errors.empty() ? "" : errors[0]));
-    auto& reg = w.world.registry();
-    check(reg.view<world::Npc>().empty(), "no NPC before the first tick (no Lua creates any)");
+    check(w.npcs().empty(), "no NPC before the first tick (no Lua creates any)");
     watch_spawns(w);
     const auto npc = [&](const std::string& name) {
-        for (auto [e, n] : reg.view<world::Npc>().each())
+        for (auto [e, n] : w.npcs())
             if (n.name == name) return e;
         return entt::entity{entt::null};
     };
     w.world.tick(T0);
     const auto g = npc("Guard"), bat = npc("Bat"), sentry = npc("Sentry");
-    check(reg.view<world::Npc>().size() == 3 && g != entt::null && bat != entt::null && sentry != entt::null,
+    check(w.npcs().size() == 3 && g != entt::null && bat != entt::null && sentry != entt::null,
           "the spawn files place the Guard, the Bat and the Sentry");
     if (g == entt::null || bat == entt::null || sentry == entt::null) return;
-    check(reg.get<world::MapRef>(sentry).map == 3, "the Sentry is on the hills (map 3)");
-    check(reg.get<world::Npc>(g).templateName == "Guard" && reg.get<world::MapRef>(g).map == 1 && reg.all_of<world::SpawnRef>(g),
+    check(w.reg(sentry).get<world::MapRef>(sentry).map == 3, "the Sentry is on the hills (map 3)");
+    check(w.reg(g).get<world::Npc>(g).templateName == "Guard" && w.reg(g).get<world::MapRef>(g).map == 1 && w.reg(g).all_of<world::SpawnRef>(g),
           "Guard, template Guard, map 1, from a spawn file");
-    check(reg.get<world::MapRef>(bat).map == 2 && reg.get<world::Transform>(bat).pos == proto::Vec3{256, 0, 256},
+    check(w.reg(bat).get<world::MapRef>(bat).map == 2 && w.reg(bat).get<world::Transform>(bat).pos == proto::Vec3{256, 0, 256},
           "Bat at map 2's spawn");
     w.spawn(1, 141, "Alice", 1024, 1024);
     // Their definitions (lua/npcs/): Health data, and the patrol machine for the two with a path.
     const auto health = [&](entt::entity e) { return w.value(e, "Health"); };
-    check(reg.get<world::Npc>(g).npc == "Guard" && reg.get<world::Npc>(sentry).npc == "Sentry" && reg.get<world::Npc>(bat).npc == "Bat",
+    check(w.reg(g).get<world::Npc>(g).npc == "Guard" && w.reg(sentry).get<world::Npc>(sentry).npc == "Sentry" && w.reg(bat).get<world::Npc>(bat).npc == "Bat",
           "each spawn's NPC is made from its definition");
     check(health(g)["current"] == 50 && health(g)["max"] == 50 && health(g)["lives"] == 3 && health(sentry)["max"] == 80 &&
               health(bat)["current"] == 10 && health(bat)["regen"] == false,
           "the definitions' Health data, unlisted fields at their defaults: " + health(g).dump());
     check(w.value(g, "StateMachine")["machine"] == "patrol" && w.value(sentry, "StateMachine")["machine"] == "patrol" &&
-              !lua::pool(reg, "StateMachine").contains(bat),
+              !lua::pool(w.reg(bat), "StateMachine").contains(bat),
           "Guard and Sentry get the patrol machine from their definitions, the Bat none");
     std::set<std::string> states;
     float farthest = 0, maxStep = 0;
-    proto::Vec3 last = reg.get<world::Transform>(g).pos;
+    proto::Vec3 last = w.reg(g).get<world::Transform>(g).pos;
     std::set<std::pair<int, int>> corners;
     // The Sentry (maps/hills/.server/spawns/0_1.json) patrols (150, 331) <-> (215, 331), through the mesa
     // (x 170..200, z 316..346) as the crow flies: on the hills' navmesh it walks round it, on the ground.
@@ -2770,25 +2788,25 @@ void checkNpcSample() {
     float sentryNearCrate = 1e9f;
     for (int i = 1; i <= 800; ++i) {
         w.world.tick(T0 + std::chrono::milliseconds(50 * i));
-        const proto::Vec3 s = reg.get<world::Transform>(sentry).pos;
+        const proto::Vec3 s = w.reg(sentry).get<world::Transform>(sentry).pos;
         sentryEnd = std::min(sentryEnd, std::hypot(s.x - 215, s.z - 331));
         sentryOffGround = std::max(sentryOffGround, std::fabs(s.y - *w.maps.ground(3, s.x, s.z)));
         sentryInWall = std::max(sentryInWall, std::min({s.x - 170, 200 - s.x, s.z - 316, 346 - s.z}));
         sentryNearCrate = std::min(sentryNearCrate, map::footprint_distance(crate, {160, 0, 331}, 0, s.x, s.z));
-        const proto::Vec3 p = reg.get<world::Transform>(g).pos;
+        const proto::Vec3 p = w.reg(g).get<world::Transform>(g).pos;
         farthest = std::max(farthest, std::hypot(p.x - 1024, p.z - 1024));
         maxStep = std::max(maxStep, std::hypot(p.x - last.x, p.z - last.z));
         if (std::abs(std::abs(p.x - 1024) - 10) < 1e-3f && std::abs(std::abs(p.z - 1024) - 10) < 1e-3f)
             corners.insert({int(std::lround(p.x)), int(std::lround(p.z))});
         last = p;
-        states.insert(w.world.fsm().state(lua::EntityId{wire(g)}));
+        states.insert(w.fsm(g).state(lua::EntityId{wire(g)}));
     }
     check(states == std::set<std::string>{"walking", "waiting"}, "the patrol machine walks and waits");
     check(corners == std::set<std::pair<int, int>>{{1034, 1034}, {1034, 1014}, {1014, 1014}, {1014, 1034}},
           "it visits the 4 points of gate_patrol (" + std::to_string(corners.size()) + ")");
     check(farthest > 10 && farthest < 15, "it patrols around the spawn point (farthest " + std::to_string(farthest) + " m)");
     check(maxStep <= 3 * 0.05f + 1e-3f, "at 3 m/s (largest step " + std::to_string(maxStep) + " m)");
-    check(reg.get<world::Transform>(bat).pos == proto::Vec3{256, 0, 256}, "the Bat (no path) never moves");
+    check(w.reg(bat).get<world::Transform>(bat).pos == proto::Vec3{256, 0, 256}, "the Bat (no path) never moves");
     check(sentryEnd < 1 && sentryInWall < 0.5f && sentryOffGround < 0.01f,
           std::format("the Sentry reaches (215, 331) round the mesa ({:.2f} m off; at most {:.2f} m into its 3 m wall's "
                       "foot), on the ground ({:.3f} m off)", sentryEnd, sentryInWall, sentryOffGround));
@@ -2820,12 +2838,12 @@ void checkNpcSample() {
     w.world.tick(t);
     db::CharRow row{142, 1, "RespawntestAbc", 1, {1024, 0, 1024}, 0, ""};
     w.world.spawn(2, row, t);
-    check(!reg.valid(g) && npc("Guard") == entt::null, "test hook: the Guard is destroyed on entering");
+    check(!w.world.registry_of(g) && npc("Guard") == entt::null, "test hook: the Guard is destroyed on entering");
     w.world.tick(t + std::chrono::milliseconds(4950));
     check(npc("Guard") == entt::null, "test hook: not back after 4.95 s");
     w.world.tick(t + std::chrono::milliseconds(5000));
     const auto again = npc("Guard");
-    check(again != entt::null && std::hypot(reg.get<world::Transform>(again).pos.x - 1024, reg.get<world::Transform>(again).pos.z - 1024) < 0.2f,
+    check(again != entt::null && std::hypot(w.reg(again).get<world::Transform>(again).pos.x - 1024, w.reg(again).get<world::Transform>(again).pos.z - 1024) < 0.2f,
           "test hook: back at its spawn point after 5 s");
     for (const auto& s : w.world.script_status()) check(s.ok, "sample system enabled: " + s.path + " " + s.error);
     check(!said("FAIL") && log_index("\"level\":\"error\"") == SIZE_MAX, "no Lua errors");
@@ -3097,40 +3115,44 @@ void checkTileActivation() {
     TestWorld w(defs.defs, {}, activation_maps());
     check(defs.errors.empty() && w.world.load_scripts(r.root).empty(), "activation: loads");
     auto& reg = w.world.registry();
+    auto& caveReg = w.world.registry(2); // each map has its own context and registry
     TimePoint t = T0;
     const auto run = [&](double seconds) {
         for (int i = 0; i < static_cast<int>(std::lround(seconds * 20)); ++i) w.world.tick(t += std::chrono::milliseconds(50));
     };
     // The NPC of a spawn record (Maps order: map 1's guard 0, sentry 1, far 2, then the cave's 3), or null.
     const auto npc = [&](uint32_t record) {
-        for (auto [e, ref] : reg.view<world::SpawnRef>().each())
-            if (ref.record == record) return e;
+        for (auto* r : {&reg, &caveReg})
+            for (auto [e, ref] : r->view<world::SpawnRef>().each())
+                if (ref.record == record) return e;
         return entt::entity{entt::null};
     };
     const auto count = [&](uint32_t record) {
         size_t n = 0;
-        for (auto [e, ref] : reg.view<world::SpawnRef>().each()) n += ref.record == record;
+        for (auto* r : {&reg, &caveReg})
+            for (auto [e, ref] : r->view<world::SpawnRef>().each()) n += ref.record == record;
         return n;
     };
-    const auto asleep = [&](entt::entity e) { return reg.all_of<world::Asleep>(e) && !reg.all_of<world::Awake>(e); };
-    const auto awake = [&](entt::entity e) { return reg.all_of<world::Awake>(e) && !reg.all_of<world::Asleep>(e); };
+    const auto npcs = [&] { return reg.view<world::Npc>().size() + caveReg.view<world::Npc>().size(); };
+    const auto asleep = [&](entt::entity e) { return w.reg(e).all_of<world::Asleep>(e) && !w.reg(e).all_of<world::Awake>(e); };
+    const auto awake = [&](entt::entity e) { return w.reg(e).all_of<world::Awake>(e) && !w.reg(e).all_of<world::Asleep>(e); };
 
     run(5);
-    check(reg.view<world::Npc>().empty(), "activation: no player online: no spawn-file NPC, however long it runs");
+    check(npcs() == 0, "activation: no player online: no spawn-file NPC, however long it runs");
 
     // Alice on tile 4_4: the Guard's tile and the Sentry's (5_4, a neighbour) load at her login; the Bat on 7_7 (3
     // tiles off) and the cave's do not.
     const auto alice = w.spawn(1, 61, "Alice", 1100, 1150);
     const auto guard = npc(0), sentry = npc(1);
     check(guard != entt::null && sentry != entt::null && npc(2) == entt::null && npc(3) == entt::null &&
-              reg.view<world::Npc>().size() == 2,
+              npcs() == 2,
           "activation: a login spawns its tile's and the neighbours' NPCs at once, no farther");
     if (guard == entt::null || sentry == entt::null) return;
     check(awake(guard) && awake(sentry), "activation: NPCs near a player are awake");
     run(3);
     check(logged("awake npcs: Guard,Sentry|"), "activation: kast.query returns the awake NPCs");
     const proto::Vec3 walked = reg.get<world::Transform>(guard).pos;
-    check(walked.z > 1100.5f && w.world.fsm().state(lua::EntityId{wire(guard)}) == "walking",
+    check(walked.z > 1100.5f && w.fsm(guard).state(lua::EntityId{wire(guard)}) == "walking",
           "activation: the awake Guard patrols (waited 1 s at its first point, now walking north)");
 
     // Alice goes to the cave: map 1's tiles sleep. Nothing despawns; the cave's Bat loads.
@@ -3139,10 +3161,10 @@ void checkTileActivation() {
     const proto::Vec3 slept = reg.get<world::Transform>(guard).pos;
     run(3);
     const auto caveBat = npc(3);
-    check(caveBat != entt::null && awake(caveBat) && asleep(guard) && asleep(sentry) && reg.view<world::Npc>().size() == 3,
+    check(caveBat != entt::null && awake(caveBat) && asleep(guard) && asleep(sentry) && npcs() == 3,
           "activation: the tiles left behind sleep (nothing despawns); the cave's tile loads");
     check(logged("awake npcs: Bat|") && !logged("awake npcs: Bat,Guard"), "activation: kast.query skips sleeping NPCs");
-    check(reg.get<world::Transform>(guard).pos == slept && w.world.fsm().state(lua::EntityId{wire(guard)}) == "walking",
+    check(reg.get<world::Transform>(guard).pos == slept && w.fsm(guard).state(lua::EntityId{wire(guard)}) == "walking",
           "activation: a sleeping Guard does not patrol; its state machine stays where it was");
 
     // The sleeping Sentry is destroyed: it comes back respawnSec (2 s) later, asleep, still on a sleeping tile.
@@ -3160,10 +3182,10 @@ void checkTileActivation() {
     check(awake(guard) && awake(sentry2) && asleep(caveBat), "activation: coming back wakes the tiles; the cave sleeps");
     run(1);
     const proto::Vec3 woke = reg.get<world::Transform>(guard).pos;
-    check(woke.z > slept.z + 2 && std::fabs(woke.x - 1100) < 0.01f && w.world.fsm().state(lua::EntityId{wire(guard)}) == "walking",
+    check(woke.z > slept.z + 2 && std::fabs(woke.x - 1100) < 0.01f && w.fsm(guard).state(lua::EntityId{wire(guard)}) == "walking",
           "activation: the Guard goes on from where it was (still north, not back to its first point)");
     check(logged("awake npcs: Guard,Sentry|"), "activation: kast.query sees them again");
-    check(count(0) == 1 && count(1) == 1 && count(2) == 0 && count(3) == 1 && reg.view<world::Npc>().size() == 3,
+    check(count(0) == 1 && count(1) == 1 && count(2) == 0 && count(3) == 1 && npcs() == 3,
           "activation: leaving and coming back spawns nothing twice");
 
     // kast.create NPCs sleep and wake the same way.
@@ -3327,12 +3349,11 @@ void checkStarterMmoCombat() {
     const auto errors = w.world.load_scripts(root);
     check(errors.empty(), "starter-mmo: systems load " + (errors.empty() ? "" : errors[0]));
     if (!errors.empty()) return;
-    auto& reg = w.world.registry();
     watch_spawns(w);
     TimePoint t = T0;
     w.world.tick(t);
     const auto npc = [&](const std::string& name) {
-        for (auto [e, n] : reg.view<world::Npc>().each())
+        for (auto [e, n] : w.npcs())
             if (n.name == name) return e;
         return entt::entity{entt::null};
     };
@@ -3354,7 +3375,7 @@ void checkStarterMmoCombat() {
         for (const auto& e : events(sid, "combat.rejected")) out.push_back(e["reason"]);
         return out;
     };
-    const auto state = [&](entt::entity e) { return w.world.fsm().state(lua::EntityId{wire(e)}); };
+    const auto state = [&](entt::entity e) { return w.fsm(e).state(lua::EntityId{wire(e)}); };
     const auto bat = npc("Bat"), guard = npc("Guard");
     check(bat != entt::null && guard != entt::null, "starter-mmo: the Bat and the Guard spawn");
     if (bat == entt::null || guard == entt::null) return;
@@ -3417,7 +3438,7 @@ void checkStarterMmoCombat() {
     check(health(bob) == bobAfterHit, "starter-mmo: no regeneration within 5 s of a hit");
     run(2);
     check(health(bob) > bobAfterHit, "starter-mmo: regeneration once 5 s out of combat");
-    check(reg.get<world::Transform>(bat).pos == reg.get<world::Transform>(bat).pos && state(bat) == "dead",
+    check(w.reg(bat).get<world::Transform>(bat).pos == w.reg(bat).get<world::Transform>(bat).pos && state(bat) == "dead",
           "starter-mmo: the corpse stays dead");
     run(53.5);
     check(npc("Bat") == bat, "starter-mmo: the corpse is still there before 60 s");
@@ -3434,7 +3455,7 @@ void checkStarterMmoCombat() {
           "starter-mmo: the Bat respawns 30 s after its corpse went, with full Health");
 
     // Carol 1.2 m from the Guard: a hit, a second within the cooldown refused, a third after it.
-    const proto::Vec3 g0 = reg.get<world::Transform>(guard).pos; // somewhere on its patrol by now
+    const proto::Vec3 g0 = w.reg(guard).get<world::Transform>(guard).pos; // somewhere on its patrol by now
     const auto carol = w.spawn(3, 503, "Carol", g0.x + 1.2f, g0.z, "", 10);
     w.world.tick(t += std::chrono::milliseconds(50));
     w.sent.clear();
@@ -3465,7 +3486,7 @@ void checkStarterMmoCombat() {
 
     // Dave, 3 Health, hits the Guard: it kills him. Dead: moves refused, attacks refused; revived 5 s later at the
     // map's spawn point with his class's full Health (a Warrior's 140).
-    const proto::Vec3 g = reg.get<world::Transform>(guard).pos;
+    const proto::Vec3 g = w.reg(guard).get<world::Transform>(guard).pos;
     const auto dave = w.spawn(4, 504, "Dave", g.x + 1.5f, g.z, R"({"Health":{"current":3,"max":100}})", 10);
     w.world.tick(t += std::chrono::milliseconds(50));
     w.sent.clear();
@@ -3474,24 +3495,24 @@ void checkStarterMmoCombat() {
     const auto deaths = events(4, "combat.death");
     check(health(dave) == 0 && deaths.size() == 1 && deaths[0]["entity"] == wire(dave) && deaths[0]["name"] == "Dave",
           "starter-mmo: Dave at 0 Health dies (combat.death)");
-    const proto::Vec3 deadAt = reg.get<world::Transform>(dave).pos;
+    const proto::Vec3 deadAt = w.reg(dave).get<world::Transform>(dave).pos;
     w.move(dave, proto::Move{{deadAt.x + 1, deadAt.y, deadAt.z}, 0, 0});
     attack(dave, wire(guard));
     run(0.1);
-    check(reg.get<world::Transform>(dave).pos == deadAt && !w.sent.of<proto::Correction>(4).empty() &&
+    check(w.reg(dave).get<world::Transform>(dave).pos == deadAt && !w.sent.of<proto::Correction>(4).empty() &&
               rejected(4) == std::vector<std::string>{"dead"},
           "starter-mmo: dead -> move corrected, attack refused");
     run(2);
     check(state(guard) != "combat", "starter-mmo: the Guard drops a dead target");
     check(health(dave) == 0, "starter-mmo: no regeneration while dead");
     run(3);
-    const proto::Vec3 dp = reg.get<world::Transform>(dave).pos;
+    const proto::Vec3 dp = w.reg(dave).get<world::Transform>(dave).pos;
     check(health(dave) == 140 && std::hypot(dp.x - 128, dp.z - 128) < 0.01f && events(4, "combat.revive").size() == 1 &&
               !w.sent.of<proto::MapChange>(4).empty(),
           "starter-mmo: revived 5 s later at the map spawn (128, 128) with a Warrior's full 140 Health");
     w.move(dave, proto::Move{{dp.x + 0.5f, *w.maps.ground(10, dp.x + 0.5f, dp.z), dp.z}, 0, 0});
     run(0.5);
-    check(reg.get<world::Transform>(dave).pos.x == dp.x + 0.5f, "starter-mmo: moves accepted again after the revive");
+    check(w.reg(dave).get<world::Transform>(dave).pos.x == dp.x + 0.5f, "starter-mmo: moves accepted again after the revive");
     // Walking does not drain Health any more.
     const double walked = health(dave);
     for (int i = 1; i <= 20; ++i) {
@@ -3505,7 +3526,7 @@ void checkStarterMmoCombat() {
     // goes home healed.
     const auto walkTo = [&](entt::entity e, float x, float z, float speed) {
         for (int i = 0; i < 2000; ++i) {
-            const proto::Vec3 p = reg.get<world::Transform>(e).pos;
+            const proto::Vec3 p = w.reg(e).get<world::Transform>(e).pos;
             const float dx = x - p.x, dz = z - p.z, d = std::hypot(dx, dz), step = speed * 0.05f;
             if (d < 0.01f) return;
             const float k = std::min(1.0f, step / d), nx = p.x + dx * k, nz = p.z + dz * k;
@@ -3515,19 +3536,19 @@ void checkStarterMmoCombat() {
     };
     w.sent.clear();
     for (int tries = 0; tries < 10 && state(guard) != "combat"; ++tries) { // it walks on meanwhile: catch up
-        const proto::Vec3 gp = reg.get<world::Transform>(guard).pos;
+        const proto::Vec3 gp = w.reg(guard).get<world::Transform>(guard).pos;
         walkTo(dave, gp.x + 1.5f, gp.z, 8);
         attack(dave, wire(guard));
         w.world.tick(t += std::chrono::milliseconds(50));
     }
     check(state(guard) == "combat" && health(guard) == 38, "starter-mmo: leash: the Guard fights Dave (" + state(guard) + ", " +
                                                                std::to_string(health(guard)) + ", " + Json(rejected(4)).dump() + ")");
-    const proto::Vec3 d0 = reg.get<world::Transform>(dave).pos;
+    const proto::Vec3 d0 = w.reg(dave).get<world::Transform>(dave).pos;
     float farthest = 0;
     bool returned = false;
     for (int leg = 0; leg < 2 && !returned; ++leg) { // 50 m south, then on if needed
         walkTo(dave, d0.x, d0.z - 50.0f * static_cast<float>(leg + 1), 8);
-        const proto::Vec3 gp = reg.get<world::Transform>(guard).pos;
+        const proto::Vec3 gp = w.reg(guard).get<world::Transform>(guard).pos;
         farthest = std::max(farthest, std::hypot(gp.x - 134, gp.z - 122));
         returned = state(guard) == "returning";
     }
@@ -3559,7 +3580,6 @@ void checkStarterMmoLoot() {
     const auto errors = w.world.load_scripts(r.root);
     check(defs.errors.empty() && errors.empty(), "starter-mmo loot: loads " + (errors.empty() ? std::string() : errors[0]));
     if (!errors.empty()) return;
-    auto& reg = w.world.registry();
     TimePoint t = T0;
     w.world.tick(t);
     const auto run = [&](double seconds) {
@@ -3567,7 +3587,7 @@ void checkStarterMmoLoot() {
             w.world.tick(t += std::chrono::milliseconds(50));
     };
     const auto bat = [&] {
-        for (auto [e, n] : reg.view<world::Npc>().each())
+        for (auto [e, n] : w.npcs())
             if (n.name == "Bat") return e;
         return entt::entity{entt::null};
     };
@@ -3607,7 +3627,7 @@ void checkStarterMmoLoot() {
         send(e, "test.bag", Json{{"items", items}, {"counts", counts}});
     };
     const auto gold = [&](entt::entity e) { return w.value(e, "Wallet")["gold"].get<int>(); };
-    const auto alive = [&](entt::entity e) { return reg.valid(e) && reg.all_of<world::Npc>(e); };
+    const auto alive = [&](entt::entity e) { return w.world.registry_of(e) && w.reg(e).all_of<world::Npc>(e); };
 
     // Every character gets an empty 16-slot bag; a saved bag with an unknown item and a bad count is cleaned on login.
     const auto ann = w.spawn(1, 601, "Ann", 128, 122, "", 11); // 2 m north of the Bat
@@ -3660,10 +3680,10 @@ void checkStarterMmoLoot() {
     send(ben, "loot.take_all", {{"target", wire(b)}});
     check(rejected(2) == std::vector<std::string>{"not_owner", "not_owner"} && events(2, "loot.contents").empty(),
           "starter-mmo loot: another player can't open or take the loot");
-    const proto::Vec3 annAt = reg.get<world::Transform>(ann).pos;
+    const proto::Vec3 annAt = w.reg(ann).get<world::Transform>(ann).pos;
     const auto moveTo = [&](entt::entity e, float x, float z) {
         for (int i = 0; i < 400; ++i) {
-            const proto::Vec3 p = reg.get<world::Transform>(e).pos;
+            const proto::Vec3 p = w.reg(e).get<world::Transform>(e).pos;
             const float dx = x - p.x, dz = z - p.z, d = std::hypot(dx, dz);
             if (d < 0.01f) return;
             const float k = std::min(1.0f, 0.4f / d), nx = p.x + dx * k, nz = p.z + dz * k;
@@ -3798,11 +3818,11 @@ void checkStarterMmoQuests() {
         run(1.6); // past Strike's cooldown
     };
     entt::entity elder = entt::null;
-    for (auto [e, n] : reg.view<world::Npc>().each())
+    for (auto [e, n] : w.npcs())
         if (n.npc == "Elder") elder = e;
     check(elder != entt::null, "starter-mmo quests: the Elder spawns in the Meadow");
     if (elder == entt::null) return;
-    const proto::Vec3 elderAt = reg.get<world::Transform>(elder).pos;
+    const proto::Vec3 elderAt = w.reg(elder).get<world::Transform>(elder).pos;
     check(std::hypot(elderAt.x - 128, elderAt.z - 128) < 8 && !w.value(elder, "Health").is_object(),
           "starter-mmo quests: the Elder stands near the Meadow spawn, without Health");
     const Json talk{{"npc", wire(elder)}};
@@ -3837,7 +3857,7 @@ void checkStarterMmoQuests() {
     send(cid, "quest.talk", talk);
     send(ann, "quest.talk", {{"npc", 999999}});
     send(ann, "quest.talk", {{"npc", "x"}});
-    for (auto [e, n] : reg.view<world::Npc>().each())
+    for (auto [e, n] : w.npcs())
         if (n.npc == "Guard") send(ann, "quest.talk", {{"npc", wire(e)}});
     check(rejected(3) == Reasons{"range"} && rejected(1) == Reasons{"giver", "giver", "giver"},
           "starter-mmo quests: talking from 6.4 m (range) or to a non-giver (giver) is refused");
@@ -3890,7 +3910,7 @@ void checkStarterMmoQuests() {
     strike(ann, b1);
     strike(ben, b1);
     strike(dee, b1);
-    check(!reg.valid(b1) || w.value(b1, "Health")["current"] == 0, "starter-mmo quests: the Bat died");
+    check(!w.world.registry_of(b1) || w.value(b1, "Health")["current"] == 0, "starter-mmo quests: the Bat died");
     check(progress(ann) == 1 && progress(ben) == 1 && progress(eve) == 0 && quests(dee)["active"].empty(),
           std::format("starter-mmo quests: every damager with the quest gets the kill (Ann {}, Ben {}), not Eve ({})",
                       progress(ann), progress(ben), progress(eve)));
@@ -3965,7 +3985,7 @@ void checkStarterMmoQuests() {
     Json filler = Json::array();
     for (int i = 1; i <= 20; ++i) filler.push_back("filler_" + std::to_string(i));
     send(cid, "test.quests", {{"active", filler}, {"progress", Json::array()}, {"completed", Json::array()}});
-    reg.get<world::Transform>(cid).pos = reg.get<world::Transform>(dee).pos;
+    w.reg(cid).get<world::Transform>(cid).pos = w.reg(dee).get<world::Transform>(dee).pos;
     w.sent.clear();
     send(cid, "quest.accept", at("bat_trouble"));
     check(rejected(3) == Reasons{"log_full"} && quests(cid)["active"].size() == 20,
@@ -4015,7 +4035,6 @@ void checkStarterMmoClasses() {
     const auto errors = w.world.load_scripts(r.root);
     check(defs.errors.empty() && errors.empty(), "starter-mmo classes: loads " + (errors.empty() ? std::string() : errors[0]));
     if (!errors.empty()) return;
-    auto& reg = w.world.registry();
     TimePoint t = T0;
     w.world.tick(t);
     const auto tick = [&] { w.world.tick(t += std::chrono::milliseconds(50)); };
@@ -4058,7 +4077,7 @@ void checkStarterMmoClasses() {
         return w.world.create_npc("Dummy", "Dummy", 10, proto::Vec3{x, 0, z}, heading, fights ? "Guard" : "",
                                   lua::Json::parse(components.dump()));
     };
-    const auto pos = [&](entt::entity e) { return reg.get<world::Transform>(e).pos; };
+    const auto pos = [&](entt::entity e) { return w.reg(e).get<world::Transform>(e).pos; };
     const auto as = [](const char* c) { return proto::CharOptions{{"class", c}}; };
     using Reasons = std::vector<std::string>;
     using Hits = std::vector<double>;
@@ -4179,7 +4198,7 @@ void checkStarterMmoClasses() {
     run(1.05);
     power(mag2, "arcane_blast", chaser); // it would chase now
     run(1.5);
-    check(pos(chaser) == rootedAt && w.world.fsm().state(lua::EntityId{wire(chaser)}) == "combat",
+    check(pos(chaser) == rootedAt && w.fsm(chaser).state(lua::EntityId{wire(chaser)}) == "combat",
           "starter-mmo classes: the rooted NPC is in combat but stays put");
     check(!hitsOn(6, mag2, biter).empty(), "starter-mmo classes: a rooted NPC in reach still hits");
     run(2.5); // the root (4 s from the nova) is over
@@ -4188,7 +4207,7 @@ void checkStarterMmoClasses() {
 
     // The Meadow's patrolling Guard, rooted by a Frost Nova next to it, stops walking for 4 s.
     entt::entity guard = entt::null;
-    for (auto [e, npcRef] : reg.view<world::Npc>().each())
+    for (auto [e, npcRef] : w.npcs())
         if (npcRef.name == "Guard") guard = e;
     const proto::Vec3 gp = pos(guard);
     const auto mag4 = w.spawn(22, 722, "Magfour", gp.x + 2, gp.z, "", 10, as("mage"));
@@ -4199,7 +4218,7 @@ void checkStarterMmoClasses() {
     run(3.7);
     const proto::Vec3 stillAt = pos(guard);
     run(3);
-    const std::string patrolState = w.world.fsm().state(lua::EntityId{wire(guard)});
+    const std::string patrolState = w.fsm(guard).state(lua::EntityId{wire(guard)});
     check(patrolState != "combat" && stillAt == patrolAt && (pos(guard).x != patrolAt.x || pos(guard).z != patrolAt.z),
           std::format("starter-mmo classes: a rooted patrol stands for 4 s, then walks on ({}; {},{} -> {},{} -> {},{})",
                       patrolState, patrolAt.x, patrolAt.z, stillAt.x, stillAt.z, pos(guard).x, pos(guard).z));
@@ -4329,7 +4348,7 @@ void checkStarterMmoClasses() {
     const auto mag3 = w.spawn(20, 720, "Magthree", 128, 140, "", 11, as("mage")); // 20 m from the Bat
     run(0.1);
     entt::entity bat = entt::null;
-    for (auto [e, npcRef] : reg.view<world::Npc>().each())
+    for (auto [e, npcRef] : w.npcs())
         if (npcRef.name == "Bat") bat = e;
     power(mag3, "firebolt", bat);
     run(0.1);
@@ -4648,6 +4667,166 @@ void checkStarterMmoEquipment() {
           "starter-mmo equipment: after a relog the same gear, and Strike 15");
     for (const auto& st : w.world.script_status()) check(st.ok, "starter-mmo equipment: system still enabled " + st.path + " " + st.error);
 }
+
+// Map contexts (docs/services/world/maps.html#map-contexts) with the starter-mmo sample: a Warrior with a bag, a quest
+// and Shield Wall up walks Meadow -> Cavern -> Meadow through the gates. Each crossing runs onMapLeave once on the map
+// left and onMapEnter once on the map entered (a probe system logs both), moves every Lua component unchanged, and
+// keeps the wire id; MapChange comes before the Despawns and Spawns, all in the portal tick. The sample's per-player
+// Lua tables go along: Shield Wall's cooldown and its buff (its fade comes in the Cavern), and a Bat killed there
+// counts for the quest.
+void checkStarterMmoMapCrossing() {
+    LogCapture capture;
+    const fs::path sample = KAST_STARTER_MMO;
+    LuaRoot r;
+    for (const char* dir : {"components", "fsms", "items", "npcs", "systems", ".server"})
+        fs::copy(sample / dir, r.root / dir, fs::copy_options::recursive);
+    fs::copy_file(KAST_STARTER_MMO_TEST_LUA, r.root / "systems" / "zz_test.lua");
+    r.write("systems/zz_probe.lua", R"(return {
+    onMapLeave = function(e)
+        kast.log("crossing leave " .. e .. " on map " .. kast.get(e, "Transform").map)
+        return {from = kast.get(e, "Transform").map}
+    end,
+    onMapEnter = function(e, carried)
+        kast.log("crossing enter " .. e .. " on map " .. kast.get(e, "Transform").map .. " from " .. tostring(carried.from))
+    end,
+    update = function() end,
+})");
+    const auto defs = lua::load_component_defs(r.root, world::kReservedComponentNames);
+    std::vector<std::string> mapErrors;
+    world::WorldRules rules;
+    rules.startMap = 10;
+    TestWorld w(defs.defs, rules, world::Maps::load(sample / "maps", mapErrors));
+    const auto errors = w.world.load_scripts(r.root);
+    check(defs.errors.empty() && mapErrors.empty() && errors.empty(),
+          "map crossing: loads " + (errors.empty() ? std::string() : errors[0]));
+    if (!errors.empty()) return;
+    TimePoint t = T0;
+    const auto run = [&](double seconds) {
+        for (int i = 0; i < std::max(1, static_cast<int>(std::lround(seconds * 20))); ++i)
+            w.world.tick(t += std::chrono::milliseconds(50));
+    };
+    const auto send = [&](entt::entity from, const std::string& name, const Json& data) {
+        w.world.push_client_event(from, name, nlohmann::json::parse(data.dump()));
+        run(0.11); // under the 10 client events a second limit
+    };
+    const auto events = [&](uint32_t sid, const std::string& name) {
+        std::vector<Json> out;
+        for (const auto& e : w.sent.of<proto::ServerEvent>(sid))
+            if (e.name == name) out.push_back(Json::parse(e.json));
+        return out;
+    };
+    const auto rejected = [&](uint32_t sid) {
+        std::vector<std::string> out;
+        for (const auto& e : events(sid, "combat.rejected")) out.push_back(e["reason"]);
+        return out;
+    };
+    // At 8 m/s on the ground of e's map, until there or e is on another map.
+    const auto walk = [&](entt::entity e, float x, float z) {
+        const uint16_t map = w.world.map_of(e);
+        for (int i = 0; i < 400 && w.world.map_of(e) == map; ++i) {
+            const proto::Vec3 p = w.reg(e).get<world::Transform>(e).pos;
+            const float dx = x - p.x, dz = z - p.z, d = std::hypot(dx, dz);
+            if (d < 0.01f) return;
+            const float k = std::min(1.0f, 0.4f / d), nx = p.x + dx * k, nz = p.z + dz * k;
+            w.move(e, proto::Move{{nx, *w.maps.ground(map, nx, nz), nz}, 0, 0});
+            w.world.tick(t += std::chrono::milliseconds(50));
+        }
+    };
+    const auto components = [&](entt::entity e) {
+        Json all = Json::object();
+        for (const auto& def : defs.defs) all[def->name] = w.value(e, def->name);
+        return all;
+    };
+    const auto index = [&](uint32_t sid, auto pred) {
+        const auto& msgs = w.sent.bySession[sid];
+        for (size_t i = 0; i < msgs.size(); ++i)
+            if (pred(msgs[i])) return i;
+        return SIZE_MAX;
+    };
+    const auto spawnOf = [](uint32_t id) {
+        return [id](const proto::Message& m) { return std::holds_alternative<proto::Spawn>(m) && std::get<proto::Spawn>(m).entityId == id; };
+    };
+    const auto isMapChange = [](const proto::Message& m) { return std::holds_alternative<proto::MapChange>(m); };
+    const auto isDespawn = [](const proto::Message& m) { return std::holds_alternative<proto::Despawn>(m); };
+    const auto isSpawn = [](const proto::Message& m) { return std::holds_alternative<proto::Spawn>(m); };
+
+    // Bob watches the Meadow gate, Cora the Cavern's arrival point (and its Bat at (128, 120)).
+    const auto ann = w.spawn(1, 901, "Ann", 146, 128, "", 10, {{"class", "warrior"}});
+    w.spawn(2, 902, "Bob", 140, 132, "", 10, {{"class", "mage"}});
+    w.spawn(3, 903, "Cora", 128, 140, "", 11, {{"class", "mage"}});
+    const uint32_t A = w.sent.of<proto::EnterWorldOk>(1).at(0).entityId;
+    check(A == wire(ann), "map crossing: EnterWorldOk carries Ann's wire id");
+    run(0.2);
+    send(ann, "test.bag", {{"items", {"bat_wing", "linen_cloth"}}, {"counts", {2, 5}}});
+    send(ann, "test.quests", {{"active", {"bat_trouble"}}, {"progress", {0, 0, 0, 0}}});
+    w.sent.clear();
+    send(ann, "combat.power", {{"power", "shield_wall"}}); // 30 s cooldown, a 6 s buff
+    check(events(1, "combat.power").size() == 1, "map crossing: Shield Wall up in the Meadow");
+    run(0.3);
+
+    // Into the Cavern Gate (150..156, 124..132): the portal tick.
+    const Json before = components(ann);
+    check(before["Inventory"]["items"][0] == "bat_wing" && before["Quests"]["active"][0] == "bat_trouble" &&
+              before["Class"]["id"] == "warrior",
+          "map crossing: Ann's bag, quest and class are set: " + before.dump());
+    w.sent.clear();
+    w.move(ann, proto::Move{{151, *w.maps.ground(10, 151, 128), 128}, 0, 0});
+    w.world.tick(t += std::chrono::milliseconds(50));
+    const TimePoint crossed = t;
+    check(w.world.registry_of(ann) == &w.world.registry(11) && w.world.map_of(ann) == 11,
+          "map crossing: through the gate, Ann is in the Cavern's context");
+    check(said_at(std::format("crossing leave {} on map 10", A)).size() == 1 &&
+              said_at(std::format("crossing enter {} on map 11 from 10", A)).size() == 1 && said_at("crossing ").size() == 2,
+          "map crossing: onMapLeave once in the Meadow's context, onMapEnter once in the Cavern's, carrying what it returned");
+    check(components(ann) == before, "map crossing: every Lua component and value moved along: " + components(ann).dump());
+    const size_t change = index(1, isMapChange), despawn = index(1, isDespawn), spawn = index(1, isSpawn);
+    check(change == 0 && despawn != SIZE_MAX && spawn != SIZE_MAX && change < despawn && despawn < spawn,
+          "map crossing: MapChange, then the Meadow's Despawns, then the Cavern's Spawns, all in the portal tick");
+    check(index(3, spawnOf(A)) != SIZE_MAX && index(2, [&](const proto::Message& m) {
+              return std::holds_alternative<proto::Despawn>(m) && std::get<proto::Despawn>(m).entityId == A;
+          }) != SIZE_MAX,
+          "map crossing: Cora gets Ann's Spawn with the same wire id in the portal tick; Bob her Despawn");
+
+    // In the Cavern: Shield Wall still cooling down, its buff fades there; a Bat killed counts for the quest.
+    w.sent.clear();
+    send(ann, "combat.power", {{"power", "shield_wall"}});
+    check(rejected(1) == std::vector<std::string>{"cooldown"}, "map crossing: Shield Wall's cooldown came along");
+    walk(ann, 128, 122.5f);
+    run(1);
+    entt::entity bat = entt::null;
+    for (auto [e, n] : w.world.registry(11).view<world::Npc>().each())
+        if (n.name == "Bat") bat = e;
+    send(ann, "combat.power", {{"power", "strike"}, {"target", wire(bat)}});
+    check(bat != entt::null && w.value(bat, "Health")["current"] == 0, "map crossing: Ann kills the Cavern's Bat");
+    for (int i = 0; i < 160 && events(1, "combat.fade").empty(); ++i) run(0.05);
+    const auto fades = events(1, "combat.fade");
+    // Cast about 0.4 s before the crossing: it fades less than 6 s after it (one cast in the Cavern would fade later).
+    check(fades.size() == 1 && fades[0]["power"] == "shield_wall" && t - crossed < std::chrono::seconds(6),
+          "map crossing: the Shield Wall buff came along and fades in the Cavern, on time");
+    check(w.value(ann, "Quests")["progress"][0] == 1, "map crossing: the kill counts for Bat Trouble: " + w.value(ann, "Quests").dump());
+
+    // Back through the Meadow Gate (100..106, 124..132).
+    walk(ann, 107, 128);
+    run(0.3);
+    const Json cavern = components(ann);
+    w.sent.clear();
+    clear_log();
+    w.move(ann, proto::Move{{105, *w.maps.ground(11, 105, 128), 128}, 0, 0});
+    w.world.tick(t += std::chrono::milliseconds(50));
+    check(w.world.registry_of(ann) == &w.world.registry(10), "map crossing: back in the Meadow's context");
+    check(said_at(std::format("crossing leave {} on map 11", A)).size() == 1 &&
+              said_at(std::format("crossing enter {} on map 10 from 11", A)).size() == 1 && said_at("crossing ").size() == 2,
+          "map crossing: onMapLeave once in the Cavern's context, onMapEnter once in the Meadow's");
+    check(components(ann) == cavern && cavern["Quests"]["progress"][0] == 1 && cavern["Inventory"] == before["Inventory"],
+          "map crossing: back with the same components: bag, class, quest progress");
+    check(index(1, isMapChange) == 0 && index(2, spawnOf(A)) != SIZE_MAX,
+          "map crossing: MapChange first; Bob gets Ann's Spawn with the same wire id in the portal tick");
+    w.sent.clear();
+    send(ann, "combat.power", {{"power", "shield_wall"}});
+    check(rejected(1) == std::vector<std::string>{"cooldown"}, "map crossing: Shield Wall still cooling down after two crossings");
+    for (const auto& st : w.world.script_status()) check(st.ok, "map crossing: system still enabled " + st.path + " " + st.error);
+    check(!said("component left behind"), "map crossing: no component left behind");
+}
 #endif
 
 // --- maps (docs/services/world/maps.html) ---
@@ -4875,7 +5054,8 @@ void checkMapWorld() {
     const auto mc = w.sent.of<proto::MapChange>(1);
     check(mc.size() == 1 && mc[0].map == 2 && mc[0].pos == proto::Vec3{310, 0, 300} && mc[0].heading == 1.5f,
           "MapChange{map, pos (y onto the ground), heading} sent at once");
-    check(w.world.registry().get<world::MapRef>(a).map == 2 && w.world.registry().all_of<world::Dirty>(a), "MapRef changed, Dirty");
+    check(w.world.registry_of(a) == &w.world.registry(2) && w.reg(a).get<world::MapRef>(a).map == 2 && w.reg(a).all_of<world::Dirty>(a),
+          "MapRef changed, Dirty, in map 2's context");
     w.world.tick(T0 + std::chrono::seconds(5));
     const size_t change = first_of<proto::MapChange>(w.sent, 1), despawn = first_of<proto::Despawn>(w.sent, 1),
                  spawn = first_of<proto::Spawn>(w.sent, 1);
@@ -4896,7 +5076,7 @@ void checkMapWorld() {
     w.world.push_move(a, {{1001, 0, 1000}, 0, 0, 1, 0}); // sent with the epoch before MapChange
     w.world.tick(T0 + std::chrono::seconds(6));
     check(w.sent.of<proto::Correction>(1).empty() &&
-              w.world.registry().get<world::Transform>(a).pos == proto::Vec3{310, 0, 300},
+              w.reg(a).get<world::Transform>(a).pos == proto::Vec3{310, 0, 300},
           "stale old-map move (old epoch) dropped without a Correction");
     w.move(a, {{1001, 0, 1000}, 0, 0, 2});
     w.world.tick(T0 + std::chrono::milliseconds(6100));
@@ -4922,7 +5102,7 @@ void checkMapWorld() {
     // Refused: not owned (undeclared tile, unknown map); nothing changes, nothing sent.
     w.sent.clear();
     check(!w.world.transfer(a, {2, {600, 0, 100}, 0}) && !w.world.transfer(a, {9, {1, 0, 1}, 0}), "unowned destination refused");
-    check(w.sent.bySession.empty() && w.world.registry().get<world::MapRef>(a).map == 2, "refusal changes nothing");
+    check(w.sent.bySession.empty() && w.reg(a).get<world::MapRef>(a).map == 2, "refusal changes nothing");
     check(logged("transfer refused"), "refusal logged");
 
     // Save carries the map.
@@ -4941,32 +5121,48 @@ void checkMapWorld() {
     check(w.sent.of<proto::MapChange>(2).empty() && w.sent.of<proto::MapChange>(6).empty(), "an NPC transfer sends no MapChange");
 }
 
-// kast.transfer and Transform.map from Lua (players and NPCs), with every argument check.
+// kast.transfer and Transform.map from Lua (players and NPCs), with every argument check. Each map has its own context
+// (docs/services/world/maps.html#map-contexts): kast.create and kast.transfer onto another map are done at the end of
+// the tick, so this tick the entity is not (yet) in this map's context; the next tick map 2's copy of the system sees
+// it there.
 constexpr const char* kMapLuaSystem = R"lua(
 local done = false
 return { update = function()
     if done then return end
-    done = true
     local p
     for e in kast.query("Character") do p = e end
+    if not p then return end
+    done = true
+    if kast.get(p, "Transform").map == 2 then -- map 2's copy, the tick after
+        local tf = kast.get(p, "Transform")
+        expect(tf.map == 2 and tf.position.x == 300 and tf.position.z == 310 and tf.heading == 0.25, "player moved to map 2")
+        local npcs = {}
+        for e in kast.query("Npc") do npcs[kast.get(e, "Npc").name] = e end
+        tf = npcs.Cave and kast.get(npcs.Cave, "Transform")
+        expect(tf and tf.map == 2 and tf.position.x == 256 and tf.position.z == 256, "create map = 2: at its spawn")
+        expect(npcs.Far and kast.get(npcs.Far, "Transform").position.x < 512, "create clamps onto its map")
+        local g = npcs.Bat
+        tf = g and kast.get(g, "Transform")
+        expect(tf and tf.map == 2 and tf.position.x == 100 and tf.position.z == 100, "kast.transfer NPC")
+        expect(tf and tf.heading == 0, "heading defaults to the current one")
+        kast.set(g, "Transform", {position = {x = 4000, y = 0, z = 100}})
+        expect(kast.get(g, "Transform").position.x < 512, "NPC Transform set clamps onto its new map")
+        kast.log("map lua done on map 2")
+        return
+    end
     expect(kast.get(p, "Transform").map == 1, "Transform.map: player on map 1")
     local g = kast.create("Bat", {template = "Bat"})
-    expect(kast.get(g, "Transform").map == 1, "kast.create defaults to START_MAP")
+    expect(kast.get(g, "Transform").map == 1, "kast.create defaults to this map (START_MAP)")
     local c = kast.create("Cave", {template = "Bat", map = 2})
-    local tf = kast.get(c, "Transform")
-    expect(tf.map == 2 and tf.position.x == 256 and tf.position.z == 256, "create map = 2: at its spawn")
-    local far = kast.create("Far", {template = "Bat", map = 2, position = {x = 5000, y = 0, z = 100}})
-    expect(kast.get(far, "Transform").position.x < 512, "create clamps onto its map")
+    expect(type(c) == "number", "create map = 2 returns its id now")
+    raises("invalid entity id " .. c, function() kast.get(c, "Transform") end) -- in map 2's context, at the tick's end
+    kast.create("Far", {template = "Bat", map = 2, position = {x = 5000, y = 0, z = 100}})
     raises('kast.create: "map" must be the id of a loaded map, got 9', function() kast.create("X", {template = "T", map = 9}) end)
     raises('kast.create: "map" must be the id of a loaded map, got 1.5', function() kast.create("X", {template = "T", map = 1.5}) end)
 
     expect(kast.transfer(p, 2, {x = 300, y = 0, z = 310}, 0.25) == true, "kast.transfer player returns true")
-    tf = kast.get(p, "Transform")
-    expect(tf.map == 2 and tf.position.x == 300 and tf.position.z == 310 and tf.heading == 0.25, "player moved to map 2")
-    expect(kast.transfer(g, 2, {x = 100, y = 0, z = 100}) and kast.get(g, "Transform").map == 2, "kast.transfer NPC")
-    expect(kast.get(g, "Transform").heading == 0, "heading defaults to the current one")
-    kast.set(g, "Transform", {position = {x = 4000, y = 0, z = 100}})
-    expect(kast.get(g, "Transform").position.x < 512, "NPC Transform set clamps onto its new map")
+    expect(kast.get(p, "Transform").map == 1, "onto another map: still here until the end of the tick")
+    expect(kast.transfer(g, 2, {x = 100, y = 0, z = 100}) and kast.get(g, "Transform").map == 1, "kast.transfer NPC")
     raises('"Transform": "map" is read-only; use kast.transfer', function() kast.set(g, "Transform", {map = 1}) end)
     raises('kast.transfer: "map" must be the id of a loaded map, got 9', function() kast.transfer(p, 9, {x = 1, y = 0, z = 1}) end)
     raises('kast.transfer: "map" must be the id of a loaded map, got nil', function() kast.transfer(p) end)
@@ -4974,7 +5170,7 @@ return { update = function()
     raises('kast.transfer: "position" must be a table', function() kast.transfer(p, 2, 5) end)
     raises('kast.transfer: "heading" must be a finite number', function() kast.transfer(p, 2, {x = 1, y = 0, z = 1}, "n") end)
     raises("kast.transfer: invalid entity id 999999", function() kast.transfer(999999, 1, {x = 1, y = 0, z = 1}) end)
-    expect(kast.get(p, "Transform").map == 2 and kast.get(p, "Transform").position.x == 300, "failed transfers changed nothing")
+    expect(kast.get(p, "Transform").map == 1 and kast.get(p, "Transform").position.x == 1000, "failed transfers changed nothing")
     kast.log("map lua done")
 end })lua";
 
@@ -4987,10 +5183,161 @@ void checkMapLua() {
     w.spawn(1, 1, "Alice", 1000, 1000);
     w.sent.clear();
     w.world.tick(T0);
-    check_lua_expectations("map lua", "map lua done");
-    for (const auto& s : w.world.script_status()) check(s.ok, "map lua: system still enabled " + s.error);
     const auto mc = w.sent.of<proto::MapChange>(1);
     check(mc.size() == 1 && mc[0].map == 2 && mc[0].pos == proto::Vec3{300, 0, 310}, "kast.transfer sends the player MapChange");
+    w.world.tick(T0 + std::chrono::milliseconds(50));
+    check_lua_expectations("map lua", "map lua done");
+    check(said("map lua done on map 2"), "map lua: map 2's copy checked what arrived there");
+    for (const auto& s : w.world.script_status()) check(s.ok, "map lua: system still enabled " + s.error);
+}
+
+// --- map contexts (docs/services/world/maps.html#map-contexts) ---
+
+// test_maps plus map 3 "hills": tiles 0..1, spawn (100, 0, 100).
+world::Maps three_maps() {
+    world::Maps maps = test_maps();
+    map::MapInfo hills;
+    hills.id = 3;
+    hills.name = "hills";
+    hills.tiles = {{0, 0, 1, 1}};
+    hills.spawn = {100, 0, 100};
+    maps.add(hills);
+    return maps;
+}
+
+// One context per map in use, each with its own registry, AOI grid and Lua state (a debug line each), plus the realm,
+// the only one running the game machines. Entity ids are unique across the contexts: 1,000 NPCs created and destroyed
+// in each of 3 (twice), and an NPC keeps its id when it moves to another context.
+void checkMapContexts() {
+    LogCapture capture;
+    log::set_level(log::Level::debug);
+    LuaRoot r;
+    r.write("fsms/clock.lua", "return { name = 'clock', initial = 'on', states = { on = { enter = function() kast.log('clock entered') end } } }");
+    r.write("systems/count.lua", "local n = 0\nreturn { update = function() n = n + 1 ; if n == 1 then kast.log('first update') end end }");
+    TestWorld w({}, {}, three_maps());
+    check(w.world.load_scripts(r.root, {"clock"}).empty(), "contexts: loads");
+    check(said("realm context started") && said_at("map context started").size() == 1 &&
+              contains(g_log[said_first("map context started")], R"("map":1)"),
+          "contexts: the realm's and START_MAP's context start with the scripts");
+    check(said_at("clock entered").size() == 1, "contexts: the game machine entered once, in the realm");
+    for (const uint16_t map : {uint16_t{2}, uint16_t{3}}) w.world.create_npc("N", "T", map, std::nullopt, 0); // their contexts start on first use
+    const auto started = said_at("map context started");
+    check(started.size() == 3 && contains(g_log[started[1]], R"("map":2)") && contains(g_log[started[2]], R"("map":3)"),
+          "contexts: one debug line per map context, each when first used");
+    w.world.tick(T0);
+    check(said_at("first update").size() == 3, "contexts: each map's Lua state runs its own copy of the system");
+    check(said_at("clock entered").size() == 1, "contexts: no map context starts the game machines");
+    check(&w.world.registry(1) != &w.world.registry(2) && &w.world.registry(2) != &w.world.registry(3) &&
+              w.world.registry(1).view<world::Npc>().empty() && w.world.registry(2).view<world::Npc>().size() == 1 &&
+              w.world.registry(3).view<world::Npc>().size() == 1,
+          "contexts: each map's NPCs are in its own registry");
+    log::set_level(log::Level::info);
+
+    // 1,000 NPCs in each of the 3 contexts, interleaved: every id unique, on the wire (Spawn) and in the registries.
+    std::vector<entt::entity> npcs;
+    for (int round = 0; round < 2; ++round) {
+        npcs.clear();
+        for (int i = 0; i < 1000; ++i)
+            for (const uint16_t map : {uint16_t{1}, uint16_t{2}, uint16_t{3}})
+                npcs.push_back(w.world.create_npc("N", "T", map, proto::Vec3{float(i % 400), 0, float(i % 400)}, 0));
+        std::set<uint32_t> ids;
+        for (entt::entity e : npcs) ids.insert(wire(e));
+        size_t inOne = 0;
+        for (entt::entity e : npcs)
+            inOne += (w.world.registry(1).valid(e) + w.world.registry(2).valid(e) + w.world.registry(3).valid(e)) == 1;
+        check(ids.size() == 3000 && inOne == 3000, std::format("contexts: 3000 NPCs, 3000 ids, each in one context (round {})", round));
+        for (entt::entity e : npcs) w.world.destroy_npc(e);
+        check(w.world.registry(1).view<world::Npc>().empty() && w.world.registry(2).view<world::Npc>().size() == 1 &&
+                  w.world.registry(3).view<world::Npc>().size() == 1,
+              "contexts: every NPC destroyed in its own context");
+    }
+    // Spawns on the wire carry those ids: a player on map 2 sees the NPCs there, each id once.
+    for (int i = 0; i < 100; ++i) npcs[i] = w.world.create_npc("N", "T", uint16_t(1 + i % 3), proto::Vec3{300, 0, 300}, 0);
+    w.spawn(1, 1, "Ann", 300, 300, "", 2);
+    w.world.tick(T0 + std::chrono::milliseconds(50));
+    std::set<uint32_t> seen;
+    size_t spawns = 0;
+    for (const auto& s : w.sent.of<proto::Spawn>(1)) spawns += seen.insert(s.entityId).second;
+    check(spawns == 34 && seen.size() == 34, "contexts: map 2's player gets a Spawn per NPC there (33 + the first), ids unique");
+    const entt::entity mover = npcs[1]; // on map 2
+    check(w.world.transfer(mover, {3, {100, 0, 100}, 0}) && w.world.registry_of(mover) == &w.world.registry(3) &&
+              !w.world.registry(2).valid(mover),
+          "contexts: an NPC moved to map 3 keeps its id, in map 3's context only");
+}
+
+// kast.world.post (docs/services/world/lua.html#post): to a map, "realm" and "all", each delivered on the next tick on
+// its targets' buses, in post order, as {from, data}; from the realm too (a game machine's callback). Bad targets and
+// bad data raise.
+void checkWorldPost() {
+    LogCapture capture;
+    LuaRoot r;
+    r.write("fsms/beacon.lua", R"(return { name = "beacon", initial = "off", states = {
+    off = {}, on = { enter = function() kast.world.post("all", "beacon", {n = 6}) end } } })");
+    r.write("systems/post.lua", std::string(kLuaExpect) + R"lua(
+local tick = 0
+local function here() -- this context's map: its one character's
+    for e in kast.query("Character") do return kast.get(e, "Transform").map end
+end
+return {
+    init = function()
+        for _, name in ipairs({"ping", "pong", "beacon"}) do
+            kast.subscribe(name, function(p)
+                kast.log(string.format("map %s got %s from %s n %s", tostring(here()), name, tostring(p.from), tostring(p.data.n)))
+            end)
+        end
+    end,
+    update = function()
+        tick = tick + 1
+        if tick ~= 1 or here() ~= 1 then return end -- map 1's copy posts, once
+        kast.world.post(2, "ping", {n = 1})
+        kast.world.post("all", "pong", {n = 2})
+        kast.world.post(1, "ping", {n = 3})
+        kast.world.post("realm", "ping", {n = 4})
+        kast.world.post(2, "ping", {n = 5})
+        local target = 'kast.world.post: target must be a loaded map\'s id, "realm" or "all", got '
+        raises(target .. "9", function() kast.world.post(9, "x", {}) end)
+        raises(target .. "1.5", function() kast.world.post(1.5, "x", {}) end)
+        raises(target .. "nowhere", function() kast.world.post("nowhere", "x", {}) end)
+        raises(target .. "nil", function() kast.world.post(nil, "x", {}) end)
+        raises("kast.world.post: event name must be a non-empty string, got nil", function() kast.world.post(1) end)
+        raises("kast.world.post: payload.x must be a finite number", function() kast.world.post(1, "x", {x = 1 / 0}) end)
+        local cyc = {}
+        cyc.self = cyc
+        raises("kast.world.post: payload.self: the table contains itself (cycle)", function() kast.world.post("all", "x", cyc) end)
+        kast.log("posted")
+    end,
+}
+)lua");
+    TestWorld w({});
+    check(w.world.load_scripts(r.root, {"beacon"}).empty(), "post: loads");
+    std::vector<nlohmann::json> realm;
+    auto sub = w.world.realm_bus().subscribe("ping", [&](const nlohmann::json& p) { realm.push_back(p); });
+    auto sub2 = w.world.realm_bus().subscribe("pong", [&](const nlohmann::json& p) { realm.push_back(p); });
+    w.spawn(1, 1, "Ann", 1000, 1000);
+    w.spawn(2, 2, "Bob", 300, 300, "", 2);
+    w.world.tick(T0);
+    check_lua_expectations("post", "posted");
+    check(said_at(" got ").empty() && realm.empty(), "post: nothing delivered in the tick it was posted");
+    w.world.tick(T0 + std::chrono::milliseconds(50));
+    const std::vector<size_t> map1 = {said_first("map 1 got pong from 1 n 2"), said_first("map 1 got ping from 1 n 3")};
+    const std::vector<size_t> map2 = {said_first("map 2 got ping from 1 n 1"), said_first("map 2 got pong from 1 n 2"),
+                                      said_first("map 2 got ping from 1 n 5")};
+    check(std::ranges::is_sorted(map1) && map1.back() != SIZE_MAX && std::ranges::is_sorted(map2) && map2.back() != SIZE_MAX &&
+              said_at(" got ").size() == 5,
+          "post: the next tick, each map gets what was posted to it or to all, in post order, from = map 1");
+    check(realm.size() == 2 && realm[0] == nlohmann::json{{"from", 1}, {"data", {{"n", 2}}}} &&
+              realm[1] == nlohmann::json{{"from", 1}, {"data", {{"n", 4}}}},
+          "post: the realm's bus gets \"all\" and \"realm\", in post order, as {from, data}");
+
+    // From the realm: a game machine's enter callback posts to all.
+    clear_log();
+    w.world.realm_fsm().change("beacon", "on");
+    w.world.tick(T0 + std::chrono::milliseconds(100));
+    check(said_at(" got beacon").empty(), "post: the realm's post waits for the end of the tick");
+    w.world.tick(T0 + std::chrono::milliseconds(150));
+    check(said("map 1 got beacon from realm n 6") && said("map 2 got beacon from realm n 6"),
+          "post: from the realm, from = \"realm\"");
+    for (const auto& s : w.world.script_status()) check(s.ok, "post: system still enabled " + s.error);
 }
 
 // --- areas (docs/services/world/areas.html) ---
@@ -5136,6 +5483,9 @@ void checkAreaWorld() {
     };
     auto enter = w.world.bus().subscribe("area.enter", record("enter"));
     auto leave = w.world.bus().subscribe("area.leave", record("leave"));
+    // Each map has its own context and bus: map 1's are delivered before map 2's in a tick.
+    auto caveEnter = w.world.bus(2).subscribe("area.enter", record("enter"));
+    auto caveLeave = w.world.bus(2).subscribe("area.leave", record("leave"));
     auto& reg = w.world.registry();
 
     // Cora waits on map 2 next to the portal destination.
@@ -5172,15 +5522,15 @@ void checkAreaWorld() {
     events.clear();
     w.move(a, {{1045, 0, 998}, 2.8f, 0});
     w.world.tick(T0 + std::chrono::seconds(4));
-    const auto& tf = reg.get<world::Transform>(a);
-    check(reg.get<world::MapRef>(a).map == 2 && tf.pos == proto::Vec3{256, 0, 240} && tf.heading == 3.14f,
+    const auto& tf = w.reg(a).get<world::Transform>(a);
+    check(w.world.registry_of(a) == &w.world.registry(2) && w.reg(a).get<world::MapRef>(a).map == 2 && tf.pos == proto::Vec3{256, 0, 240} && tf.heading == 3.14f,
           "portal: on map 2 at the portal pos and heading");
     check(events == std::vector<std::string>{std::format("leave {} 1 eastvale pvp=false", A),
                                              std::format("enter {} 1 cave_mouth pvp=false", A),
                                              std::format("leave {} 1 cave_mouth pvp=false", A),
                                              std::format("enter {} 2 cave pvp=false", A)},
           "portal: leave eastvale, enter cave_mouth, leave it, enter the cave on map 2: " + joined(events));
-    check(reg.get<world::AreaRef>(a).map == 2 && reg.get<world::AreaRef>(a).area == 0, "AreaRef: cave on map 2");
+    check(w.reg(a).get<world::AreaRef>(a).map == 2 && w.reg(a).get<world::AreaRef>(a).area == 0, "AreaRef: cave on map 2");
     const auto& toA = w.sent.bySession[1];
     const size_t change = first_of<proto::MapChange>(w.sent, 1), despawn = first_of<proto::Despawn>(w.sent, 1),
                  spawn = first_of<proto::Spawn>(w.sent, 1);
@@ -5205,7 +5555,7 @@ void checkAreaWorld() {
     events.clear();
     w.move(a, {{256, 0, 241}, 0, 0});
     w.world.tick(T0 + std::chrono::seconds(5));
-    check(reg.get<world::MapRef>(a).map == 2 && events.empty(), "moving on the cave map: no transfer, no events");
+    check(w.reg(a).get<world::MapRef>(a).map == 2 && events.empty(), "moving on the cave map: no transfer, no events");
     w.world.despawn(a);
     check(!w.sent.saves.empty() && w.sent.saves.back().mapId == 2, "save keeps map 2");
 }
@@ -5228,8 +5578,10 @@ return { update = function()
     expect(kast.map.areaAt(1, 1045, 0, 995).id == "cave_mouth", "areaAt the portal")
     expect(kast.map.areaAt(2, 256, 0, 256).flags.noMount == true, "areaAt map 2")
     expect(kast.map.areaAt(1, 5000, 0, 5000) == nil, "areaAt outside every area: nil")
-    local bat = kast.create("Bat2", {template = "Bat", map = 2, position = {x = 256, y = 0, z = 275}})
-    expect(kast.map.area(bat).id == "cave_exit", "area(NPC)")
+    -- An NPC created on map 2 would be in map 2's context, at the end of the tick (maps.html#map-contexts): one here.
+    local bat = kast.create("Bat2", {template = "Bat", position = {x = 1045, y = 0, z = 995}})
+    expect(kast.map.area(bat).id == "cave_mouth", "area(NPC)")
+    expect(kast.map.areaAt(2, 256, 0, 275).id == "cave_exit", "areaAt the cave's exit")
     raises('kast.map.areaAt: "map" must be the id of a loaded map, got 9', function() kast.map.areaAt(9, 1, 1, 1) end)
     raises('kast.map.areaAt: "y" must be a finite number', function() kast.map.areaAt(1, 1, "y", 1) end)
     raises("kast.map.area: invalid entity id 999999", function() kast.map.area(999999) end)
@@ -5877,14 +6229,14 @@ void checkNpcSpawnDefinitions() {
     check(has(g, "Stats") && has(g, "Hp") && has(g, "StateMachine") && !has(g, "Secret") && w.value(g, "Stats") == stats &&
               w.value(g, "Hp") == Json::parse(R"({"cur":7.0,"max":10.0})"),
           "npc spawn: exactly the definition's components, with its data: " + w.value(g, "Stats").dump());
-    check(w.world.fsm().state(lua::EntityId{wire(g)}) == "a", "npc spawn: StateMachine in its initial state");
+    check(w.fsm(g).state(lua::EntityId{wire(g)}) == "a", "npc spawn: StateMachine in its initial state");
 
     lua::pool(reg, "Stats").get(g).value["hp"] = 1;
-    w.world.fsm().change(lua::EntityId{wire(g)}, "b");
+    w.fsm(g).change(lua::EntityId{wire(g)}, "b");
     w.world.destroy_npc(g);
     w.world.tick(T0 + std::chrono::seconds(1));
     const auto again = first();
-    check(again != entt::null && w.value(again, "Stats") == stats && w.world.fsm().state(lua::EntityId{wire(again)}) == "a",
+    check(again != entt::null && w.value(again, "Stats") == stats && w.fsm(again).state(lua::EntityId{wire(again)}) == "a",
           "npc spawn: a respawned NPC starts with fresh definition data and machine state");
 
     LuaRoot badMaps;
@@ -6316,6 +6668,7 @@ int lua_checks(int& checks) {
     checkStarterMmoClasses();
     checkStarterMmoEquipment();
     checkStarterMmoQuests();
+    checkStarterMmoMapCrossing();
 #endif
     checkNpcDefinitionErrors();
     checkItemsAndLoot();
@@ -6328,6 +6681,8 @@ int lua_checks(int& checks) {
     checkMapWorld();
     checkProximityChat();
     checkMapLua();
+    checkMapContexts();
+    checkWorldPost();
     checkAreaShapes();
     checkAreaLoading();
     checkGround();

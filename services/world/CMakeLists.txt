@@ -42,6 +42,7 @@ add_library(world_core STATIC
   server/db/char_repo.cpp
   server/db/db_worker.cpp
   server/world/aoi_grid.cpp
+  server/world/map_context.cpp
   server/world/maps.cpp
   server/world/nav.cpp
   server/world/rules.cpp
