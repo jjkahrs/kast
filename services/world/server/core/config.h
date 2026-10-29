@@ -24,6 +24,7 @@ struct Config {
     double msgBurst = 120;
     uint32_t msgRateGraceMs = 2000;
     uint32_t maxSendBufferBytes = 1 << 20;
+    uint32_t netThreads = 4; // threads doing TLS and socket I/O for every connection; the tick has its own
     // lag simulator (testing only): each message, both ways, held latency +- jitter ms, in order; 0 = off
     uint32_t simLatencyMs = 0, simJitterMs = 0;
     // TLS

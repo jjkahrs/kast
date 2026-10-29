@@ -1,5 +1,5 @@
 // Assert-style checks for the world server's pure logic: frame codec (every message), frame rejection, names,
-// movement, AOI sets, chat sanitizing and rate limits, config validation, the DB save queue (no MySQL), send fan-out (one encode), buffered session reads over a 127.0.0.1 TLS loopback, tick stats and JWT/JWKS verification with
+// movement, AOI sets, chat sanitizing and rate limits, config validation, the DB save queue (no MySQL), send fan-out (one encode), buffered session reads over a 127.0.0.1 TLS loopback, the net-thread/game-thread handoff (sessions on 4 net threads), tick stats and JWT/JWKS verification with
 // locally generated RSA keys; lua_checks.cpp covers the Lua layer and the maps (manifests, World on several maps). No database or outside network; time is passed in (only the lag-simulator fan-out waits a few ms).
 // Exit 0 if every check passes. Run by CTest as world_self_check.
 #include "auth/jwks_cache.h"
@@ -10,6 +10,7 @@
 #include "core/tick_stats.h"
 #include "core/utc.h"
 #include "db/db_worker.h"
+#include "net/net_threads.h"
 #include "net/session.h"
 #include "net/tls_context.h"
 #include "world/aoi_grid.h"
@@ -854,6 +855,16 @@ void checkConfig() {
     env["MAP_THREADS"] = "4";
     check(load_config(lookup).errors.empty() && load_config(lookup).config.mapThreads == 4, "MAP_THREADS 4 read");
     env.erase("MAP_THREADS");
+    check(ok.config.netThreads == 4, "NET_THREADS defaults to 4");
+    for (const char* bad : {"0", "65", "abc"}) {
+        env["NET_THREADS"] = bad;
+        const auto r = load_config(lookup);
+        check(r.errors.size() == 1 && r.errors[0] == std::string("NET_THREADS: must be a number in [1, 64], got \"") + bad + "\"",
+              (std::string("NET_THREADS ") + bad + " refused with a clear error").c_str());
+    }
+    env["NET_THREADS"] = "1";
+    check(load_config(lookup).errors.empty() && load_config(lookup).config.netThreads == 1, "NET_THREADS 1 read");
+    env.erase("NET_THREADS");
     check(ok.config.dbPoolSize == 4, "DB_POOL_SIZE defaults to 4");
     for (const char* bad : {"0", "33", "abc"}) {
         env["DB_POOL_SIZE"] = bad;
@@ -1175,6 +1186,155 @@ void checkSessionReads() {
         check(exact && lb.delivered.size() == 2 && said(lb.delivered[0], big) && said(lb.delivered[1], "next"),
               "loopback: a maxFrameBytes (32 KB) frame and the frame after it are both delivered");
     }
+}
+
+// The world's thread split (main.cpp, GameServer): Sessions on net::NetThreads, this thread as the game thread. Real
+// 127.0.0.1 TLS sessions, accepted round-robin over the net threads, post their messages and closes to game as
+// GameServer's callbacks do.
+struct NetRig {
+    struct Peer {
+        std::shared_ptr<net::Session> server; // held on the game thread, like GameServer::Client::session
+        std::unique_ptr<asio::ssl::stream<asio::ip::tcp::socket>> client;
+        std::vector<std::string> said; // Say texts as the game thread got them
+        std::vector<uint8_t> received; // what the client read
+        std::array<uint8_t, 4096> chunk{};
+        bool ready = false, closed = false;
+    };
+    asio::io_context game;
+    net::NetThreads net{4};
+    asio::ssl::context& serverTls;
+    asio::ssl::context clientTls{asio::ssl::context::tls_client};
+    asio::ip::tcp::acceptor acceptor{game, {asio::ip::make_address("127.0.0.1"), 0}};
+    std::vector<std::unique_ptr<Peer>> peers;
+    std::atomic<int> onGameThread{0}; // session callbacks that ran on the game thread: must stay 0
+
+    NetRig(asio::ssl::context& tls, size_t n) : serverTls(tls) {
+        for (size_t i = 0; i < n; ++i) {
+            auto* p = peers.emplace_back(std::make_unique<Peer>()).get();
+            acceptor.async_accept(net.next(), [this, p](asio::error_code ec, asio::ip::tcp::socket s) {
+                if (ec) return;
+                p->server = std::make_shared<net::Session>(
+                    uint32_t(peers.size()), std::move(s), serverTls, net::SessionLimits{},
+                    [this, p](net::Session&, proto::Message&& m) {
+                        onGameThread += game.get_executor().running_in_this_thread();
+                        asio::post(game, [p, m = std::move(m)] {
+                            if (const auto* say = std::get_if<proto::Say>(&m)) p->said.push_back(say->text);
+                        });
+                    },
+                    [this, p](net::Session&) {
+                        onGameThread += game.get_executor().running_in_this_thread();
+                        asio::post(game, [p] { p->closed = true; });
+                    });
+                p->server->start(); // queued for its net thread
+            });
+            p->client = std::make_unique<asio::ssl::stream<asio::ip::tcp::socket>>(game, clientTls);
+            p->client->lowest_layer().connect(acceptor.local_endpoint());
+            p->client->async_handshake(asio::ssl::stream_base::client, [this, p](asio::error_code ec) {
+                p->ready = !ec;
+                if (p->ready) read_client(p);
+            });
+            run_until([&] { return p->ready && p->server; });
+        }
+    }
+    ~NetRig() { net.stop(); } // before the members: no net thread runs a callback into them
+    void read_client(Peer* p) {
+        p->client->async_read_some(asio::buffer(p->chunk), [this, p](asio::error_code ec, size_t n) {
+            if (ec) return;
+            p->received.insert(p->received.end(), p->chunk.begin(), p->chunk.begin() + static_cast<std::ptrdiff_t>(n));
+            read_client(p);
+        });
+    }
+    template <class Pred> bool run_until(Pred done, Millis timeout = Millis(5000)) {
+        const auto end = SteadyClock::now() + timeout;
+        while (!done() && SteadyClock::now() < end) {
+            game.restart();
+            game.run_for(Millis(5));
+        }
+        return done();
+    }
+    // Waits for f(session) to run on the session's own net thread (after everything posted to it before).
+    template <class F> void on_session_thread(const std::shared_ptr<net::Session>& s, F f) {
+        std::atomic<bool> done{false};
+        asio::post(s->executor(), [&, s] {
+            f(*s);
+            done = true;
+        });
+        run_until([&] { return done.load(); });
+    }
+};
+
+void checkNetHandoff() {
+    const auto dir = std::filesystem::temp_directory_path() / "kast_self_check_tls";
+    asio::ssl::context tls = net::make_server_tls({"", "", dir.string()});
+    NetRig rig(tls, 8); // two sessions per net thread
+    check(std::ranges::all_of(rig.peers, [](auto& p) { return p->ready && p->server; }),
+          "net threads: 8 loopback sessions up, accepted round-robin over 4 net threads");
+
+    // 1. Every client writes 100 frames at once: the net threads decode concurrently, the game thread gets each
+    //    session's messages in the order they were sent.
+    constexpr size_t N = 100; // under the rate limiter's burst of 120
+    std::vector<std::vector<uint8_t>> batches(rig.peers.size());
+    for (size_t i = 0; i < rig.peers.size(); ++i) {
+        for (size_t k = 0; k < N; ++k) {
+            const auto f = say_frame(std::to_string(i) + ":" + std::to_string(k));
+            batches[i].insert(batches[i].end(), f.begin(), f.end());
+        }
+        asio::async_write(*rig.peers[i]->client, asio::buffer(batches[i]), [](asio::error_code, size_t) {});
+    }
+    rig.run_until([&] { return std::ranges::all_of(rig.peers, [](auto& p) { return p->said.size() >= N; }); });
+    bool inOrder = true;
+    for (size_t i = 0; i < rig.peers.size(); ++i) {
+        inOrder &= rig.peers[i]->said.size() == N;
+        for (size_t k = 0; inOrder && k < N; ++k) inOrder = rig.peers[i]->said[k] == std::to_string(i) + ":" + std::to_string(k);
+    }
+    check(inOrder, "net threads: 8 sessions x 100 frames reach the game thread, each session's in send order");
+    check(rig.onGameThread == 0, "net threads: session callbacks run on the net threads, never on the game thread");
+
+    // 3. One send_many from the game thread to sessions on every net thread: one encode, one shared buffer, the same
+    //    bytes at every client.
+    const proto::Message m = proto::ChatMsg{proto::ChatKind::say, "Bob", "hello every net thread"};
+    const auto expected = proto::encode(m);
+    std::vector<net::Session*> to;
+    for (auto& p : rig.peers) to.push_back(p->server.get());
+    const size_t before = net::framesEncoded;
+    net::send_many(to, m);
+    const size_t encodes = net::framesEncoded - before;
+    rig.run_until([&] { return std::ranges::all_of(rig.peers, [&](auto& p) { return p->received.size() >= expected.size(); }); });
+    check(encodes == 1, "net threads: send_many to 8 sessions on 4 net threads encodes once (framesEncoded +1)");
+    check(std::ranges::all_of(rig.peers, [&](auto& p) { return p->received == expected; }),
+          "net threads: every client receives identical bytes, exactly proto::encode(m)");
+
+    // 2. A client goes away: its session closes on its net thread while the game thread keeps sending to it (racing
+    //    the close), then sends again once on_closed arrived and drops its reference. Nothing crashes, nothing queues.
+    auto& gone = *rig.peers[0];
+    gone.client->lowest_layer().close();
+    for (int k = 0; !gone.closed && k < 2000; ++k) {
+        gone.server->send(proto::Say{proto::ChatKind::say, "racing the close"});
+        rig.run_until([] { return false; }, Millis(1));
+    }
+    check(rig.run_until([&] { return gone.closed; }), "net threads: a client's close reaches the game thread (on_closed)");
+    std::shared_ptr<net::Session> s = std::move(gone.server); // the game side's last reference
+    size_t queuedBefore = SIZE_MAX, queuedAfter = 0;
+    bool closing = false;
+    rig.on_session_thread(s, [&](net::Session& x) { queuedBefore = x.pending().size(); });
+    s->send(proto::Say{proto::ChatKind::say, "after close"});
+    net::send_many(std::vector<net::Session*>{s.get()}, m);
+    s->disconnect(proto::Code::kicked);
+    rig.on_session_thread(s, [&](net::Session& x) {
+        queuedAfter = x.pending().size();
+        closing = x.closing();
+    });
+    std::weak_ptr<net::Session> weak = s;
+    s->send(proto::Say{proto::ChatKind::say, "last reference in the post"});
+    s.reset(); // only that queued send holds it now
+    rig.run_until([&] { return weak.expired(); });
+    check(closing && queuedAfter == queuedBefore,
+          "net threads: send / send_many / disconnect to a session that closed on its net thread are dropped");
+    check(weak.expired(), "net threads: a queued send holding the last reference runs, then the session is freed");
+    std::printf("  net threads: %zu sessions on %zu net threads, %zu frames each in order: %s; send_many encodes: %zu; "
+                "after close: %zu bytes queued before, %zu after (dropped: %s); freed: %s\n",
+                rig.peers.size(), rig.net.size(), N, inOrder ? "yes" : "no", encodes, queuedBefore, queuedAfter,
+                closing && queuedAfter == queuedBefore ? "yes" : "no", weak.expired() ? "yes" : "no");
 }
 
 void checkTickStats() {
@@ -2030,6 +2190,7 @@ int main(int argc, char** argv) {
     checkLagSim();
     checkSendMany();
     checkSessionReads();
+    checkNetHandoff();
     checkTickStats();
     checkJwt();
     checkJwksCache();

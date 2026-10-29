@@ -58,6 +58,14 @@ and check only behaviour.</p>
   runs it over N seeds (the long race run). Two mutations were checked to fail it: entity ids from one pool behind a lock (a
   different session message at tick 17) and <code>MAX_NPCS</code> counted live across contexts (tick 136). <code>checkConfig</code> refuses
   <code>MAP_THREADS</code> 0, -1, -4, abc, 1.5, " 4" and 257.</li>
+<li><strong>Net thread handoff</strong> (<code>self_check.cpp</code>, <code>checkNetHandoff</code>): 8 real 127.0.0.1 TLS sessions accepted
+  round-robin onto a 4-thread <code>net::NetThreads</code>, with the check's own thread as the game thread and the sessions' callbacks posting to
+  it as <code>GameServer</code>'s do. Every client writes 100 frames at once: each session's messages must reach the game thread in send order,
+  and no callback may run on the game thread. One <code>net::send_many</code> from the game thread to all 8 must encode once
+  (<code>framesEncoded</code> +1) and every client must receive exactly <code>proto::encode</code> of it. Then a client closes: the game thread
+  keeps sending while the close races it, and after <code>on_closed</code> arrives a <code>send</code>, <code>send_many</code> and
+  <code>disconnect</code> to that session must queue nothing (checked on its own net thread), and a queued send holding the last reference
+  must run and then free the session. It prints one <code>net threads:</code> line. <code>checkConfig</code> refuses <code>NET_THREADS</code> 0, 65 and abc.</li>
 <li><strong>Parallel cost</strong> (ctest <code>map_threads_bench</code>, <code>world_self_check --map-threads-bench</code>): p50 and p95
   <code>World::tick</code> ms over 300 ticks (after 50 to warm up) on the injected clock, the sample <code>lua/</code> running, 4 maps of 4&times;4
   tiles, each with 100 players moving 8 m/s and 100 patrolling spawn-file Guards, with <code>MAP_THREADS=1</code> and 4. Prints the
@@ -244,8 +252,19 @@ and check only behaviour.</p>
 <li>Logs go to <code>build/integration-&lt;run&gt;/</code>.</li>
 </ul>
 </li>
+<li id="tsan"><strong>ThreadSanitizer</strong> (<code>docker/tsan.override.yml</code>, testing only): the Dockerfile's <code>tsan</code> stage builds
+  <code>kast_world</code> and <code>world_self_check</code> with <code>-fsanitize=thread</code> as <code>kast-world:tsan</code>; the default image is unchanged.
+  TSan needs a fixed address layout, so the image starts under <code>setarch -R</code> and the override runs it with <code>seccomp:unconfined</code>.
+  <code>docker compose -f docker-compose.yml -f docker/tsan.override.yml up -d --build world</code> runs it; <code>COMPOSE_FILE</code> set to both files
+  (<code>;</code>-separated on Windows) makes <code>tests/integration.sh</code> and <code>tests/load.sh</code> use it. Reports go to files in the
+  <code>tsan-reports</code> volume, kept when the tests recreate <code>world</code>:
+  <code>docker compose run --rm --no-deps --entrypoint sh world -c 'cat /app/tsan/*' | grep -c "WARNING: ThreadSanitizer"</code> must be 0.
+  The self-check needs the source tree, so it runs in the build stage: <code>docker build --target build-tsan -t kast-world:tsan-build .</code>, then
+  <code>docker run --rm --security-opt seccomp=unconfined -w /src kast-world:tsan-build setarch x86_64 -R ./build/linux-release/world_self_check</code>. Without the override,
+  <code>docker compose up -d --force-recreate world</code> goes back to the default image.</li>
 <li><strong>Load</strong> (<code>tests/load.sh</code>):<ul>
-<li><strong>Setup:</strong> recreates <code>world</code> (with the shell's <code>MAP_THREADS</code>, default 1) so its totals cover only the test. It then runs <code>COUNT</code> bots in one process (8 io threads, 50 new connections per second) for <code>DURATION</code> s.</li>
+<li><strong>Setup:</strong> recreates <code>world</code> (with the shell's <code>MAP_THREADS</code>, default 1, <code>NET_THREADS</code>, default 4, and <code>MAX_CONNECTIONS</code>, default
+  <code>COUNT</code> + 100) so its totals cover only the test. It then runs <code>COUNT</code> bots in one process (8 io threads, 50 new connections per second) for <code>DURATION</code> s.</li>
 <li><strong>Across maps:</strong> <code>MAPS=1,2,4,5</code> passes <code>--maps</code> to the bot: bot <em>i</em> heads for the <em>i</em>-th listed map (round
   robin, so <code>COUNT</code> spreads evenly). It enters on its saved map (<code>START_MAP</code> for a new character), walks at 9 m/s to the middle of
   the next portal on the shortest portal route there (read from <code>--map-root</code>'s <code>map.json</code> and <code>areas.json</code> files),
@@ -269,6 +288,9 @@ and check only behaviour.</p>
   the summary has <code>enter_ms_p50</code> and <code>enter_ms_p99</code>. The result also shows the saves lost on the graceful stop.</li>
 </ul>
 </li>
+<li><strong>Net busy (information only):</strong> the result's <code>net busy % worst window</code> line has each net thread's highest
+  <code>busy_pct</code> over the 10 s windows, and <code>net busy % run total</code> the <code>net stats total</code> line's
+  (<a href="operations.html#net-stats">Operations</a>).</li>
 </ul>
 </li>
 </ul>

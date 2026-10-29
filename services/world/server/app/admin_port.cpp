@@ -16,9 +16,9 @@ bool same_secret(const std::string& a, const std::string& b) {
 
 } // namespace
 
-AdminPort::AdminPort(asio::io_context& io, asio::ssl::context& tls, const net::SessionLimits& limits, Options options,
-                     Online online, Kick kick, Instances instances)
-    : tls_(tls), limits_(limits), opts_(std::move(options)), online_(std::move(online)), kick_(std::move(kick)),
+AdminPort::AdminPort(asio::io_context& io, net::NetThreads& net, asio::ssl::context& tls, const net::SessionLimits& limits,
+                     Options options, Online online, Kick kick, Instances instances)
+    : io_(io), net_(net), tls_(tls), limits_(limits), opts_(std::move(options)), online_(std::move(online)), kick_(std::move(kick)),
       instances_(std::move(instances)), acceptor_(io) {}
 
 void AdminPort::start() {
@@ -35,21 +35,21 @@ void AdminPort::stop() {
     stopped_ = true;
     asio::error_code ec;
     acceptor_.close(ec);
-    std::vector<std::shared_ptr<net::Session>> sessions;
-    for (auto& [id, c] : conns_) sessions.push_back(c.session);
-    for (auto& s : sessions) s->disconnect(proto::Code::server_shutdown);
+    for (auto& [id, c] : conns_) c.session->disconnect(proto::Code::server_shutdown); // queued: conns_ stays as is
 }
 
 void AdminPort::accept() {
-    acceptor_.async_accept([this](asio::error_code ec, asio::ip::tcp::socket socket) {
+    acceptor_.async_accept(net_.next(), [this](asio::error_code ec, asio::ip::tcp::socket socket) {
         if (stopped_ || !acceptor_.is_open()) return;
         if (!ec) {
             socket.set_option(asio::ip::tcp::no_delay(true), ec);
             const uint32_t id = nextId_++;
             auto session = std::make_shared<net::Session>(
                 id, std::move(socket), tls_, limits_,
-                [this](net::Session& s, proto::Message&& m) { on_message(s, std::move(m)); },
-                [this](net::Session& s) { conns_.erase(s.id()); });
+                [this](net::Session& s, proto::Message&& m) {
+                    asio::post(io_, [this, id = s.id(), m = std::move(m)]() mutable { on_message(id, std::move(m)); });
+                },
+                [this](net::Session& s) { asio::post(io_, [this, id = s.id()] { conns_.erase(id); }); });
             if (conns_.size() >= kMaxConnections) {
                 session->start(proto::Code::server_full);
             } else {
@@ -61,10 +61,11 @@ void AdminPort::accept() {
     });
 }
 
-void AdminPort::on_message(net::Session& s, proto::Message&& m) {
-    auto it = conns_.find(s.id());
+void AdminPort::on_message(uint32_t id, proto::Message&& m) {
+    auto it = conns_.find(id);
     if (it == conns_.end() || stopped_) return;
     Conn& c = it->second;
+    net::Session& s = *c.session; // its calls are queued for its net thread
     if (!c.ok) {
         const auto* hello = std::get_if<proto::LinkHello>(&m);
         if (!hello) return s.disconnect(proto::Code::unexpected_message);
