@@ -39,7 +39,7 @@
 </ul>
 </li>
 <li><strong>Auth unreachable:</strong> if the JWKS can't be fetched, the client gets <code>service_unavailable</code>.</li>
-<li><strong>Off the game thread:</strong> verification and the JWKS fetch run on their own thread, never on the game thread.</li>
+<li><strong>Off the game thread:</strong> verification and the JWKS fetch run on their own thread, never on the game thread (which runs the tick and handles messages) or the net threads (TLS and socket I/O).</li>
 <li><strong>Logging:</strong> tokens are never logged, and neither are passwords. Chat text is never logged at info or above; at debug level only its byte length is.</li>
 </ul>
 <h2 id="ban-gap">Ban gap</h2>
@@ -78,7 +78,7 @@
 <li><strong>Shared secret:</strong> the first message must be <code>LinkHello</code> carrying <code>WORLD_ADMIN_SECRET</code> (16+ characters). It is compared in constant time (<code>CRYPTO_memcmp</code>, after a length check). A wrong secret is logged as <code>admin port refused: wrong secret</code> (session and remote address, never the secret) and the connection is closed with <code>Disconnect{invalid_token}</code>. Anything else before the hello: <code>Disconnect{unexpected_message}</code>.</li>
 <li><strong>Limits:</strong> at most 32 admin connections at once (more get <code>server_full</code>), and the game clients' frame size, handshake deadline, idle timeout and message rate.</li>
 <li><strong>Kicks:</strong> logged with the account, character, reason and admin address. A kicked character leaves the world exactly as on a duplicate login, so it is saved; the client gets <code>Disconnect{kicked}</code>. The reason text stays in the world's log.</li>
-<li><strong>Thread safety:</strong> the listener runs on the io thread with the game loop, so the online list and kicks never race the tick.</li>
+<li><strong>Thread safety:</strong> the listener and the request handling run on the game thread with the tick, so the online list and kicks never race it. Only each connection's TLS and socket I/O run on a net thread.</li>
 </ul>
 <h2 id="client-events">Client events</h2>
 <p><code>ClientEvent</code> (<code>kast.world.send</code> on the client) is the only way a client talks to the server's Lua systems. The rules are in the <a href="protocol.html#client-events">protocol</a>.</p>

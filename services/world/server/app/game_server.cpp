@@ -2,6 +2,8 @@
 #include "../core/log.h"
 #include "../world/rules.h"
 
+#include <cmath>
+
 namespace kast {
 namespace {
 
@@ -49,22 +51,20 @@ const char* role_name(proto::Role r) {
 
 } // namespace
 
-GameServer::GameServer(asio::io_context& io, const Config& cfg, const world::Maps& maps, asio::ssl::context& tls,
-                       db::DbWorker& db, TokenService& tokens, lua::Defs defs, uint64_t firstInstanceId)
-    : io_(io), cfg_(cfg), maps_(maps), tls_(tls), db_(db), tokens_(tokens), limits_(session_limits(cfg)), acceptor_(io),
+GameServer::GameServer(asio::io_context& io, net::NetThreads& net, const Config& cfg, const world::Maps& maps,
+                       asio::ssl::context& tls, db::DbWorker& db, TokenService& tokens, lua::Defs defs,
+                       uint64_t firstInstanceId)
+    : io_(io), net_(net), cfg_(cfg), maps_(maps), tls_(tls), db_(db), tokens_(tokens), limits_(session_limits(cfg)), acceptor_(io),
       world_(world_rules(cfg, firstInstanceId), maps,
              [this](uint32_t sid, const proto::Message& m) {
                  if (auto* c = find(sid)) c->session->send(m);
              },
              [this](std::span<const uint32_t> sids, const proto::Message& m) {
-                 // Borrowed, not used in place: a slow client dropped mid-send leaves the world (on_closed) and that
-                 // can fan out again before this call returns.
-                 auto to = std::move(fanOut_);
-                 to.clear();
+                 // In place: a send only queues for the net threads, so no on_closed runs before this returns.
+                 fanOut_.clear();
                  for (uint32_t sid : sids)
-                     if (auto* c = find(sid)) to.push_back(c->session.get());
-                 net::send_many(to, m);
-                 fanOut_ = std::move(to);
+                     if (auto* c = find(sid)) fanOut_.push_back(c->session.get());
+                 net::send_many(fanOut_, m);
              },
              [this](const db::CharSave& s) { db_.save(s); }, std::move(defs)),
       tickTimer_(io), tickPeriod_(Millis(1000 / cfg.tickHz)), windowTicks_(std::make_unique<TickStats>()),
@@ -75,7 +75,7 @@ GameServer::GameServer(asio::io_context& io, const Config& cfg, const world::Map
         net::SessionLimits adminLimits = limits_;
         adminLimits.simLatency = adminLimits.simJitter = Millis(0); // the lag simulator is for game clients
         adminPort_ = std::make_unique<AdminPort>(
-            io, tls, adminLimits, AdminPort::Options{cfg.adminHost, cfg.adminPort, cfg.adminSecret},
+            io, net, tls, adminLimits, AdminPort::Options{cfg.adminHost, cfg.adminPort, cfg.adminSecret},
             [this] { return admin_online(); }, [this](const proto::AdminKick& k) { return admin_kick(k); },
             [this] { return admin_instances(); });
     }
@@ -83,7 +83,7 @@ GameServer::GameServer(asio::io_context& io, const Config& cfg, const world::Map
     // The dev setup's chat service presents this server's own certificate (they share TLS_DEV_CERT_DIR).
     const std::string ownCert = cfg.tlsCertFile.empty() ? cfg.tlsDevCertDir + "/server.crt" : cfg.tlsCertFile;
     chatLink_ = std::make_unique<ChatLink>(
-        io,
+        io, net,
         ChatLink::Options{cfg.chatLinkHost, cfg.chatLinkPort, cfg.chatLinkSecret,
                           cfg.chatLinkCaFile.empty() ? ownCert : cfg.chatLinkCaFile, Millis(cfg.chatLinkRetryMinMs),
                           Millis(cfg.chatLinkRetryMaxMs)},
@@ -108,20 +108,26 @@ void GameServer::start() {
     else log::info("admin port off: WORLD_ADMIN_SECRET is not set");
     if (chatLink_) chatLink_->start();
     nextTick_ = SteadyClock::now();
-    windowStart_ = nextTick_;
+    windowStart_ = netWindowStart_ = netStart_ = nextTick_;
+    netWindowCpu_ = netStartCpu_ = net_.cpu_ms();
     schedule_tick();
 }
 
+// The acceptor runs here (clients_ and the connection limit are game state); each socket is made on the next net
+// context and its Session stays there.
 void GameServer::accept() {
-    acceptor_.async_accept([this](asio::error_code ec, asio::ip::tcp::socket socket) {
+    acceptor_.async_accept(net_.next(), [this](asio::error_code ec, asio::ip::tcp::socket socket) {
         if (shuttingDown_ || !acceptor_.is_open()) return;
         if (!ec) {
             socket.set_option(asio::ip::tcp::no_delay(true), ec);
             const uint32_t id = nextSessionId_++;
+            // Both run on the session's net thread and post here, in order: its messages, then its close.
             auto session = std::make_shared<net::Session>(
                 id, std::move(socket), tls_, limits_,
-                [this](net::Session& s, proto::Message&& m) { on_message(s, std::move(m)); },
-                [this](net::Session& s) { on_closed(s); });
+                [this](net::Session& s, proto::Message&& m) {
+                    asio::post(io_, [this, sid = s.id(), m = std::move(m)]() mutable { on_message(sid, std::move(m)); });
+                },
+                [this](net::Session& s) { asio::post(io_, [this, sid = s.id()] { on_closed(sid); }); });
             if (clients_.size() >= cfg_.maxConnections) {
                 session->start(proto::Code::server_full);
             } else {
@@ -139,19 +145,25 @@ GameServer::Client* GameServer::find(uint32_t sessionId) {
     return it == clients_.end() ? nullptr : &it->second;
 }
 
-void GameServer::on_message(net::Session& s, proto::Message&& m) {
-    Client* c = find(s.id());
-    if (!c || shuttingDown_) return;
+void GameServer::disconnect(Client& c, proto::Code reason) {
+    c.leaving = true;
+    c.session->disconnect(reason);
+}
+
+// The session may have closed (or been told to) since it posted m: then c is gone or leaving and m is dropped.
+void GameServer::on_message(uint32_t sid, proto::Message&& m) {
+    Client* c = find(sid);
+    if (!c || c->leaving || shuttingDown_) return;
     switch (c->phase) {
     case Phase::hello:
         if (auto* h = std::get_if<proto::Hello>(&m)) handle_hello(*c, *h);
-        else s.disconnect(proto::Code::unexpected_message);
+        else disconnect(*c, proto::Code::unexpected_message);
         break;
     case Phase::auth:
         if (auto* a = std::get_if<proto::Auth>(&m)) handle_auth(*c, *a);
-        else s.disconnect(proto::Code::unexpected_message);
+        else disconnect(*c, proto::Code::unexpected_message);
         break;
-    case Phase::verifying: s.disconnect(proto::Code::unexpected_message); break;
+    case Phase::verifying: disconnect(*c, proto::Code::unexpected_message); break;
     case Phase::lobby: handle_lobby(*c, std::move(m)); break;
     case Phase::world: handle_world(*c, std::move(m)); break;
     }
@@ -159,7 +171,7 @@ void GameServer::on_message(net::Session& s, proto::Message&& m) {
 
 void GameServer::handle_hello(Client& c, const proto::Hello& m) {
     if (m.protocolVersion != proto::kProtocolVersion) {
-        c.session->disconnect(proto::Code::protocol_mismatch);
+        disconnect(c, proto::Code::protocol_mismatch);
         return;
     }
     c.phase = Phase::auth;
@@ -176,14 +188,14 @@ void GameServer::auth_done(uint32_t sid, const TokenResult& r) {
     if (!c || c->phase != Phase::verifying || shuttingDown_) return;
     if (r.code != proto::Code::ok) {
         log::info("auth rejected", {{"session", sid}, {"reason", proto::code_name(r.code)}});
-        c->session->disconnect(r.code);
+        disconnect(*c, r.code);
         return;
     }
     if (auto it = online_.find(r.accountId); it != online_.end() && it->second != sid) {
         if (Client* old = find(it->second)) {
             log::info("duplicate login: kicking old session", {{"account", r.accountId}, {"old", it->second}, {"new", sid}});
             leave_world(*old); // its save is queued before anything the new session can ask for
-            old->session->disconnect(proto::Code::logged_in_elsewhere);
+            disconnect(*old, proto::Code::logged_in_elsewhere);
         }
     }
     online_[r.accountId] = sid;
@@ -207,7 +219,7 @@ void GameServer::handle_lobby(Client& c, proto::Message&& m) {
         if (op == proto::Opcode::Move || op == proto::Opcode::Say || op == proto::Opcode::ClientEvent ||
             op == proto::Opcode::Interact)
             return; // stale in-world traffic; harmless
-        c.session->disconnect(proto::Code::unexpected_message);
+        disconnect(c, proto::Code::unexpected_message);
         return;
     }
     if (c.requestInFlight) { char_error(c, op, proto::Code::rate_limited); return; }
@@ -302,7 +314,7 @@ void GameServer::handle_world(Client& c, proto::Message&& m) {
         auto data = client_event_data(*ev);
         if (!data) {
             log::info("client event rejected", {{"session", c.session->id()}, {"bytes", ev->json.size()}});
-            c.session->disconnect(proto::Code::malformed);
+            disconnect(c, proto::Code::malformed);
             return;
         }
         world_.push_client_event(c.entity, std::move(ev->name), std::move(*data), ev->requestId);
@@ -314,7 +326,7 @@ void GameServer::handle_world(Client& c, proto::Message&& m) {
         char_error(c, op, proto::Code::already_in_world);
         return;
     }
-    c.session->disconnect(proto::Code::unexpected_message);
+    disconnect(c, proto::Code::unexpected_message);
 }
 
 void GameServer::leave_world(Client& c) {
@@ -345,7 +357,7 @@ void GameServer::report_maps() {
 std::vector<proto::AdminOnlineEntry> GameServer::admin_online() const {
     std::vector<proto::AdminOnlineEntry> out;
     for (const auto& [id, c] : clients_) {
-        if ((c.phase != Phase::lobby && c.phase != Phase::world) || c.session->closing()) continue;
+        if ((c.phase != Phase::lobby && c.phase != Phase::world) || c.leaving) continue;
         const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(c.connectedAt.time_since_epoch()).count();
         if (c.phase == Phase::world)
             out.push_back({c.accountId, c.charId, c.charName, world_.map_of(c.entity), id, static_cast<uint64_t>(ms)});
@@ -368,25 +380,25 @@ std::vector<proto::AdminInstanceEntry> GameServer::admin_instances() const {
 
 // Like the duplicate-login kick: the character leaves the world (its save is queued), then the session is told why.
 uint32_t GameServer::admin_kick(const proto::AdminKick& k) {
-    std::vector<std::shared_ptr<net::Session>> kicked;
+    uint32_t kicked = 0;
     for (auto& [id, c] : clients_) {
         if (c.phase != Phase::lobby && c.phase != Phase::world) continue;
-        if (c.session->closing()) continue;
+        if (c.leaving) continue;
         if (k.accountId ? c.accountId != k.accountId : (c.phase != Phase::world || c.charId != k.charId)) continue;
         log::info("kicked by an admin", {{"session", id}, {"account", c.accountId}, {"char", c.charId}});
         leave_world(c);
-        kicked.push_back(c.session);
+        disconnect(c, proto::Code::kicked); // only queued: clients_ does not change here
+        ++kicked;
     }
-    for (auto& s : kicked) s->disconnect(proto::Code::kicked);
-    return static_cast<uint32_t>(kicked.size());
+    return kicked;
 }
 
-void GameServer::on_closed(net::Session& s) {
-    auto it = clients_.find(s.id());
+void GameServer::on_closed(uint32_t sid) {
+    auto it = clients_.find(sid);
     if (it == clients_.end()) return;
     Client& c = it->second;
     leave_world(c);
-    if (auto o = online_.find(c.accountId); o != online_.end() && o->second == s.id()) online_.erase(o);
+    if (auto o = online_.find(c.accountId); o != online_.end() && o->second == sid) online_.erase(o);
     clients_.erase(it);
     if (shuttingDown_ && clients_.empty() && onShutdownDone_) {
         shutdownTimer_.cancel();
@@ -422,6 +434,7 @@ void GameServer::tick() {
     }
     if (start - windowStart_ >= std::chrono::seconds(cfg_.tickStatsIntervalSec)) {
         log_tick_stats("tick stats", *windowTicks_, *windowLag_, *windowContexts_);
+        log_net_stats("net stats", netWindowStart_, netWindowCpu_, start);
         windowTicks_->reset();
         windowLag_->reset();
         windowContexts_->reset();
@@ -452,6 +465,17 @@ void GameServer::log_tick_stats(const char* msg, const TickStats& ticks, const T
                     {"saves_pending", saves.pending}});
 }
 
+void GameServer::log_net_stats(const char* msg, TimePoint& since, std::vector<double>& sinceCpu, TimePoint now) {
+    const auto cpu = net_.cpu_ms();
+    const double wallMs = std::max(1.0, std::chrono::duration<double, std::milli>(now - since).count());
+    auto busy = nlohmann::json::array();
+    for (size_t i = 0; i < cpu.size() && i < sinceCpu.size(); ++i)
+        busy.push_back(std::round((cpu[i] - sinceCpu[i]) / wallMs * 1000) / 10); // %, one decimal
+    log::info(msg, {{"net_threads", cpu.size()}, {"busy_pct", busy}});
+    since = now;
+    sinceCpu = cpu;
+}
+
 // --- shutdown ---
 
 void GameServer::shutdown(std::function<void()> onDone) {
@@ -464,16 +488,13 @@ void GameServer::shutdown(std::function<void()> onDone) {
     if (chatLink_) chatLink_->stop();
     if (adminPort_) adminPort_->stop();
     log_tick_stats("tick stats total", *totalTicks_, *totalLag_, *totalContexts_);
+    log_net_stats("net stats total", netStart_, netStartCpu_, SteadyClock::now());
 
     world_.shutdown_scripts(); // onLeave changes are part of the saves below
     onShutdownDone_ = std::move(onDone);
-    std::vector<std::shared_ptr<net::Session>> sessions;
-    for (auto& [id, c] : clients_) {
-        leave_world(c);
-        sessions.push_back(c.session);
-    }
+    for (auto& [id, c] : clients_) leave_world(c);
     world_.remove_npcs(); // no players left to tell; NPCs are never saved
-    for (auto& s : sessions) s->disconnect(proto::Code::server_shutdown);
+    for (auto& [id, c] : clients_) disconnect(c, proto::Code::server_shutdown); // each on_closed comes back posted
     if (clients_.empty()) {
         auto done = std::move(onShutdownDone_);
         onShutdownDone_ = nullptr;

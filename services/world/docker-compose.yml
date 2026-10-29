@@ -25,6 +25,9 @@ services:
       SIM_JITTER_MS: ${SIM_JITTER_MS:-0}
       # Map context update workers (docs/services/world/configuration.html): from .env or the shell, e.g. MAP_THREADS=4.
       MAP_THREADS: ${MAP_THREADS:-1}
+      # Net threads (TLS + socket I/O) and the connection cap: from .env or the shell (tests/load.sh sets both).
+      NET_THREADS: ${NET_THREADS:-4}
+      MAX_CONNECTIONS: ${MAX_CONNECTIONS:-1000}
       # The chat service (docs/services/chat): clients are told CHAT_PUBLIC_HOST:CHAT_HOST_PORT (the host's view); the
       # internal link goes to the compose service. The world starts and runs without it.
       CHAT_PUBLIC_HOST: ${CHAT_PUBLIC_HOST:-127.0.0.1}

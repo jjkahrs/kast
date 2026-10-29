@@ -30,7 +30,7 @@
 <li><strong>Deleting:</strong> a delete is a soft delete. The name stays reserved, because the unique key <code>(realm_id, name)</code> with <code>ascii_general_ci</code> covers deleted rows too, so the name can't be reused.</li>
 </ul>
 <h2 id="save-and-load-rules">Save and load rules</h2>
-<p>The world never touches MySQL from the game thread. A pool of <code>DB_POOL_SIZE</code> DB worker threads (default 4) does, each with its own connection, connect fail-fast state and pending saves. Results go back to the game thread through <code>asio::post</code>.</p>
+<p>The world never touches MySQL from the game thread (the tick and all message handling) or the net threads. A pool of <code>DB_POOL_SIZE</code> DB worker threads (default 4) does, each with its own connection, connect fail-fast state and pending saves. Results go back to the game thread through <code>asio::post</code>.</p>
 <ul>
 <li><strong>Sharding:</strong> character <code>charId</code> belongs to worker <code>charId % DB_POOL_SIZE</code>. All its saves and its <code>EnterWorld</code> load run on that worker, in order.</li>
 <li><strong>Lobby requests</strong> (character list, create, delete) go into one shared queue that any idle worker takes from.</li>
@@ -83,6 +83,7 @@
 <li>The server stops accepting connections and logs <code>tick stats total</code>.</li>
 <li>Lua: <code>onLeave</code> runs for every character, then every system's <code>shutdown</code>.</li>
 <li>Every character in the world is despawned and saved, and every client gets <code>Disconnect{server_shutdown}</code>. Then every NPC is removed, with nothing sent or saved.</li>
+<li>Once every client's connection has closed (each net thread writes its clients' <code>Disconnect</code> first; at most 3 s), the net threads are stopped and joined.</li>
 <li>Once the clients are gone, queued requests are dropped and each DB worker flushes its own pending saves, ignoring backoff, until <code>SHUTDOWN_TIMEOUT_MS - 500 ms</code>. The unsaved count is the sum over the workers.</li>
 <li>The process exits 0, or 1 if any save could not be flushed.</li>
 </ol>

@@ -162,7 +162,7 @@ fi
 layer_scenario() {
     local name="43 layers: START_MAP at layerCap 2, A and B share the base layer, C lands in a new layer and sees neither" log="$LOGDIR/43.log" ok=0
     echo "--- $name"
-    stack_override 2 ""
+    stack_override 2
     docker compose up -d world >/dev/null 2>&1
     wait_healthy world || ok=1
     WORLD=$(docker compose ps -q world)

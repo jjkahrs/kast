@@ -18,8 +18,9 @@ net::SessionLimits link_limits() {
 
 } // namespace
 
-ChatLink::ChatLink(asio::io_context& io, Options options, Snapshot snapshot, OnMute onMute, OnReset onReset)
-    : io_(io), opts_(std::move(options)), snapshot_(std::move(snapshot)), onMute_(std::move(onMute)),
+ChatLink::ChatLink(asio::io_context& io, net::NetThreads& net, Options options, Snapshot snapshot, OnMute onMute,
+                   OnReset onReset)
+    : io_(io), net_(net), opts_(std::move(options)), snapshot_(std::move(snapshot)), onMute_(std::move(onMute)),
       onReset_(std::move(onReset)), tls_(net::make_client_tls(opts_.caFile, opts_.host)), retry_(io),
       limits_(link_limits()), backoff_(opts_.retryMin) {}
 
@@ -43,26 +44,32 @@ void ChatLink::connect() {
             log::debug("chat link: resolve failed", {{"host", opts_.host}, {"error", ec.message()}});
             return retry_later();
         }
-        auto socket = std::make_shared<asio::ip::tcp::socket>(io_);
-        asio::async_connect(*socket, endpoints, [this, socket](asio::error_code ec2, const auto&) {
+        // The socket (and so the Session) on a net thread; the connect's handlers here.
+        auto socket = std::make_shared<asio::ip::tcp::socket>(net_.next());
+        asio::async_connect(*socket, endpoints, asio::bind_executor(io_, [this, socket](asio::error_code ec2, const auto&) {
             if (stopped_) return;
             if (ec2) {
                 log::debug("chat link: connect failed", {{"error", ec2.message()}});
                 return retry_later();
             }
             socket->set_option(asio::ip::tcp::no_delay(true), ec2);
+            const uint32_t serial = ++serial_;
             session_ = std::make_shared<net::Session>(
-                ++serial_, std::move(*socket), tls_, limits_,
-                [this](net::Session& s, proto::Message&& m) {
-                    if (&s == session_.get()) on_message(std::move(m));
+                serial, std::move(*socket), tls_, limits_,
+                [this, serial](net::Session&, proto::Message&& m) {
+                    asio::post(io_, [this, serial, m = std::move(m)]() mutable {
+                        if (serial == serial_ && session_) on_message(std::move(m));
+                    });
                 },
-                [this](net::Session& s) {
-                    if (&s == session_.get()) on_closed();
+                [this, serial](net::Session&) {
+                    asio::post(io_, [this, serial] {
+                        if (serial == serial_ && session_) on_closed();
+                    });
                 },
                 asio::ssl::stream_base::client);
             session_->start();
             session_->send(proto::LinkHello{proto::kProtocolVersion, opts_.secret}); // goes once TLS is up; never logged
-        });
+        }));
     });
 }
 
