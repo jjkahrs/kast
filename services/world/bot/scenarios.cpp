@@ -2263,6 +2263,43 @@ asio::awaitable<void> instance_restart_verify(Ctx& x) {
     if (c) c->close();
 }
 
+// --- 43: layers (docs/services/world/maps.html#layers), START_MAP with "layerCap": 2 (integration.sh mounts a copy of
+// the maps with it) ---
+
+// A and B enter START_MAP's base layer (2, its cap) and see each other. C enters: every layer is full, so a new one;
+// C sees neither, neither sees C. The admin port lists map 1's base with 2 players and the new layer with 1.
+asio::awaitable<void> layers(Ctx& x) {
+    proto::EnterWorldOk ea, eb, ec;
+    auto a = co_await x.enter("s43a", ea);
+    auto b = co_await x.enter("s43b", eb);
+    if (!a || !b) co_return;
+    co_await sleep_for(Millis(500));
+    auto c = co_await x.enter("s43c", ec);
+    if (!c) co_return;
+    co_await sleep_for(Millis(1500)); // the Spawns, if any
+    const auto ma = co_await drain(*a, Millis(300)), mb = co_await drain(*b, Millis(300)), mc = co_await drain(*c, Millis(300));
+    const auto sees = [](const std::vector<proto::Message>& msgs, uint32_t id) {
+        for (const auto& s : only<proto::Spawn>(msgs))
+            if (s.entityId == id) return true;
+        return false;
+    };
+    x.check.expect(ea.map == 1 && eb.map == 1 && ec.map == 1 && same_pos(ea.pos, ec.pos), "A, B and C enter map 1 at its spawn");
+    x.check.expect(sees(ma, eb.entityId) && sees(mb, ea.entityId), "A and B share the base layer and see each other");
+    x.check.expect(!sees(mc, ea.entityId) && !sees(mc, eb.entityId) && !sees(ma, ec.entityId) && !sees(mb, ec.entityId),
+                   "C is in a new layer: it sees neither A nor B, and neither sees C");
+    if (const auto listed = co_await admin_instances(x)) {
+        const proto::AdminInstanceEntry *base = nullptr, *extra = nullptr;
+        for (const auto& e : *listed)
+            if (e.map == 1) (e.instance ? extra : base) = &e;
+        x.check.expect(base && base->players == 2 && extra && extra->players == 1 && extra->key.empty(),
+                       "admin port lists map 1's base layer (2 players) and the new layer (1 player)");
+        if (extra) std::printf("  admin: map 1 layer %u players %u npcs %u\n", extra->instance, extra->players, extra->npcs);
+    } else {
+        std::printf("  WORLD_ADMIN_SECRET not set: the admin instance list is not checked\n");
+    }
+    for (auto* p : {&a, &b, &c}) (*p)->close();
+}
+
 } // namespace
 
 int run_scenario(const Options& o) {
@@ -2287,6 +2324,7 @@ int run_scenario(const Options& o) {
         {"chat-down", chat_down},       {"admin", admin_port},          {"admin-off", admin_off},
         {"instances", instances},
         {"instance-restart", instance_restart}, {"instance-restart-verify", instance_restart_verify},
+        {"layers", layers},
     };
     auto it = all.find(o.scenario);
     if (it == all.end()) {
