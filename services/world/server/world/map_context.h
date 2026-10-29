@@ -51,11 +51,18 @@ struct Destination {
 // What every context shares, owned by World: the process-wide entity index space, handed out in blocks (IdPool), and
 // the live instance copies by key.
 struct Shared {
-    static constexpr uint32_t kIdBlock = 4096;
-    // The next unused block of entity indices: one a destroyed context gave back first, else a new one. Locked: a
+    static constexpr uint32_t kIdBlock = 4096;  // a world map's block
+    static constexpr uint32_t kCopyBlock = 256; // an instance copy's, so thousands of copies fit the index space
+    // Unused indices kept for world maps and live copies: no new copy is made below this.
+    // ponytail: a fixed reserve; live copies can still eat it (then generate throws). Size it by use if that ever bites.
+    static constexpr uint32_t kReserve = 16 * kIdBlock;
+    // The next unused block of size entity indices; empty if none is left. A copy's (size < kIdBlock) is a range a
+    // destroyed copy gave back first; a world map's is always new, so its spare holds a whole kIdBlock. Locked: a
     // context past its spare block takes one mid-update.
-    // ponytail: one mutex, taken once per 4096 new ids; never contended in practice.
-    std::pair<uint32_t, uint32_t> block();
+    // ponytail: one mutex, taken once per block; never contended in practice.
+    std::pair<uint32_t, uint32_t> block(uint32_t size);
+    // Room for a new instance copy: two ranges given back, or kReserve unused indices.
+    bool room_for_copy();
     // A destroyed context's ids, for those made after it (IdPool::retire): the ones it freed, and its blocks' rest.
     void give_back(std::vector<entt::entity> freed, std::pair<uint32_t, uint32_t> a, std::pair<uint32_t, uint32_t> b);
     // Up to kIdBlock of the freed ids given back, for a new context (IdPool::adopt).
@@ -83,12 +90,14 @@ private:
 // the same ids as a serial one. With one context the ids are those one registry would give.
 class IdPool {
 public:
+    explicit IdPool(uint32_t blockSize = Shared::kIdBlock) : blockSize_(blockSize) {}
+    // Throws std::length_error once the index space is used up (only past Shared::kReserve).
     entt::entity generate(Shared& shared);
     void release(entt::entity e) { freed_.push_back(entt::entt_traits<entt::entity>::next(e)); }
-    // Takes a spare block if it has none, so an update can make Shared::kIdBlock new ids without asking Shared. World
+    // Takes a spare block if it has none, so an update can make a block's worth of new ids without asking Shared. World
     // calls it for every context, in map order, before each update step.
     void reserve(Shared& shared) {
-        if (spare_.first == spare_.second) spare_ = shared.block();
+        if (spare_.first == spare_.second) spare_ = shared.block(blockSize_);
     }
     // A destroyed instance copy's ids go back to Shared (World, at the serial point), so making and destroying copies
     // never runs out of entity indices; a new copy adopts freed ones first.
@@ -100,6 +109,7 @@ public:
 private:
     std::vector<entt::entity> freed_;
     std::pair<uint32_t, uint32_t> block_{}, spare_{}; // [first, second): unused indices
+    uint32_t blockSize_;
 };
 
 class MapContext {
@@ -274,7 +284,7 @@ private:
     Spawner spawner_;  // every map's spawn file entries, in Maps order (SpawnRef indexes it); only this map's spawn here
     Activation activation_;
     Outbox outbox_;
-    IdPool ids_;
+    IdPool ids_{instance_ ? Shared::kCopyBlock : Shared::kIdBlock}; // after instance_
     int64_t npcs_ = 0, npcBase_ = 0; // npc_count = npcBase_ + npcs_
     double updateMs_ = 0;
     size_t population_ = 0;

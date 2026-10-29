@@ -28,7 +28,7 @@
 <li><strong><code>MAX_NPCS</code> in even shares:</strong> before each update step what is left under the limit is split evenly among the map
   contexts, so with several maps a map can be refused an NPC while another's share is unused (until the next step's split). Weight
   the shares by use if that ever bites.</li>
-<li><strong>Id blocks:</strong> each map context holds a spare block of 4096 entity ids; a context that makes more than that in one
+<li><strong>Id blocks:</strong> each map context holds a spare block of entity ids (4096; 256 on an instance copy); a context that makes more than that in one
   update step takes another block mid-step, which keeps ids unique but no longer the same as with 1 thread. Each context's unused
   ids stay with it.</li>
 <li><strong>One lock per navmesh:</strong> a path search takes its map's lock (Detour's query keeps its search state); only a

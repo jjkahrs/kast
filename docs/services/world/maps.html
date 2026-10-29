@@ -96,7 +96,7 @@ belongs to no map. Contexts are updated one after another on the tick thread, or
   not; a <code>StateMachine</code> keeps its current state; the entity id stays); <code>area.enter</code> on the new map's bus;
   <code>onMapEnter(e, carried)</code> in the new context's systems (<a href="lua.html#systems">Lua</a>). A portal's <code>Spawn</code>s and area events
   come in the portal tick, a <code>kast.transfer</code>'s in the next. Within a map a transfer is done at once, as before.</li>
-<li><strong>Entity ids:</strong> one process-wide index space, handed to the contexts in blocks of 4096; a context hands out the ids it freed
+<li><strong>Entity ids:</strong> one process-wide index space, handed to the contexts in blocks (4096 ids for a world map, 256 for an instance copy); a context hands out the ids it freed
   first (the last freed first, its version bumped) and then new ones from its block, so an id (the entity id on the wire and in Lua) is
   unique across contexts and an entity keeps it when it changes context. The ids a context gets depend only on what it did itself.
   With one context they are those a single registry would give. <code>MAX_NPCS</code> counts the NPCs of every context
@@ -121,7 +121,7 @@ belongs to no map. Contexts are updated one after another on the tick thread, or
   <li>Its sends and saves wait in the context; after the barrier they go out context by context in map id order. A session is in one
   context, so it gets its messages in the serial order; the network and the DB worker only ever see the tick thread.</li>
   <li>Entity ids come from the context's own freed ids and block (above). Each context gets a spare block before each step, in map id
-  order, so a step can make 4096 new ids without asking anyone; past that it takes a block mid-step (unique ids still, but then which
+  order, so a step can make a block of new ids (4096 on a world map) without asking anyone; past that it takes a block mid-step (unique ids still, but then which
   block may vary with timing).</li>
   <li><code>MAX_NPCS</code>: before each step what is left under the limit is split evenly among the contexts (map id order takes the
   remainder). A context may create up to its share; it never takes another's, so the limit holds and what a context may create does not
