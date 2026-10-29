@@ -7000,8 +7000,53 @@ void checkInstanceIdsExhausted() {
     w.world.tick(T0 + std::chrono::milliseconds(50));
     w.world.tick(T0 + std::chrono::milliseconds(100));
     check(w.world.map_of(b) == 1 && w.world.contexts().size() == 2, "instance ids exhausted: no copy past UINT32_MAX");
-    check(log_index("transfer refused: instance ids exhausted") != SIZE_MAX && log_index("full ") != SIZE_MAX,
+    check(log_index("instance ids exhausted") != SIZE_MAX && log_index("full ") != SIZE_MAX,
           "instance ids exhausted: logged, instance.full published");
+}
+
+constexpr const char* kGoSystem = R"(return {
+    init = function()
+        kast.subscribe("client.go", function(e) kast.transfer(e.entity, 6, {x = 128, y = 0, z = 128}) end)
+        kast.subscribe("instance.full", function(e) kast.log("full " .. e.entity) end)
+    end,
+    update = function() end })";
+
+// Keyless copies take small id blocks: 300 live at once fit (4096-id blocks ran out of entity ids at ~128).
+void checkManyCopies() {
+    LogCapture capture;
+    LuaRoot r;
+    r.write("npcs/bat.lua", "return { name = 'Bat', template = 'BatTpl' }");
+    r.write("systems/go.lua", kGoSystem);
+    TestWorld w({}, {}, instance_maps());
+    check(w.world.load_scripts(r.root).empty(), "many copies: loads");
+    std::vector<entt::entity> players;
+    for (uint32_t i = 0; i < 300; ++i) {
+        players.push_back(w.spawn(i + 1, i + 1, "P" + std::to_string(i), 1000.0f + float(i % 20), 1000.0f + float(i / 20)));
+        w.world.push_client_event(players.back(), "go", nlohmann::json::object());
+    }
+    w.world.tick(T0);
+    check(w.world.contexts().size() == 301 && w.world.map_of(players.back()) == 6, "many copies: 300 keyless copies live");
+}
+
+// Entity ids low: a new copy is refused like a full one (logged, instance.full), never a crash; the world map goes on.
+void checkEntityIdsLow() {
+    LogCapture capture;
+    LuaRoot r;
+    r.write("npcs/bat.lua", "return { name = 'Bat', template = 'BatTpl' }");
+    r.write("systems/go.lua", kGoSystem);
+    TestWorld w({}, {}, instance_maps());
+    check(w.world.load_scripts(r.root).empty(), "entity ids low: loads");
+    const auto a = w.spawn(1, 1, "Ann", 1000, 1000);
+    while (w.world.shared().room_for_copy()) w.world.shared().block(world::Shared::kIdBlock);
+    w.world.push_client_event(a, "go", nlohmann::json::object());
+    w.world.tick(T0);
+    w.world.tick(T0 + std::chrono::milliseconds(50));
+    check(w.world.map_of(a) == 1 && w.world.contexts().size() == 1, "entity ids low: no new copy");
+    check(log_index("entity ids low") != SIZE_MAX && log_index("full ") != SIZE_MAX,
+          "entity ids low: logged, instance.full published");
+    const auto b = w.spawn(2, 2, "Bob", 1010, 1000);
+    w.world.tick(T0 + std::chrono::milliseconds(100));
+    check(w.world.map_of(b) == 1, "entity ids low: the world map still takes players");
 }
 
 int lua_checks(int& checks) {
@@ -7083,6 +7128,8 @@ int lua_checks(int& checks) {
     checkInstances();
     checkInstanceKeyErrors();
     checkInstanceIdsExhausted();
+    checkManyCopies();
+    checkEntityIdsLow();
     checkLuaFileCache();
     checkAreaShapes();
     checkAreaLoading();

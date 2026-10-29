@@ -64,6 +64,7 @@ MapContext* World::copy_for(uint16_t map, const std::optional<std::string>& key)
     // ponytail: ids never wrap (a saved one could name a new copy), so after 2^32 - 1 copies ever made in the realm no
     // more are made; reset characters.instance_id to 0 (players then enter at the exits) if a realm ever gets there.
     if (nextInstance_ > UINT32_MAX) return nullptr;
+    if (!shared_.room_for_copy()) return nullptr; // entity ids low: refused like a full copy, never a crash
     return &create(map, static_cast<uint32_t>(nextInstance_++), key);
 }
 
@@ -246,7 +247,9 @@ bool World::move_to(entt::entity e, const Destination& to) {
         }
     MapContext* const inst = info.instanced() ? copy_for(to.map, to.key) : nullptr;
     if (info.instanced() && !inst) { // refused like a full copy
-        log::error("transfer refused: instance ids exhausted", {{"entity", wire_id(e)}, {"map", to.map}});
+        log::error("transfer refused: no new instance copy",
+                   {{"entity", wire_id(e)}, {"map", to.map},
+                    {"reason", nextInstance_ > UINT32_MAX ? "instance ids exhausted" : "entity ids low"}});
         from->refuse_full(e, to.map, to.key.value_or(""));
         return false;
     }
