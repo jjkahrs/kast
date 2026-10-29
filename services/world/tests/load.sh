@@ -56,6 +56,10 @@ echo
 echo "---- world tick stats (10 s windows with players, then run total) ----"
 echo "$logs" | grep '"tick stats' | grep -v '"population":0,' | sed 's/^/  /'
 echo "$logs" | grep '"tick stats total"' | sed 's/^/  /'
+if echo "$logs" | grep -qE '"msg":"(layer (created|destroyed)|no new layer[^"]*)"'; then
+    echo "---- layers ----"
+    echo "$logs" | grep -E '"msg":"(layer (created|destroyed)|no new layer[^"]*)"' | sed 's/^/  /'
+fi
 
 worst=$(echo "$logs" | grep '"msg":"tick stats"' | grep -v '"population":0,' | sed -E 's/.*"p99_ms":([0-9.]+).*/\1/' | sort -g | tail -1)
 total=$(echo "$logs" | grep '"tick stats total"' | sed -E 's/.*"p99_ms":([0-9.]+).*/\1/')
