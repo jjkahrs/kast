@@ -175,6 +175,10 @@ different layers of a map never see or hear each other; everything else about th
   refused because of layers.</li>
 <li><strong>NPCs</strong> do not count towards the cap and never open a layer: an NPC transferred or <code>kast.create</code>d onto the map from
   another goes to the base layer (or the live layer a <code>layer =</code> names). A layer's own NPCs come from its spawn files.</li>
+<li><strong>Threads:</strong> layers spread players over contexts, but with <code>MAP_THREADS=1</code> the contexts still update one after
+  another. Measured (2000 bots, <code>layerCap</code> 500, 4 layers): tick p99 about 33 ms at <code>MAP_THREADS=1</code>, about 12 ms at
+  <code>MAP_THREADS=4</code>. On a layered map set <code>MAP_THREADS</code> to about the expected layer count
+  (<a href="#threading">Threading</a>).</li>
 <li><strong>Relog:</strong> <code>characters.instance_id</code> holds the layer, as for an instance copy. On login the saved layer is rejoined if it is
   live with room; else (full, closed, or a previous run's) placement, at the saved position (<code>saved layer not joinable; placing as a new
   arrival</code>, logged). Rows with instance_id 0 go straight to placement. At a login there is no entity yet: the base layer's

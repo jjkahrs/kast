@@ -301,7 +301,8 @@ and check only behaviour.</p>
   (<a href="maps.html#layers">Layers</a>): the world and the bot mount a copy of <code>tests/project/maps</code> with the field added
   (<code>tests/stack_override.sh</code>, a compose override in <code>build/stack-override.yml</code>); the repo's maps are not changed. The result
   shows the peak number of live layers per layered map (from the <code>layer created</code> / <code>layer destroyed</code> lines). Example:
-  <code>COUNT=2000 LAYER_CAP=500 bash tests/load.sh</code> (4 layers). Afterwards the script recreates <code>world</code> with the default maps.</li>
+  <code>MAP_THREADS=4 COUNT=2000 LAYER_CAP=500 bash tests/load.sh</code> (4 layers; with <code>MAP_THREADS=1</code> the layers update one
+  after another and the ticks run over, <a href="maps.html#layers">Layers</a>). Afterwards the script recreates <code>world</code> with the default maps.</li>
 <li><strong>Pass criteria:</strong><ul>
 <li>Bot summary PASS: every bot entered the world (and, with <code>MAPS</code>, reached its map), with no errors, no unexpected
   disconnects and no <code>Correction</code> for honest movers. Without <code>MAPS</code> a wanderer that walks into the sample portal
@@ -309,7 +310,9 @@ and check only behaviour.</p>
 <li>Every 10 s window's tick p99 is under 25 ms, and so is the run total.</li>
 <li>Zero failed save attempts.</li>
 <li>Enter p99 under 500 ms: each bot times connect &rarr; <code>EnterWorldOk</code> (login, character list, create on a first run, enter);
-  the summary has <code>enter_ms_p50</code> and <code>enter_ms_p99</code>. The result also shows the saves lost on the graceful stop.</li>
+  the summary has <code>enter_ms_p50</code> and <code>enter_ms_p99</code>. The result also shows the saves lost on the graceful stop.
+  Known issue: enter p99 is bimodal across runs (41 ms to 6 s), with or without layers; the cause is in the login path, not the
+  tick, and has not been profiled.</li>
 </ul>
 </li>
 <li><strong>Net busy (information only):</strong> the result's <code>net busy % worst window</code> line has each net thread's highest
