@@ -3,9 +3,65 @@
 
 namespace kast::net {
 
+// Calls from other threads to one io_context's sessions, queued in call order and run there in batches: one post per
+// batch, not per call (a game tick sends thousands). A send is encoded straight into the batch's byte buffer, so it
+// allocates nothing (a buffer per send, freed on the other thread, slowed the tick). An asio service, so each
+// io_context has exactly one.
+class Session::Inbox : public asio::execution_context::service {
+public:
+    static inline asio::execution_context::id id;
+    explicit Inbox(asio::execution_context& ctx) : service(ctx), io_(static_cast<asio::io_context&>(ctx)) {}
+
+    void push(Op op) {
+        std::lock_guard lk(mu_);
+        ops_.push_back(std::move(op));
+        schedule();
+    }
+    void push_encoded(std::shared_ptr<Session> s, const proto::Message& m) {
+        std::lock_guard lk(mu_);
+        const size_t at = bytes_.size();
+        proto::encode(bytes_, m);
+        ops_.push_back({Op::Kind::bytes, std::move(s), nullptr, std::nullopt, at, bytes_.size() - at});
+        schedule();
+    }
+
+private:
+    void schedule() { // under mu_
+        if (scheduled_) return;
+        scheduled_ = true;
+        asio::post(io_, [this] { drain(); });
+    }
+    void drain() {
+        {
+            std::lock_guard lk(mu_);
+            batch_.swap(ops_);
+            batchBytes_.swap(bytes_);
+            scheduled_ = false;
+        }
+        for (const Op& op : batch_) op.session->apply(op, batchBytes_);
+        batch_.clear();
+        batchBytes_.clear();
+    }
+    void shutdown() override {
+        std::lock_guard lk(mu_);
+        ops_.clear(); // the sessions they hold go while the io_context's other services still exist
+    }
+
+    asio::io_context& io_;
+    std::mutex mu_;
+    std::vector<Op> ops_;                         // queued, under mu_
+    std::vector<uint8_t> bytes_;                  // the queued sends' frames, under mu_
+    std::vector<Op> batch_;                       // being run; its thread only (both kept for their capacity)
+    std::vector<uint8_t> batchBytes_;
+    bool scheduled_ = false;
+};
+
 Session::Session(uint32_t id, asio::ip::tcp::socket socket, asio::ssl::context& tls, const SessionLimits& limits,
                  OnMessage onMessage, OnClosed onClosed, asio::ssl::stream_base::handshake_type role)
-    : id_(id), stream_(std::move(socket), tls), limits_(limits), onMessage_(std::move(onMessage)),
+    // Sockets always come from an io_context; its executor tells (running_in_this_thread) whether a call is on our thread.
+    : id_(id), ex_(static_cast<asio::io_context&>(asio::query(socket.get_executor(), asio::execution::context)).get_executor()),
+      inbox_(asio::use_service<Inbox>(asio::query(socket.get_executor(), asio::execution::context))),
+      stream_(std::move(socket), tls), limits_(limits), onMessage_(std::move(onMessage)),
       onClosed_(std::move(onClosed)), role_(role), handshakeTimer_(stream_.get_executor()), heartbeatTimer_(stream_.get_executor()),
       closeTimer_(stream_.get_executor()), lagInTimer_(stream_.get_executor()), lagOutTimer_(stream_.get_executor()),
       lagRng_(id), lastReceive_(SteadyClock::now()),
@@ -15,7 +71,22 @@ Session::Session(uint32_t id, asio::ip::tcp::socket socket, asio::ssl::context& 
     if (!ec) remote_ = ep.address().to_string() + ":" + std::to_string(ep.port());
 }
 
+void Session::apply(const Op& op, std::span<const uint8_t> bytes) {
+    switch (op.kind) {
+    case Op::Kind::start: do_start(op.code); break;
+    case Op::Kind::frame: queue_frame(*op.frame); break;
+    case Op::Kind::bytes: queue_frame(bytes.subspan(op.at, op.size)); break;
+    case Op::Kind::disconnect: do_disconnect(*op.code); break;
+    case Op::Kind::authenticated: handshakeTimer_.cancel(); break;
+    }
+}
+
 void Session::start(std::optional<proto::Code> rejectWith) {
+    if (on_own_thread()) do_start(rejectWith);
+    else inbox_.push({Op::Kind::start, shared_from_this(), nullptr, rejectWith});
+}
+
+void Session::do_start(std::optional<proto::Code> rejectWith) {
     auto self = shared_from_this();
     // Covers TLS + Hello + Auth: the whole handshake must finish in time.
     handshakeTimer_.expires_after(limits_.handshakeTimeout);
@@ -94,6 +165,11 @@ void Session::deliver(proto::Message&& m) {
 }
 
 void Session::send(const proto::Message& m) {
+    if (!on_own_thread()) { // closing_ is checked over there
+        ++framesEncoded;
+        inbox_.push_encoded(shared_from_this(), m);
+        return;
+    }
     if (closing_) return;
     ++framesEncoded;
     if (!lagged()) {
@@ -106,7 +182,12 @@ void Session::send(const proto::Message& m) {
     delay(lagOut_, lagOutTimer_, std::move(frame));
 }
 
-void Session::send_frame(std::span<const uint8_t> frame) {
+void Session::send_frame(Frame frame) {
+    if (on_own_thread()) queue_frame(*frame);
+    else inbox_.push({Op::Kind::frame, shared_from_this(), std::move(frame), std::nullopt});
+}
+
+void Session::queue_frame(std::span<const uint8_t> frame) {
     if (closing_) return;
     if (lagged()) {
         // ponytail: a copy per lagged session; share one buffer if the lag simulator ever runs at load-test scale.
@@ -120,8 +201,8 @@ void Session::send_frame(std::span<const uint8_t> frame) {
 void send_many(std::span<Session* const> to, const proto::Message& m) {
     if (to.empty()) return;
     ++framesEncoded;
-    std::vector<uint8_t> frame;
-    proto::encode(frame, m);
+    auto frame = std::make_shared<std::vector<uint8_t>>();
+    proto::encode(*frame, m);
     for (Session* s : to) s->send_frame(frame);
 }
 
@@ -162,7 +243,8 @@ void Session::written() {
     schedule_flush();
 }
 
-// Everything sent during one handler run (e.g. a whole tick) goes out as one write.
+// Everything appended before this flush runs goes out as one write: one handler run's sends, plus whatever the game
+// thread posted (a tick's sends) that was queued ahead of it.
 void Session::schedule_flush() {
     if (flushScheduled_) return;
     flushScheduled_ = true;
@@ -188,6 +270,11 @@ void Session::flush() {
 }
 
 void Session::disconnect(proto::Code reason) {
+    if (on_own_thread()) do_disconnect(reason);
+    else inbox_.push({Op::Kind::disconnect, shared_from_this(), nullptr, reason});
+}
+
+void Session::do_disconnect(proto::Code reason) {
     if (closing_) return;
     log::info("disconnect", {{"session", id_}, {"reason", proto::code_name(reason)}});
     if (!tlsDone_) { close(); return; } // no TLS channel to say why on
@@ -202,7 +289,10 @@ void Session::disconnect(proto::Code reason) {
     flush();
 }
 
-void Session::authenticated() { handshakeTimer_.cancel(); }
+void Session::authenticated() {
+    if (on_own_thread()) handshakeTimer_.cancel();
+    else inbox_.push({Op::Kind::authenticated, shared_from_this(), nullptr, std::nullopt});
+}
 
 void Session::arm_heartbeat() {
     heartbeatTimer_.expires_after(std::min(limits_.pingInterval, limits_.idleTimeout));

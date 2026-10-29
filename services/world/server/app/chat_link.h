@@ -2,9 +2,11 @@
 // a TLS connection that starts with LinkHello{secret}, then tells the chat service which characters are in the world
 // and on which map, and takes the mutes it sends back. Reconnects with exponential backoff (CHAT_LINK_RETRY_MIN_MS ..
 // MAX_MS); while it is down the world runs as before and nothing is queued: each (re)connect sends the full character
-// list and gets the full mute list. All calls on the io thread.
+// list and gets the full mute list. All calls, and the callbacks, on the game thread; its Session lives on a net thread
+// and posts back here.
 #pragma once
 #include "../core/clock.h"
+#include "../net/net_threads.h"
 #include "../net/session.h"
 
 #include <messages.h>
@@ -32,7 +34,7 @@ public:
     using OnMute = std::function<void(const proto::MuteState&)>;
     using OnReset = std::function<void()>; // the link is up: forget every mute, the full list follows
 
-    ChatLink(asio::io_context& io, Options options, Snapshot snapshot, OnMute onMute, OnReset onReset);
+    ChatLink(asio::io_context& io, net::NetThreads& net, Options options, Snapshot snapshot, OnMute onMute, OnReset onReset);
 
     void start();
     void stop(); // no reconnects after this
@@ -50,7 +52,8 @@ private:
     void on_closed();
     void send(const proto::Message& m);
 
-    asio::io_context& io_;
+    asio::io_context& io_; // the game thread's
+    net::NetThreads& net_;
     Options opts_;
     Snapshot snapshot_;
     OnMute onMute_;
@@ -60,7 +63,7 @@ private:
     std::shared_ptr<net::Session> session_;
     net::SessionLimits limits_;
     Millis backoff_;
-    uint32_t serial_ = 0; // the session id of each attempt
+    uint32_t serial_ = 0; // the session id of each attempt; a post from an older one is ignored
     bool up_ = false;
     bool stopped_ = false;
 };

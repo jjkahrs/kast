@@ -1,6 +1,8 @@
 // Kast World Server: TLS game connections, auth-service JWTs, every map under MAP_ROOT on a fixed tick, MySQL
 // persistence.
-// Threads: io (network + tick), DB worker, token verifier.
+// Threads: game (this one: the tick, GameServer, World, Lua, chat link and admin port logic, signals), NET_THREADS net
+// threads (TLS and socket I/O; sessions post decoded messages to the game thread), DB_POOL_SIZE DB workers, token
+// verifier, and MAP_THREADS - 1 map context workers during a tick.
 #include "app/game_server.h"
 #include "crash_dialogs.h"
 #include "auth/token_service.h"
@@ -12,6 +14,7 @@
 #include "lua/components.h"
 #include "world/components.h"
 #include "world/maps.h"
+#include "net/net_threads.h"
 #include "net/tls_context.h"
 
 #include <asio.hpp>
@@ -79,8 +82,10 @@ int main() {
     }
 
     try {
-        asio::io_context io(1);
         asio::ssl::context tls = net::make_server_tls({cfg.tlsCertFile, cfg.tlsKeyFile, cfg.tlsDevCertDir});
+        // Outlive everything below: sessions (and handlers still queued for them) hold sockets on these contexts.
+        net::NetThreads net(cfg.netThreads);
+        asio::io_context io(1); // the game thread's
         auto post = [&io](std::function<void()> f) { asio::post(io, std::move(f)); };
 
         db::DbWorker dbWorker({dbOpts, cfg.realmId, Millis(cfg.saveRetryMinMs), Millis(cfg.saveRetryMaxMs), cfg.dbPoolSize},
@@ -90,7 +95,12 @@ int main() {
                              Millis(cfg.jwksTimeoutMs)},
                             post);
         const size_t defCount = defs.defs.size();
-        GameServer server(io, cfg, maps, tls, dbWorker, tokens, std::move(defs.defs), firstInstanceId);
+        GameServer server(io, net, cfg, maps, tls, dbWorker, tokens, std::move(defs.defs), firstInstanceId);
+        // Destroyed first, on every way out: no net thread may still run (and post into io) once server is gone.
+        struct JoinNet {
+            net::NetThreads& n;
+            ~JoinNet() { n.stop(); }
+        } joinNet{net};
         std::vector<std::string> luaErrors = std::move(defs.errors);
         // Also without LUA_ROOT: a GAME_STATE_MACHINES name then has no definition, which refuses the start.
         for (std::string& e : server.load_scripts()) luaErrors.push_back(std::move(e));
@@ -107,6 +117,7 @@ int main() {
                                      {"gameStateMachines", cfg.gameStateMachines}});
         }
         server.start();
+        log::info("threads", {{"game", 1}, {"net", cfg.netThreads}, {"db", cfg.dbPoolSize}, {"map", cfg.mapThreads}});
 
         TimePoint shutdownStart{};
         asio::signal_set signals(io, SIGINT, SIGTERM);
@@ -119,6 +130,7 @@ int main() {
         io.run();
 
         // Everything after the last client is gone: flush saves within what is left of the shutdown budget.
+        net.stop();
         tokens.stop();
         const auto deadline = shutdownStart + Millis(cfg.shutdownTimeoutMs) - Millis(500);
         const size_t lost = dbWorker.stop(deadline);

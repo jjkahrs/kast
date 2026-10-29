@@ -20,7 +20,7 @@
 <li><strong>Chat:</strong> proximity chat: "say" and emotes reach everyone in view, a "yell" everyone on the map within <code>CHAT_YELL_RADIUS</code>. Whispers, channels and the zone channel are the realm's <a href="../chat/index.html">chat service</a>'s; the world tells it who is online on which map over an internal link and drops a muted character's proximity chat.</li>
 <li><strong>Lua:</strong> game-defined components, state machines and server-authoritative systems on the tick, persisted per character and replicated to clients (see "Lua components and systems").</li>
 <li><strong>NPCs:</strong> server-authoritative NPCs come from per-tile spawn files (with respawn timers and patrol paths) or from Lua systems, which move and destroy them; they reach players through the same interest management, with their components and state machines (see "NPCs" and "NPC spawns").</li>
-<li><strong>Architecture:</strong> an EnTT ECS runs on a fixed 20 Hz tick, and characters persist to MySQL on a worker thread, so the tick never waits on the database.</li>
+<li><strong>Architecture:</strong> an EnTT ECS runs on a fixed 20 Hz tick on one game thread, which also handles every client message. TLS and socket I/O run on <code>NET_THREADS</code> net threads (default 4), and characters persist to MySQL on DB worker threads, so the tick never waits on the network or the database.</li>
 </ul>
 <p>The wire format is in <a href="protocol.html">Protocol</a>.</p>
 <table>

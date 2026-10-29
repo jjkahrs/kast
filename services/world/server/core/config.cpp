@@ -24,6 +24,7 @@ ConfigResult load_config(const EnvLookup& env) {
     l.num("MSG_BURST", c.msgBurst, 1, 100000);
     l.num("MSG_RATE_GRACE_MS", c.msgRateGraceMs, 0, u32max);
     l.num("MAX_SEND_BUFFER_BYTES", c.maxSendBufferBytes, 4096, u32max);
+    l.num("NET_THREADS", c.netThreads, 1, 64);
     l.num("SIM_LATENCY_MS", c.simLatencyMs, 0, 10000);
     l.num("SIM_JITTER_MS", c.simJitterMs, 0, 10000);
 

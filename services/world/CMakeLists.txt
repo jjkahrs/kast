@@ -59,6 +59,7 @@ add_library(world_core STATIC
   server/app/admin_port.cpp
   server/app/chat_link.cpp
   server/app/game_server.cpp
+  server/net/net_threads.cpp
 )
 target_include_directories(world_core PUBLIC server)
 target_compile_options(world_core PRIVATE ${WORLD_COMPILE_OPTIONS})

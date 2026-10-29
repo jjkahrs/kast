@@ -1,5 +1,10 @@
 // One TLS connection (a client's, or the world server's chat link): framing, frame/rate limits, handshake deadline, heartbeat, batched writes and the lag
-// simulator. Knows nothing about game rules; decoded messages go to on_message. All calls happen on the io thread.
+// simulator. Knows nothing about game rules; decoded messages go to on_message.
+// Threads: a Session lives on the io_context its socket was made on (a world net thread, or the chat service's one io
+// thread) and every member is only touched there. start, send, send_frame, disconnect and authenticated may be called
+// from any thread: off that thread they are queued for it (Inbox: so they happen later, in call order). id()
+// and remote() are fixed at construction, safe anywhere; closing() and pending() are for its own thread. on_message
+// and on_closed run on its thread: an owner on another thread posts from them (GameServer does).
 #pragma once
 #include "../core/clock.h"
 #include "../core/rate_limiter.h"
@@ -14,6 +19,7 @@
 #include <deque>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <random>
 #include <span>
@@ -58,20 +64,38 @@ public:
 
     // rejectWith: complete TLS, send Disconnect{rejectWith}, close (e.g. server_full).
     void start(std::optional<proto::Code> rejectWith = std::nullopt);
-    void send(const proto::Message& m);
-    // An already encoded frame (send_many): same rules as send (dropped while closing, lag simulator, buffer cap).
-    void send_frame(std::span<const uint8_t> frame);
+    void send(const proto::Message& m); // encodes on the caller's thread
+    using Frame = std::shared_ptr<const std::vector<uint8_t>>;
+    // An already encoded frame, shared with other recipients (send_many): same rules as send (dropped while closing,
+    // lag simulator, buffer cap).
+    void send_frame(Frame frame);
     // Sends Disconnect{reason}, stops reading, closes once it is written (or after a short grace).
     void disconnect(proto::Code reason);
     // Handshake finished (AuthOk sent): the handshake deadline no longer applies.
     void authenticated();
 
     uint32_t id() const { return id_; }
+    asio::io_context::executor_type executor() const { return ex_; } // its thread, e.g. to run a check there
     bool closing() const { return closing_; }
     std::string remote() const { return remote_; }
     std::span<const uint8_t> pending() const { return pending_; } // queued for the next write; for tests
 
 private:
+    class Inbox;
+    // One call made on another thread, waiting in the Inbox (it holds the session).
+    struct Op {
+        enum class Kind { start, frame, bytes, disconnect, authenticated } kind;
+        std::shared_ptr<Session> session;
+        Frame frame;                     // frame
+        std::optional<proto::Code> code; // start: rejectWith; disconnect: the reason
+        size_t at = 0, size = 0;         // bytes: a frame (send) encoded into the Inbox's buffer
+    };
+    bool on_own_thread() const { return ex_.running_in_this_thread(); }
+    void apply(const Op& op, std::span<const uint8_t> bytes); // on its thread; bytes: the Inbox batch's frames
+    void queue_frame(std::span<const uint8_t> frame); // one encoded frame to pending_ (or the lag simulator)
+    void do_start(std::optional<proto::Code> rejectWith);
+    void do_disconnect(proto::Code reason);
+
     // Received messages wait decoded (for deliver), sent ones encoded (for pending_): a fan-out is not re-encoded.
     template <class T> struct Delayed {
         TimePoint due;
@@ -93,6 +117,8 @@ private:
     void close();
 
     uint32_t id_;
+    asio::io_context::executor_type ex_; // the socket's io_context: this session's thread
+    Inbox& inbox_;                       // that io_context's queue for calls from other threads
     asio::ssl::stream<asio::ip::tcp::socket> stream_;
     SessionLimits limits_;
     OnMessage onMessage_;
@@ -120,7 +146,8 @@ private:
     MessageRateLimiter rate_;
 };
 
-// Encodes m once and appends that frame to every session in to (send_frame); no encode when to is empty.
+// Encodes m once, on the caller's thread, and gives that one buffer to every session in to (send_frame); no encode
+// when to is empty.
 void send_many(std::span<Session* const> to, const proto::Message& m);
 
 } // namespace kast::net

@@ -88,6 +88,11 @@
 <td>A client that stops reading is dropped past this</td>
 </tr>
 <tr>
+<td><code>NET_THREADS</code></td>
+<td><code>4</code></td>
+<td>Net threads, 1&ndash;64: TLS, framing, rate limits and socket I/O for every connection (game clients, admin port, chat link), each connection on one of them (round-robin at connect). The tick and all game logic run on one separate game thread, also with 1. The startup line <code>threads</code> shows it; <code>net stats</code> shows how busy each one is (<a href="operations.html#net-stats">Operations</a>)</td>
+</tr>
+<tr>
 <td><code>TLS_CERT_FILE</code> / <code>TLS_KEY_FILE</code></td>
 <td><em>(empty)</em></td>
 <td>PEM certificate chain and key. Set both, or neither for the dev cert</td>

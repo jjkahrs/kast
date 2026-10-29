@@ -39,10 +39,15 @@
 <li><code>saves_ok</code>, <code>saves_failed_attempts</code> and <code>saves_pending</code>.</li>
 </ul>
 </li>
+<li id="net-stats"><strong>Net stats:</strong> with every <code>tick stats</code> line the server logs a <code>net stats</code> line, and a <code>net stats total</code> line on shutdown
+  (since the start). <code>net_threads</code> is <code>NET_THREADS</code>; <code>busy_pct</code> has one number per net thread: its CPU time (TLS, framing,
+  socket calls) over the wall time of the window, in %. A thread near 100 is the network limit: raise <code>NET_THREADS</code> if cores are free.
+  Connections are spread round-robin when they connect, so the numbers can drift apart; nothing rebalances them. Example:
+  <code>{"msg":"net stats","net_threads":4,"busy_pct":[12.5,11.9,13.1,12.2]}</code>.</li>
 <li id="map-threads"><strong>Choosing <code>MAP_THREADS</code>:</strong> keep 1 while <code>p99_ms</code> is well under the tick period (50 ms at
   <code>TICK_HZ</code> 20) or nearly every player is on one map: a single map never splits across threads. Raise it when players spread over
-  several maps and <code>p99_ms</code> climbs: with <code>contexts</code> busy maps, about <code>min(contexts, cores - 2)</code> (the io thread, the DB
-  worker and the log writer need cores too). More threads than busy maps only wait. If <code>ctx_max_ms</code> is close to <code>p99_ms</code>, one map
+  several maps and <code>p99_ms</code> climbs: with <code>contexts</code> busy maps, about <code>min(contexts, cores - 2)</code> (the net threads, the DB
+  workers and the log writer need cores too). More threads than busy maps only wait. If <code>ctx_max_ms</code> is close to <code>p99_ms</code>, one map
   is the bottleneck and more threads will not help.</li>
 </ul>
 </main>
