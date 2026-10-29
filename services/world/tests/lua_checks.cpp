@@ -35,6 +35,10 @@ using namespace kast;
 namespace fs = std::filesystem;
 using Json = nlohmann::ordered_json;
 
+// world_self_check --timing (ctest world_timing_bench, label perf): the timing checks' speed limits fail the run.
+// Without it they only print, so a busy machine can't fail a build.
+bool g_timing_gates = false;
+
 namespace {
 
 int g_failures = 0;
@@ -701,9 +705,11 @@ void checkReplicationIdleTiming() {
     std::printf("component_replication_system idle: %.1f us/tick (1000 entities x 3 components)\n", perTickUs);
 #ifdef NDEBUG
     // Baseline before dirty flags (every component compared every tick): 59.0-61.7 us/tick over 5 runs, Release
-    // (preset release, MSVC, the dev machine). Dirty flags must make idle ticks at least 5x cheaper. Debug: not checked.
+    // (preset release, MSVC, the dev machine). Dirty flags must make idle ticks at least 5x cheaper. Checked only
+    // with --timing in Release.
     constexpr double kBaselineUs = 60.0;
-    check(perTickUs <= kBaselineUs / 5, std::format("timing: idle {:.1f} us/tick > baseline {} / 5", perTickUs, kBaselineUs));
+    if (g_timing_gates)
+        check(perTickUs <= kBaselineUs / 5, std::format("timing: idle {:.1f} us/tick > baseline {} / 5", perTickUs, kBaselineUs));
 #endif
 }
 
@@ -734,9 +740,10 @@ end })");
 #ifdef NDEBUG
     // Baseline before walking the smallest pool (every Transform entity checked, its storage hashed per entity):
     // 240.9-244.7 us/query over 5 runs, Release (preset release, MSVC, the dev machine). Must be at least 10x cheaper.
-    // Debug: not checked.
+    // Checked only with --timing in Release.
     constexpr double kBaselineUs = 241.0;
-    check(perQueryUs <= kBaselineUs / 10, std::format("timing: {:.1f} us/query > baseline {} / 10", perQueryUs, kBaselineUs));
+    if (g_timing_gates)
+        check(perQueryUs <= kBaselineUs / 10, std::format("timing: {:.1f} us/query > baseline {} / 10", perQueryUs, kBaselineUs));
 #endif
 }
 
@@ -2174,12 +2181,14 @@ void checkBridgeTiming() {
 #ifdef NDEBUG
     // Baselines before lua-bridge-churn (a fresh Spawn table per call, set through set_fields + component_from_json,
     // fsm.state re-hashing the StateMachine pool and copying strings): the fastest of 20 updates, 5 runs, Release
-    // (preset release, MSVC, the dev machine); the spreads are above. Each must be at least 3x faster. Debug: not
-    // checked.
+    // (preset release, MSVC, the dev machine); the spreads are above. Each must be at least 3x faster. Checked only
+    // with --timing in Release.
     constexpr double kSpawnUs = 2.23, kSetUs = 2.27, kStateUs = 0.39;
-    check(spawn <= kSpawnUs / 3, std::format("timing: Spawn get {:.3f} us > baseline {} / 3", spawn, kSpawnUs));
-    check(set <= kSetUs / 3, std::format("timing: set {:.3f} us > baseline {} / 3", set, kSetUs));
-    check(state <= kStateUs / 3, std::format("timing: fsm.state {:.3f} us > baseline {} / 3", state, kStateUs));
+    if (g_timing_gates) {
+        check(spawn <= kSpawnUs / 3, std::format("timing: Spawn get {:.3f} us > baseline {} / 3", spawn, kSpawnUs));
+        check(set <= kSetUs / 3, std::format("timing: set {:.3f} us > baseline {} / 3", set, kSetUs));
+        check(state <= kStateUs / 3, std::format("timing: fsm.state {:.3f} us > baseline {} / 3", state, kStateUs));
+    }
 #else
     (void)spawn;
     (void)set;

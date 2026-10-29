@@ -154,7 +154,8 @@ add_test(NAME starter_mmo_nameplates_perf
   COMMAND "${CMAKE_COMMAND}" ${nameplates_args} "-DOUT=${KAST_STARTER_OUT}/nameplates_perf"
           "-DSCREENSHOT=${KAST_STARTER_OUT}/starter_mmo_nameplates_perf.png" -DPERF=ON ${nameplates_budget}
           -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/starter_mmo_nameplates.cmake")
-set_tests_properties(starter_mmo_nameplates_perf PROPERTIES TIMEOUT 300 RUN_SERIAL TRUE) # alone: a frame time
+set_tests_properties(starter_mmo_nameplates_perf PROPERTIES TIMEOUT 300 RUN_SERIAL TRUE # alone: a frame time
+                     LABELS perf) # ctest --preset perf, not the debug / release presets
 
 # Live. RUN_SERIAL: they change which content the shared compose stack serves.
 set(live_args "-DWORLD_DIR=${KAST_WORLD_DIR}" "-DSAMPLE=${KAST_STARTER}" "-DSTATE=${KAST_STARTER_STATE}")

@@ -29,8 +29,11 @@
     { "name": "linux-release", "configurePreset": "linux-release" }
   ],
   "testPresets": [
-    { "name": "debug", "configurePreset": "debug", "output": { "outputOnFailure": true } },
-    { "name": "release", "configurePreset": "release", "output": { "outputOnFailure": true } },
-    { "name": "linux-release", "configurePreset": "linux-release", "output": { "outputOnFailure": true } }
+    { "name": "no-perf", "hidden": true, "output": { "outputOnFailure": true }, "filter": { "exclude": { "label": "perf" } } },
+    { "name": "debug", "inherits": "no-perf", "configurePreset": "debug" },
+    { "name": "release", "inherits": "no-perf", "configurePreset": "release" },
+    { "name": "linux-release", "inherits": "no-perf", "configurePreset": "linux-release" },
+    { "name": "perf", "configurePreset": "release", "output": { "outputOnFailure": true }, "filter": { "include": { "label": "perf" } } },
+    { "name": "perf-linux", "configurePreset": "linux-release", "output": { "outputOnFailure": true }, "filter": { "include": { "label": "perf" } } }
   ]
 }

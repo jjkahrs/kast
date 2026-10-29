@@ -25,8 +25,11 @@
     { "name": "relwithdebinfo", "configurePreset": "relwithdebinfo" }
   ],
   "testPresets": [
-    { "name": "debug", "configurePreset": "debug", "output": { "outputOnFailure": true } },
-    { "name": "release", "configurePreset": "release", "output": { "outputOnFailure": true } },
-    { "name": "relwithdebinfo", "configurePreset": "relwithdebinfo", "output": { "outputOnFailure": true } }
+    { "name": "no-perf", "hidden": true, "output": { "outputOnFailure": true }, "filter": { "exclude": { "label": "perf" } } },
+    { "name": "debug", "inherits": "no-perf", "configurePreset": "debug" },
+    { "name": "release", "inherits": "no-perf", "configurePreset": "release" },
+    { "name": "relwithdebinfo", "inherits": "no-perf", "configurePreset": "relwithdebinfo" },
+    { "name": "perf", "configurePreset": "debug", "output": { "outputOnFailure": true }, "filter": { "include": { "label": "perf" } } },
+    { "name": "perf-release", "configurePreset": "release", "output": { "outputOnFailure": true }, "filter": { "include": { "label": "perf" } } }
   ]
 }

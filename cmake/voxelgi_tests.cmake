@@ -217,7 +217,8 @@ add_test(NAME player_voxelgi_gpu_time
 set_tests_properties(build_game_voxelgi PROPERTIES FIXTURES_SETUP game_voxelgi_built)
 set_tests_properties(player_voxelgi_screenshot PROPERTIES FIXTURES_REQUIRED game_voxelgi_built
                      FIXTURES_SETUP player_voxelgi_shot TIMEOUT 90)
-set_tests_properties(player_voxelgi_gpu_time PROPERTIES FIXTURES_REQUIRED game_voxelgi_built TIMEOUT 90 RUN_SERIAL TRUE)
+set_tests_properties(player_voxelgi_gpu_time PROPERTIES FIXTURES_REQUIRED game_voxelgi_built TIMEOUT 90 RUN_SERIAL TRUE
+                     LABELS perf) # ctest --preset perf, not the debug / release presets
 set_tests_properties(player_voxelgi_matches_editor PROPERTIES FIXTURES_REQUIRED "player_voxelgi_shot;vgi_voxelgi_room_still_play_shot")
 add_test(NAME game_voxelgi_pak
   COMMAND "${CMAKE_COMMAND}" "-DPAK=${KAST_GAME_OUT}/voxelgi/game.pak"
