@@ -265,6 +265,8 @@ and check only behaviour.</p>
   stops on the other map (<code>map_changes_recv</code>); the corrections for its moves still in flight are not counted.</li>
 <li>Every 10 s window's tick p99 is under 25 ms, and so is the run total.</li>
 <li>Zero failed save attempts.</li>
+<li>Enter p99 under 500 ms: each bot times connect &rarr; <code>EnterWorldOk</code> (login, character list, create on a first run, enter);
+  the summary has <code>enter_ms_p50</code> and <code>enter_ms_p99</code>. The result also shows the saves lost on the graceful stop.</li>
 </ul>
 </li>
 </ul>

@@ -42,6 +42,7 @@ struct Config {
     uint16_t dbPort = 3306;
     std::string dbUser, dbPassword, dbName;
     uint32_t dbConnectTimeoutSec = 3;
+    uint32_t dbPoolSize = 4; // DbWorker threads, one connection each
     std::string migrationsDir = "./migrations";
     // world
     uint32_t realmId = 0;

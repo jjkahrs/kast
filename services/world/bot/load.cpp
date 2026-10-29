@@ -26,6 +26,12 @@ struct Stats {
         componentUpdates{0}, componentBytes{0}, componentRemoves{0}, serverEvents{0};
     std::mutex mu;
     std::vector<std::string> errorSamples;
+    std::vector<double> enterMs; // per bot: connect -> EnterWorldOk
+
+    void entered_after(double ms) {
+        std::lock_guard lk(mu);
+        enterMs.push_back(ms);
+    }
 
     void error(const std::string& e) {
         ++errors;
@@ -140,6 +146,7 @@ asio::awaitable<void> run_bot(const Options& o, asio::ssl::context& tls, Stats& 
                               Millis startDelay, std::chrono::steady_clock::time_point end, const BotMaps& maps,
                               std::optional<uint16_t> target, std::optional<std::string> instanceKey) {
     co_await sleep_for(startDelay);
+    const auto connectStart = std::chrono::steady_clock::now();
     std::string err;
     auto c = co_await connect_and_login(o, tls, token, err);
     if (!c) { st.error(err); co_return; }
@@ -160,6 +167,7 @@ asio::awaitable<void> run_bot(const Options& o, asio::ssl::context& tls, Stats& 
         co_return;
     }
     ++st.entered;
+    st.entered_after(std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - connectStart).count());
     if (instanceKey) c->send(proto::ClientEvent{"test.instance_key", nlohmann::json{{"key", *instanceKey}}.dump()});
 
     auto pos = std::make_shared<proto::Vec3>(ok.pos);
@@ -354,6 +362,10 @@ int run_load(const Options& o) {
     progress.join();
 
     const double secs = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+    std::sort(st.enterMs.begin(), st.enterMs.end());
+    const auto enterPct = [&](double q) {
+        return st.enterMs.empty() ? 0.0 : std::round(st.enterMs[std::min(st.enterMs.size() - 1, size_t(q * st.enterMs.size()))]);
+    };
     nlohmann::json summary = {{"phase", "summary"},
                               {"behaviour", o.behaviour},
                               {"bots", o.count},
@@ -361,6 +373,8 @@ int run_load(const Options& o) {
                               {"tokens", st.tokens.load()},
                               {"connected", st.connected.load()},
                               {"entered", st.entered.load()},
+                              {"enter_ms_p50", enterPct(0.50)},
+                              {"enter_ms_p99", enterPct(0.99)},
                               {"unexpected_disconnects", st.unexpectedDisconnects.load()},
                               {"expected_disconnects", st.expectedDisconnects.load()},
                               {"errors", st.errors.load()},
