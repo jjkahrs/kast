@@ -69,13 +69,40 @@ bool writeFileAtomic(const std::filesystem::path& file, const std::function<bool
     const bool written = write(out);
     out.close();
     std::error_code ec;
-    if (written && out)
-        std::filesystem::rename(temp, file, ec);
-    if (!written || !out || ec) {
+    if (!written || !out || !renameRetrying(temp, file)) {
         std::filesystem::remove(temp, ec);
         return false;
     }
     return true;
+}
+
+bool renameRetrying(const std::filesystem::path& from, const std::filesystem::path& to, std::chrono::milliseconds maxWait)
+{
+    const auto deadline = std::chrono::steady_clock::now() + maxWait;
+    std::error_code ec;
+    for (;;) {
+        std::filesystem::rename(from, to, ec);
+        if (!ec)
+            return true;
+        if (std::chrono::steady_clock::now() >= deadline)
+            return false;
+        Sleep(20);
+    }
+}
+
+void removeStaleTempFiles(const std::filesystem::path& dir, std::string_view ownPrefix, std::chrono::minutes maxAge)
+{
+    const auto now = std::filesystem::file_time_type::clock::now();
+    std::error_code ec;
+    for (auto it = std::filesystem::directory_iterator(dir, ec); !ec && it != std::filesystem::end(it); it.increment(ec)) {
+        std::error_code entryEc;
+        if (!it->is_regular_file(entryEc))
+            continue;
+        const auto written = it->last_write_time(entryEc);
+        const bool own = it->path().filename().string().starts_with(ownPrefix);
+        if (own || (!entryEc && now - written > maxAge))
+            std::filesystem::remove(it->path(), entryEc); // still locked: the next run tries again
+    }
 }
 
 std::vector<std::filesystem::path> listFiles(const std::filesystem::path& dir)

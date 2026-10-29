@@ -190,8 +190,16 @@ return {
         if len > 0 then
             local speed = forward < 0 and BACK_SPEED or RUN_SPEED
             x, z = x + dx / len * speed * dt, z + dz / len * speed * dt
-            if blocked(x, z, p.y) then -- slide along the obstacle on one axis, else stop
-                if not blocked(x, p.z, p.y) then z = p.z elseif not blocked(p.x, z, p.y) then x = p.x else x, z = p.x, p.z end
+            if blocked(x, z, p.y) then
+                -- Up to the obstacle (the step's longest free part, to 1/64 of it), so where the character stops
+                -- doesn't depend on the frame rate; then slide the rest along it on one axis, else stop there.
+                local free, hit = 0, 1
+                for _ = 1, 6 do
+                    local mid = (free + hit) / 2
+                    if blocked(p.x + (x - p.x) * mid, p.z + (z - p.z) * mid, p.y) then hit = mid else free = mid end
+                end
+                local cx, cz = p.x + (x - p.x) * free, p.z + (z - p.z) * free
+                if not blocked(x, cz, p.y) then z = cz elseif not blocked(cx, z, p.y) then x = cx else x, z = cx, cz end
             end
         end
         local ground = groundY(x, z, p.y)

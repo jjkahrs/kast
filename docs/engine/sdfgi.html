@@ -154,7 +154,8 @@ summed, averaged over 300 frames after 10 warmup ones; in brackets the <code>SDF
 0.63 / 0.60 ms; repeated runs vary by up to about 50% with the GPU's clocks. The budget is 4 ms at Medium, frames where
 the cascades scroll included: <code>player_sdfgi_gpu_time</code> checks the 99th percentile frame along the path (the slowest
 frame is logged too, but a lone hiccup of the OS or another program on the GPU, seen now and then at 3 to 10 ms with the
-camera still, doesn't fail it). Scrolling
+camera still, doesn't fail it; a machine that can't hold 4 ms raises the limit in its own build cache with
+<code>KAST_SDFGI_GPU_P99_MS</code>, see <a href="../development/tests.html#sdfgi-gpu-limit">Tests</a>). Scrolling
 costs little: a probe slab of one cascade is 4 x 64 x 64 cells. The light and probe passes run every frame over all four
 cascades whatever the camera does; the shading cost grows with the pixels that take SDFGI. The stats overlay (F3 in the
 Game view and the player) adds <code>SDFGI &lt;ms&gt; ms</code>, the <code>SDFGI</code> view's GPU time; <code>--log-sdfgi</code> logs each frame's

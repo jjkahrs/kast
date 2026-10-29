@@ -195,7 +195,7 @@ foreach(stage
     "starter_mmo_live_camera|camera|Starter|900|OFF|test driver: entered map 10|"
     "starter_mmo_live_camera_zoom|camera|Starter|900|OFF|test driver: entered map 10|--sim-mouse 800,none,0,0,-10"
     "starter_mmo_live_camera_orbit|camera|Starter|900|OFF|test driver: entered map 10|--sim-mouse 800,left,480,-60,0"
-    # Zone objects (maps/meadow/objects): W walks the character into a rock, which stops it 1.65 m (+ a frame's step) from its centre
+    # Zone objects (maps/meadow/objects): W walks the character into a rock, which stops it 1.65 m from its centre at any frame rate
     # (its 1.2 m radius + scripts/player.lua's 0.45 m body); E at the Meadow Shrine: the server's blessing in the chat.
     "starter_mmo_live_rock|rock|Starter|3000|OFF|test driver: KEYS&test driver: stopped at 14[01][.][0-9]+, 106[.][0-9]+|${rock_keys} --sim-on-log KEYS --screenshot-on-log 30,SHOT"
     "starter_mmo_live_shrine|shrine|Starter|3000|OFF|test driver: PRESS&test driver: combat log: .E. Use the Meadow Shrine&test driver: combat log: [*] The shrine hums softly. You feel refreshed.|--sim-key 10,E --sim-on-log PRESS --screenshot-on-log 30,SHOT"
