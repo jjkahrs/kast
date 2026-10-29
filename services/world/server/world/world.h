@@ -1,7 +1,8 @@
 // The world: one MapContext per loaded world map (maps.h), each with its own registry, AOI grid, Lua systems, NPC spawns
 // and tile activation, created the first time a map is used (START_MAP's when the scripts load), one per live copy of
 // an instance map (docs/services/world/instances.html: made on entry, by instance key, destroyed once empty for the
-// map's emptyTimeoutSec), plus the realm context, whose Lua state runs only the game state machines. Each tick updates the map contexts in steps, with a serial point
+// map's emptyTimeoutSec), one per live layer of a layered world map (docs/services/world/maps.html#layers: the base
+// one always, extra ones as copies, made when every live layer is full, destroyed like a copy), plus the realm context, whose Lua state runs only the game state machines. Each tick updates the map contexts in steps, with a serial point
 // between the steps where the work the contexts queued for one another is done (docs/services/world/maps.html#map-contexts).
 // With rules.mapThreads > 1 the contexts of a step update at once on that many workers, with a barrier after each step;
 // they share nothing mutable meanwhile, so the result is the serial one (docs/services/world/maps.html#threading).
@@ -60,7 +61,7 @@ public:
     lua::StateMachines& fsm(uint16_t map) { return context(map).fsm(); }
     entt::registry& registry() { return registry(rules_.startMap); }
     entt::registry& registry(uint16_t map) { return context(map).registry(); }
-    // A live copy of an instance map, or null (tests).
+    // A live copy of an instance map, or an extra layer of a layered world map, or null (tests).
     MapContext* copy(uint16_t map, uint32_t instance) const;
     Shared& shared() { return shared_; } // tests: use up the entity index space
     // Every live context, in map then instanceId order.
@@ -76,7 +77,7 @@ public:
 
     // Places the character (at its saved map and position, lifted onto the ground if it is under it, or START_MAP's
     // spawn if that map is not loaded or the position is off it) in that map's context (on an instance map: the saved
-    // copy if it is live and has room, else the map's exit, logged), sends
+    // copy if it is live and has room, else the map's exit, logged; on a layered map: login_layer), sends
     // EnterWorldOk, wakes the tiles around it (spawning the NPCs of those loading now, so onEnter sees them), restores
     // its persisted Lua components and runs onEnter. Other players get Spawn on the next tick.
     entt::entity spawn(uint32_t sessionId, const db::CharRow& row, TimePoint now);
@@ -100,8 +101,9 @@ public:
     // Every map change goes through here (player or NPC), and teleports within a map too; a context's own requests
     // (portals, kast.transfer onto another map) come here at the serial points. Refused (false, logged) if this
     // process does not own the destination tile, or if a player's destination is a full instance copy (instance.full
-    // on the source context's bus; nothing moves). Onto an instance map, to.key picks the copy (Destination); a new
-    // one is created here. Otherwise moves e at once onto the ground at the destination and
+    // on the source context's bus; nothing moves), or a kast.transfer layer = that is full or gone (likewise). Onto an
+    // instance map, to.key picks the copy (Destination); a new one is created here. Onto a layered map, layer_dest
+    // picks the layer. Otherwise moves e at once onto the ground at the destination and
     // takes it out of every view: the player gets MapChange, then a Despawn per old neighbour, who get its Despawn,
     // and its area is updated (area events). Onto another map, in this order: onMapLeave in the old context, the
     // MapChange, Despawns and area.leave there, every component moved to the new context, area.enter and onMapEnter
@@ -136,6 +138,21 @@ private:
     // An instance map's copy for key: the live one registered under it, else a new one (always for nullopt); null if
     // a new one is needed and the instance ids are exhausted.
     MapContext* copy_for(uint16_t map, const std::optional<std::string>& key);
+    // A new copy (an instance copy, or a layer: key nullopt) with the next instanceId; null if the instance ids are
+    // exhausted or the entity ids low (Shared::room_for_copy), no_copy_reason() says which.
+    MapContext* new_copy(uint16_t map, const std::optional<std::string>& key);
+    const char* no_copy_reason() const;
+    // Layered world map's placement for an arriving player (docs/services/world/maps.html#layers): the hint if it is a
+    // live layer with room, else the fullest live layer with room, else a new layer, else (no new copy can be made)
+    // the fullest, over its cap, logged. Never refuses.
+    MapContext& layer_for(uint16_t map, std::optional<uint32_t> hint);
+    // The layer of layered map to.map that e (in from) moves to: an NPC the one named if live, else the base; a player
+    // layer_for, unless to.layer is a kast.transfer layer = (not a hint): then that layer if live with room, else
+    // null, refused (refuse_layer on from).
+    MapContext* layer_dest(entt::entity e, MapContext& from, const Destination& to);
+    // A login onto layered map `map`: the saved layer (row.instanceId, saved on this map) if live with room, else
+    // layer_for with the base layer's layerFor(nil, map) as the hint.
+    MapContext& login_layer(const db::CharRow& row, uint16_t map);
     // The context e is in, or null.
     // ponytail: a scan over the contexts, a valid() check each; an id -> context index if thousands of copies live.
     MapContext* find(entt::entity e) const;

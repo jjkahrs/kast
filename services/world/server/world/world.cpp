@@ -61,11 +61,49 @@ MapContext* World::copy_for(uint16_t map, const std::optional<std::string>& key)
     if (key)
         if (const auto it = shared_.copies.find({map, *key}); it != shared_.copies.end())
             return contexts_.at({map, it->second.instance}).get();
+    return new_copy(map, key); // null: refused like a full copy, never a crash
+}
+
+MapContext* World::new_copy(uint16_t map, const std::optional<std::string>& key) {
     // ponytail: ids never wrap (a saved one could name a new copy), so after 2^32 - 1 copies ever made in the realm no
     // more are made; reset characters.instance_id to 0 (players then enter at the exits) if a realm ever gets there.
     if (nextInstance_ > UINT32_MAX) return nullptr;
-    if (!shared_.room_for_copy()) return nullptr; // entity ids low: refused like a full copy, never a crash
+    if (!shared_.room_for_copy()) return nullptr; // entity ids low
     return &create(map, static_cast<uint32_t>(nextInstance_++), key);
+}
+
+const char* World::no_copy_reason() const { return nextInstance_ > UINT32_MAX ? "instance ids exhausted" : "entity ids low"; }
+
+// ponytail: fill the fullest; no rebalancing, so a layer emptied by logouts only closes once its last player leaves.
+MapContext& World::layer_for(uint16_t map, std::optional<uint32_t> hint) {
+    const uint32_t cap = *maps_.info(map).layerCap;
+    MapContext* fullest = &context(map); // the base: always live
+    MapContext* roomy = nullptr;         // the fullest with room
+    for (auto it = contexts_.lower_bound({map, 0}); it != contexts_.end() && it->first.first == map; ++it) {
+        MapContext* ctx = it->second.get();
+        if (ctx->population() < cap) {
+            if (hint == ctx->instance()) return *ctx;
+            if (!roomy || ctx->population() > roomy->population()) roomy = ctx;
+        }
+        if (ctx->population() > fullest->population()) fullest = ctx;
+    }
+    if (roomy) return *roomy;
+    if (MapContext* fresh = new_copy(map, std::nullopt)) return *fresh;
+    log::warn("no new layer: overfilling the fullest",
+              {{"map", map}, {"instance", fullest->instance()}, {"players", fullest->population()}, {"cap", cap},
+               {"reason", no_copy_reason()}});
+    return *fullest;
+}
+
+MapContext* World::layer_dest(entt::entity e, MapContext& from, const Destination& to) {
+    context(to.map); // the base, always live
+    const auto it = to.layer ? contexts_.find({to.map, *to.layer}) : contexts_.end();
+    MapContext* asked = it == contexts_.end() ? nullptr : it->second.get();
+    if (!from.registry().all_of<SessionLink>(e)) return asked ? asked : &context(to.map); // NPCs: no cap, no new layer
+    if (!to.layer || to.layerHint) return &layer_for(to.map, asked ? to.layer : std::nullopt);
+    if (asked && asked->population() < *maps_.info(to.map).layerCap) return asked;
+    from.refuse_layer(e, to.map, *to.layer); // filled up or closed since the request
+    return nullptr;
 }
 
 MapContext* World::copy(uint16_t map, uint32_t instance) const {
@@ -108,9 +146,9 @@ std::vector<World::Key> World::expire_copies() {
         }
         if (!ctx->empty_since()) ctx->set_empty_since(now_);
         if (now_ - *ctx->empty_since() < std::chrono::seconds(maps_.info(key.first).emptyTimeoutSec)) continue;
-        log::info("instance destroyed", {{"map", key.first}, {"instance", key.second},
-                                         {"key", ctx->key() ? nlohmann::json(*ctx->key()) : nlohmann::json()},
-                                         {"npcs", ctx->npcs_here()}});
+        log::info(maps_.info(key.first).instanced() ? "instance destroyed" : "layer destroyed",
+                  {{"map", key.first}, {"instance", key.second},
+                   {"key", ctx->key() ? nlohmann::json(*ctx->key()) : nlohmann::json()}, {"npcs", ctx->npcs_here()}});
         ctx->shutdown_scripts();
         ctx->remove_npcs();
         if (ctx->key()) shared_.copies.erase({key.first, *ctx->key()});
@@ -121,10 +159,16 @@ std::vector<World::Key> World::expire_copies() {
 
 void World::refresh_copies() {
     for (auto& [key, copy] : shared_.copies) copy.players = contexts_.at({key.first, copy.instance})->population();
+    shared_.layers.clear();
+    for (const auto& [key, ctx] : contexts_)
+        if (maps_.info(key.first).layerCap) shared_.layers.emplace(key, ctx->population());
 }
 
 std::vector<std::string> World::load_scripts(const std::filesystem::path& luaRoot, std::vector<std::string> gameMachines) {
     context(rules_.startMap); // created before luaRoot_ is set: loaded below with the others
+    for (const auto& [id, info] : maps_.all())
+        if (info.layerCap) context(id); // a layered map's base layer is always live
+    refresh_copies();
     luaRoot_ = luaRoot;
     gameMachines_ = std::move(gameMachines);
     std::vector<std::string> errors = realm_.load_game_machines(luaRoot, gameMachines_);
@@ -183,12 +227,23 @@ entt::entity World::spawn(uint32_t sessionId, const db::CharRow& row, TimePoint 
         pos = {start.spawn[0], start.spawn[1], start.spawn[2]};
         heading = start.spawnHeading;
     }
+    if (!ctx && maps_.info(map).layerCap) ctx = &login_layer(row, map);
     if (const float ground = *maps_.ground(map, pos.x, pos.z); pos.y < ground - rules_.move.groundTolerance)
         pos.y = ground; // saved under the ground (heights edited since): onto it
     pos.y = std::clamp(pos.y, rules_.move.minY, rules_.move.maxY);
     const entt::entity e = (ctx ? *ctx : context(map)).spawn(sessionId, row, pos, heading, now);
     serial(false);
     return e;
+}
+
+MapContext& World::login_layer(const db::CharRow& row, uint16_t map) {
+    const uint32_t saved = row.mapId == map ? row.instanceId : 0; // a save on another map names none of these layers
+    if (MapContext* layer = saved ? copy(map, saved) : nullptr; layer && layer->population() < *maps_.info(map).layerCap)
+        return *layer;
+    if (saved)
+        log::info("saved layer not joinable; placing as a new arrival",
+                  {{"char", row.id}, {"map", map}, {"instance", saved}, {"reason", copy(map, saved) ? "layer full" : "layer gone"}});
+    return layer_for(map, context(map).layer_for(entt::null, map)); // no entity yet: the base layer's hooks, e nil
 }
 
 void World::despawn(entt::entity e) {
@@ -235,10 +290,12 @@ bool World::move_to(entt::entity e, const Destination& to) {
         return false;
     }
     const map::MapInfo& info = maps_.info(to.map);
-    if (to.map == from->map() && (!info.instanced() || to.key == from->key())) {
+    if (to.map == from->map() && (!info.instanced() || to.key == from->key()) && (!to.layer || *to.layer == from->instance())) {
         from->transfer(e, to);
         return true;
     }
+    MapContext* const layer = info.layerCap ? layer_dest(e, *from, to) : nullptr;
+    if (info.layerCap && !layer) return false;
     if (info.instanced() && to.key && info.maxPlayers && from->registry().all_of<SessionLink>(e))
         if (const auto it = shared_.copies.find({to.map, *to.key});
             it != shared_.copies.end() && contexts_.at({to.map, it->second.instance})->population() >= *info.maxPlayers) {
@@ -248,12 +305,11 @@ bool World::move_to(entt::entity e, const Destination& to) {
     MapContext* const inst = info.instanced() ? copy_for(to.map, to.key) : nullptr;
     if (info.instanced() && !inst) { // refused like a full copy
         log::error("transfer refused: no new instance copy",
-                   {{"entity", wire_id(e)}, {"map", to.map},
-                    {"reason", nextInstance_ > UINT32_MAX ? "instance ids exhausted" : "entity ids low"}});
+                   {{"entity", wire_id(e)}, {"map", to.map}, {"reason", no_copy_reason()}});
         from->refuse_full(e, to.map, to.key.value_or(""));
         return false;
     }
-    MapContext& dest = inst ? *inst : context(to.map);
+    MapContext& dest = inst ? *inst : layer ? *layer : context(to.map);
     const lua::Carried carried = from->leave_map(e);
     if (!from->registry().valid(e)) return false; // onMapLeave destroyed it
     const Destination at{to.map, clamp_to_map(to.map, to.pos), to.heading}; // owned, so on the map: y onto the ground
@@ -353,7 +409,11 @@ void World::deliver(const nlohmann::json& from, const lua::Post& post) {
     const nlohmann::json payload{{"from", from}, {"data", post.data}};
     const std::string publisher = from.is_string() ? "realm" : "map " + from.dump();
     switch (post.to) {
-    case lua::Post::To::map: context(post.map).bus().publish(post.event, payload, publisher); break;
+    case lua::Post::To::map: // every layer of a layered map
+        context(post.map);
+        for (auto it = contexts_.lower_bound({post.map, 0}); it != contexts_.end() && it->first.first == post.map; ++it)
+            it->second->bus().publish(post.event, payload, publisher);
+        break;
     case lua::Post::To::realm: realm_.bus().publish(post.event, payload, publisher); break;
     case lua::Post::To::all:
         for (auto& [id, ctx] : contexts_) ctx->bus().publish(post.event, payload, publisher);

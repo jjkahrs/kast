@@ -141,11 +141,14 @@ MapContext::MapContext(uint16_t map, uint32_t instance, std::optional<std::strin
             .map = [this](uint16_t id) { return maps_.by_id(id); },
             .ground = [this](uint16_t on, float x, float z) { return maps_.ground(on, x, z); },
             .path = [this](uint16_t on, proto::Vec3 from, proto::Vec3 to) { return maps_.nav().path(on, from, to); },
-            .transfer = [this](entt::entity e, uint16_t to, proto::Vec3 pos, float heading,
-                               std::optional<std::string> key) { return request_transfer(e, {to, pos, heading}, std::move(key)); },
+            .transfer = [this](entt::entity e, uint16_t to, proto::Vec3 pos, float heading, std::optional<std::string> key,
+                               std::optional<uint32_t> layer) {
+                return request_transfer(e, {to, pos, heading}, std::move(key), layer);
+            },
             .instance = [this]() -> std::optional<lua::InstanceInfo> {
-                if (!instance_) return std::nullopt;
-                return lua::InstanceInfo{instance_, key_, map_};
+                const bool layered = maps_.info(map_).layerCap.has_value();
+                if (!instance_ && !layered) return std::nullopt;
+                return lua::InstanceInfo{instance_, key_, map_, layered};
             },
             .spawn = [this](uint32_t record) { return spawner_.records.at(record).spawn; },
             .count = [this] { return npc_count(); },
@@ -163,8 +166,9 @@ MapContext::MapContext(uint16_t map, uint32_t instance, std::optional<std::strin
     lua_.fsm().forward_game_machines(
         [this](const std::string& machine, const std::string& to) { outbox_.gameChanges.emplace_back(machine, to); });
     if (instance_)
-        log::info("instance created", {{"map", map_}, {"name", maps_.info(map_).name}, {"instance", instance_},
-                                       {"key", key_ ? nlohmann::json(*key_) : nlohmann::json()}});
+        log::info(maps_.info(map_).instanced() ? "instance created" : "layer created",
+                  {{"map", map_}, {"name", maps_.info(map_).name}, {"instance", instance_},
+                   {"key", key_ ? nlohmann::json(*key_) : nlohmann::json()}});
     else log::debug("map context started", {{"map", map_}, {"name", maps_.info(map_).name}});
 }
 
@@ -274,28 +278,51 @@ void MapContext::despawn(entt::entity e) {
 
 proto::Vec3 MapContext::clamp(proto::Vec3 pos) const { return clamp_to_map(maps_, rules_.move, map_, pos); }
 
-bool MapContext::request_transfer(entt::entity e, Destination to, std::optional<std::string> key) {
+bool MapContext::request_transfer(entt::entity e, Destination to, std::optional<std::string> key,
+                                  std::optional<uint32_t> layer) {
     if (!maps_.owns(to.map, map::tile_of(to.pos.x, to.pos.z))) {
         // ponytail: one process owns every tile; future = save + Redirect{host,port,ticket} to the owning process.
         log::warn("transfer refused: destination tile not owned by this process",
                   {{"entity", wire_id(e)}, {"map", to.map}, {"x", to.pos.x}, {"z", to.pos.z}});
         return false;
     }
-    const bool instanced = maps_.info(to.map).instanced();
-    if (to.map == map_ && (!instanced || !key || key == key_)) {
+    const map::MapInfo& info = maps_.info(to.map);
+    if (to.map == map_ && (!info.instanced() || !key || key == key_) && (!layer || *layer == instance_)) {
         transfer(e, to);
         return true;
     }
-    if (instanced) {
+    const bool player = reg_.all_of<SessionLink>(e);
+    if (info.instanced()) {
         to.key = key ? std::move(key) : lua_.instance_key(e, to.map);
         if (!reg_.valid(e)) return false; // the hook destroyed it
-        if (to.key && reg_.all_of<SessionLink>(e) && full(to.map, *to.key)) {
+        if (to.key && player && full(to.map, *to.key)) {
             refuse_full(e, to.map, *to.key);
             return false;
         }
+    } else if (layer) {
+        if (!layer_room(to.map, *layer, player)) {
+            refuse_layer(e, to.map, *layer);
+            return false;
+        }
+        to.layer = layer;
+    } else if (info.layerCap && player) {
+        to.layer = lua_.layer_for(e, to.map);
+        if (!reg_.valid(e)) return false; // the hook destroyed it
+        if (to.layer && !layer_room(to.map, *to.layer, true)) to.layer.reset(); // full or gone: World places it
+        to.layerHint = true;
     }
     outbox_.transfers.emplace_back(e, std::move(to));
     return true;
+}
+
+bool MapContext::layer_room(uint16_t map, uint32_t layer, bool player) const {
+    const auto it = shared_.layers.find({map, layer});
+    if (it == shared_.layers.end()) return false;
+    if (!player) return true; // the cap counts players only
+    size_t players = it->second;
+    for (const auto& [q, to] : outbox_.transfers)
+        players += to.map == map && to.layer == layer && reg_.valid(q) && reg_.all_of<SessionLink>(q);
+    return players < *maps_.info(map).layerCap;
 }
 
 size_t MapContext::npcs_here() const {
@@ -316,6 +343,11 @@ bool MapContext::full(uint16_t map, const std::string& key) const {
 void MapContext::refuse_full(entt::entity e, uint16_t map, const std::string& key) {
     log::info("transfer refused: instance full", {{"entity", wire_id(e)}, {"map", map}, {"key", key}});
     lua_.bus().publish("instance.full", {{"entity", wire_id(e)}, {"map", map}, {"key", key}}, "world");
+}
+
+void MapContext::refuse_layer(entt::entity e, uint16_t map, uint32_t layer) {
+    log::info("transfer refused: layer full or gone", {{"entity", wire_id(e)}, {"map", map}, {"layer", layer}});
+    lua_.bus().publish("instance.full", {{"entity", wire_id(e)}, {"map", map}, {"layer", layer}}, "world");
 }
 
 void MapContext::transfer(entt::entity e, const Destination& to) {

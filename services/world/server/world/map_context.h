@@ -1,6 +1,7 @@
 // One loaded map's runtime (docs/services/world/maps.html#map-contexts): its own registry, AOI grid, Lua state (npcs/
-// and systems/), spawner, tile activation and event bus, updated by World. A world map has one; an instance map one per
-// live copy (docs/services/world/instances.html), each with its instanceId and key. A context reads only the immutable Maps
+// and systems/), spawner, tile activation and event bus, updated by World. A world map has one (a layered one, one per
+// live layer: docs/services/world/maps.html#layers); an instance map one per live copy
+// (docs/services/world/instances.html), each with its instanceId and key. A context reads only the immutable Maps
 // and the process-wide Shared; whatever reaches past its map (a transfer, kast.create or a respawn on another map,
 // kast.world.post, a game machine change, a broadcast) goes into its Outbox, which World drains at the serial points.
 #pragma once
@@ -40,12 +41,17 @@ struct WorldRules {
 };
 
 // Where a transfer puts an entity. Onto an instance map, key picks the copy: the live one with that key, or a new one
-// registered under it; nullopt: a new keyless copy. Within the same copy (same map, same key) it is a teleport.
+// registered under it; nullopt: a new keyless copy. Onto a layered world map, layer picks the layer (refused if it is
+// gone or full; with layerHint, a layerFor pick, it falls back to World's placement instead); nullopt: World's
+// placement for a player, the base layer for an NPC. Within the same copy (same map, same key, same or no layer) it is
+// a teleport.
 struct Destination {
     uint16_t map = 0;
     proto::Vec3 pos;
     float heading = 0;
     std::optional<std::string> key = std::nullopt; // instance maps only
+    std::optional<uint32_t> layer = std::nullopt;   // layered world maps only
+    bool layerHint = false;
 };
 
 // What every context shares, owned by World: the process-wide entity index space, handed out in blocks (IdPool), and
@@ -75,6 +81,9 @@ struct Shared {
         size_t players = 0;
     };
     std::map<std::pair<uint16_t, std::string>, Copy> copies;
+    // Every live layer of a layered world map by (map, instanceId; 0: the base): its players as of the last serial
+    // point. Written and read as copies.
+    std::map<std::pair<uint16_t, uint32_t>, size_t> layers;
 
 private:
     std::mutex mu_;
@@ -204,6 +213,10 @@ public:
     // A player's transfer into the full copy of map with key is refused: logged, and instance.full {entity, map, key}
     // published on this context's bus (by World too, when the copy filled up after the request).
     void refuse_full(entt::entity e, uint16_t map, const std::string& key);
+    // As refuse_full, for a layer of a layered world map that is full or gone: instance.full {entity, map, layer}.
+    void refuse_layer(entt::entity e, uint16_t map, uint32_t layer);
+    // The layer this context's systems' layerFor(e, map) pick (lua::Runtime::layer_for; e null at a login).
+    std::optional<uint32_t> layer_for(entt::entity e, uint16_t map) { return lua_.layer_for(e, map); }
 
     // Moving e to another context, in this order (World::transfer): leave_map runs onMapLeave (and sends the client
     // events queued so far, while e can still be seen); depart takes e out of this map (MapChange, Despawns,
@@ -236,9 +249,15 @@ private:
     // within this map (on a copy: without a key, or with this copy's) at once, onto another queued. Onto an instance map
     // the key is key (kast.transfer's instance =), else what the systems' instanceKey(e, map) returns; a player's into a
     // copy that was full at the last serial point (with the players this context queued for it since) is refused
-    // (refuse_full).
-    bool request_transfer(entt::entity e, Destination to, std::optional<std::string> key = std::nullopt);
+    // (refuse_full). Onto a layered world map: layer (kast.transfer's layer =) must be live, with room for a player
+    // (else refuse_layer); without it, a player's transfer onto another map asks layerFor(e, map) and keeps a pick
+    // that is live with room as a hint; within the map it stays in this layer.
+    bool request_transfer(entt::entity e, Destination to, std::optional<std::string> key = std::nullopt,
+                          std::optional<uint32_t> layer = std::nullopt);
     bool full(uint16_t map, const std::string& key) const;
+    // A live layer of a layered map with room for one more player (for an NPC: just live), counting the players this
+    // context queued for it since the last serial point.
+    bool layer_room(uint16_t map, uint32_t layer, bool player) const;
     entt::entity lua_create(std::string name, std::string templateName, std::optional<uint16_t> map,
                             std::optional<proto::Vec3> pos, float heading, std::string npc, const lua::Json& components);
     void leave_views(entt::entity e);

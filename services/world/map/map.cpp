@@ -306,21 +306,30 @@ std::optional<MapInfo> parse_manifest(const Json& j, std::string& err) {
         if (j["type"] == "instance") m.type = MapType::Instance;
         else if (j["type"] != "world") return fail("\"type\" must be \"world\" or \"instance\"");
     }
-    for (const char* key : {"maxPlayers", "emptyTimeoutSec", "exit"})
+    if (j.contains("layerCap")) {
+        const Json& v = j["layerCap"];
+        if (m.instanced()) return fail("\"layerCap\" is only for world maps; an instance map uses \"maxPlayers\"");
+        if (!v.is_number_unsigned() || v.get<uint64_t>() < 1 || v.get<uint64_t>() > 0xFFFFFFFF)
+            return fail("\"layerCap\" must be an integer >= 1 (leave it out for one layer)");
+        m.layerCap = static_cast<uint32_t>(v.get<uint64_t>());
+    }
+    for (const char* key : {"maxPlayers", "exit"})
         if (!m.instanced() && j.contains(key))
             return fail(std::string("\"") + key + "\" is only for instance maps (\"type\": \"instance\")");
+    if (!m.instanced() && !m.layerCap && j.contains("emptyTimeoutSec"))
+        return fail("\"emptyTimeoutSec\" is only for instance maps (\"type\": \"instance\") or layered world maps (\"layerCap\")");
+    if (j.contains("emptyTimeoutSec")) {
+        const Json& v = j["emptyTimeoutSec"];
+        if (!v.is_number_unsigned() || v.get<uint64_t>() > uint64_t(kMaxRespawnSec))
+            return fail("\"emptyTimeoutSec\" must be an integer in [0, 31536000] (a year)");
+        m.emptyTimeoutSec = static_cast<uint32_t>(v.get<uint64_t>());
+    }
     if (m.instanced()) {
         if (j.contains("maxPlayers")) {
             const Json& v = j["maxPlayers"];
             if (!v.is_number_unsigned() || v.get<uint64_t>() < 1 || v.get<uint64_t>() > 0xFFFFFFFF)
                 return fail("\"maxPlayers\" must be an integer >= 1 (leave it out for no limit)");
             m.maxPlayers = static_cast<uint32_t>(v.get<uint64_t>());
-        }
-        if (j.contains("emptyTimeoutSec")) {
-            const Json& v = j["emptyTimeoutSec"];
-            if (!v.is_number_unsigned() || v.get<uint64_t>() > uint64_t(kMaxRespawnSec))
-                return fail("\"emptyTimeoutSec\" must be an integer in [0, 31536000] (a year)");
-            m.emptyTimeoutSec = static_cast<uint32_t>(v.get<uint64_t>());
         }
         const Json& exit = j.value("exit", Json());
         const Json map = exit.is_object() ? exit.value("map", Json()) : Json();

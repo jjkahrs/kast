@@ -164,6 +164,7 @@ and a system reads it with <code>kast.definitions(folder)</code>. The server giv
     onMapEnter = function(e, carried) end,       -- e just arrived from another map's; carried: what onMapLeave returned
     validateCharacter = function(name, options) return true end, -- may this character be created? (see below)
     instanceKey = function(e, map) return key end, -- e is entering instance map `map`: which copy? (nil: a new one)
+    layerFor = function(e, map) return id end,     -- e is arriving on layered map `map`: which layer? (nil: placement)
 }
 </code></pre>
 <ul>
@@ -185,6 +186,14 @@ and a system reads it with <code>kast.definitions(folder)</code>. The server giv
   <code>instanceKey(e, map)</code> runs in the context <code>e</code> is leaving, on a portal or <code>kast.transfer</code> into instance map <code>map</code>
   (not with <code>instance =</code>): the first system returning a non-empty string of at most 255 bytes picks the copy by that key; nil from
   all, a new keyless copy; anything else disables that system.</li>
+<li><strong>Layers:</strong> each layer of a <a href="maps.html#layers">layered world map</a> is a context of its own too (<code>init</code> when it
+  opens, <code>shutdown</code> when an extra layer closes; the base layer never does). <code>layerFor(e, map)</code> is asked for every player
+  arriving on layered map <code>map</code> from elsewhere: in the context <code>e</code> is leaving on a portal or <code>kast.transfer</code> (not with
+  <code>layer =</code>, and not for NPCs), and at a login in the map's base layer with <code>e</code> nil (the character has no entity yet). The
+  first system returning an integer in [0, 4294967295] names the layer (its instanceId; 0: the base): joined if it is live with room,
+  else ignored. nil from all, or an ignored pick: placement (the fullest layer with room, else a new one). Anything else returned, or an
+  error, disables that system. Typical use: keep a group together by returning the layer its leader is in
+  (<code>kast.map.instance().id</code> there).</li>
 <li><strong>Sandbox:</strong> the same as the engine's. Only base, table, string and math are open, with no <code>io</code>, <code>os</code>, <code>ffi</code>, <code>debug</code>, <code>jit</code>, <code>package</code>, <code>require</code>, <code>loadfile</code>, <code>dofile</code>, <code>load</code> or <code>loadstring</code>. Definition files are sandboxed too.</li>
 <li><strong>Runaway scripts:</strong> a callback that runs longer than 2 s raises an error, so an infinite loop disables its system instead of hanging the server.</li>
 <li><strong>Runtime errors:</strong> an error in any callback is logged as <code>Lua system disabled</code>, with the system, the callback and <code>path:line</code>. That system is then disabled until restart; the server and the other systems keep running.</li>
@@ -231,8 +240,8 @@ and a system reads it with <code>kast.definitions(folder)</code>. The server giv
 <td>Creates an NPC and returns its entity id; <code>opts = {npc = string \| template = string, components = {...}?, map = id?, position = {x, y, z}?, heading = number?}</code> (see <a href="npcs.html#npcs">NPCs</a>). <code>map</code> defaults to this context's map. On another map the id is returned now and the NPC is created in that map's context at the end of the tick, so it is not in this one (<code>kast.get</code> raises <code>invalid entity id</code>)</td>
 </tr>
 <tr>
-<td><code>kast.transfer(e, map, position [, heading])</code><br><code>kast.transfer(e, {map =, position =, heading =?, instance =?})</code></td>
-<td>Moves player or NPC <code>e</code> to <code>position</code> (<code>{x, y, z}</code>) on map <code>map</code>; <code>heading</code> defaults to the current one. Onto an <a href="instances.html">instance map</a>, <code>instance</code> (a non-empty string of at most 255 bytes) is the copy's key and the <code>instanceKey</code> hooks are not asked; on a world map it raises. Returns <code>true</code>, or <code>false</code> if this process does not own the destination (see <a href="maps.html#maps">Maps</a>) or the copy is full (<code>instance.full</code> on this bus; <a href="instances.html#full">Instances</a>). Within this map it moves at once; onto another map at the end of the tick (until then <code>e</code> is still here, where it was)</td>
+<td><code>kast.transfer(e, map, position [, heading])</code><br><code>kast.transfer(e, {map =, position =, heading =?, instance =?, layer =?})</code></td>
+<td>Moves player or NPC <code>e</code> to <code>position</code> (<code>{x, y, z}</code>) on map <code>map</code>; <code>heading</code> defaults to the current one. Onto an <a href="instances.html">instance map</a>, <code>instance</code> (a non-empty string of at most 255 bytes) is the copy's key and the <code>instanceKey</code> hooks are not asked; on a world map it raises. Returns <code>true</code>, or <code>false</code> if this process does not own the destination (see <a href="maps.html#maps">Maps</a>) or the copy is full (<code>instance.full</code> on this bus; <a href="instances.html#full">Instances</a>). Onto a <a href="maps.html#layers">layered world map</a>, <code>layer</code> (an integer in [0, 4294967295]: a layer's instanceId, 0 the base) picks the layer and the <code>layerFor</code> hooks are not asked: <code>false</code> if that layer is full or gone (<code>instance.full</code> <code>{entity, map, layer}</code>; nothing moves); on another map it raises. Without <code>layer</code> a player arriving from another map is placed (<code>layerFor</code>, then the fullest layer with room), and a transfer within the map stays in its layer. Within this map it moves at once; onto another map at the end of the tick (until then <code>e</code> is still here, where it was)</td>
 </tr>
 <tr>
 <td><code>kast.destroy(e)</code></td>
@@ -289,7 +298,7 @@ and a system reads it with <code>kast.definitions(folder)</code>. The server giv
 </tr>
 <tr>
 <td><code>kast.map.instance()</code></td>
-<td>The <a href="instances.html">instance copy</a> this context runs: <code>{id, key, map}</code> (<code>key</code> nil for a keyless copy), or <code>nil</code> on a world map</td>
+<td>The <a href="instances.html">instance copy</a> this context runs: <code>{id, key, map}</code> (<code>key</code> nil for a keyless copy); on a <a href="maps.html#layers">layered world map</a> its layer: <code>{id, map, layer = true, base}</code> (<code>base</code>: <code>id</code> 0, the base layer, which never closes); <code>nil</code> on any other world map</td>
 </tr>
 <tr>
 <td><code>kast.map.spawn(map)</code></td>

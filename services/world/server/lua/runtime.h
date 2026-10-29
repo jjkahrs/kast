@@ -1,7 +1,7 @@
 // Server Lua systems: LUA_ROOT/systems/*.lua, run in alphabetical filename order on the tick thread, one Lua state per
 // map context (and one for the realm's game machines), each file in its own sandboxed environment. A file returns
 // { init?, update(dt), shutdown?, onEnter?(e), onLeave?(e), onMapLeave?(e), onMapEnter?(e, carried),
-// validateCharacter?(name, options), instanceKey?(e, map) }
+// validateCharacter?(name, options), instanceKey?(e, map), layerFor?(e, map) }
 // and reaches the world only through kast.* over its context's registry, event bus and state machines
 // (docs/services/world/lua.html). sol2 stays inside runtime.cpp: World holds a Runtime without seeing Lua types.
 #pragma once
@@ -64,11 +64,13 @@ struct Post {
 // What each system's onMapLeave returned (plain data), by system path, for its onMapEnter in the next context.
 using Carried = std::map<std::string, nlohmann::json>;
 
-// kast.map.instance(): the instance copy a context runs (docs/services/world/instances.html).
+// kast.map.instance(): the instance copy a context runs (docs/services/world/instances.html), or its layer of a layered
+// world map (docs/services/world/maps.html#layers; id 0: the base layer).
 struct InstanceInfo {
     uint32_t id = 0;
-    std::optional<std::string> key; // nullopt: a keyless copy
+    std::optional<std::string> key; // nullopt: a keyless copy, or a layer
     uint16_t map = 0;
+    bool layer = false;
 };
 constexpr size_t kMaxInstanceKeyBytes = 255; // an instance key: a non-empty string of at most this many bytes
 
@@ -86,8 +88,10 @@ struct NpcHooks {
     std::function<std::optional<float>(uint16_t map, float x, float z)> ground; // Maps::ground; nullopt: off the map
     std::function<std::vector<proto::Vec3>(uint16_t map, proto::Vec3 from, proto::Vec3 to)> path; // Nav::path
     // Within the map at once, onto another at the serial point (World::transfer); false: not owned, or into a full
-    // instance copy (logged). instance: kast.transfer's instance = key (nullopt: none given).
-    std::function<bool(entt::entity, uint16_t map, proto::Vec3 pos, float heading, std::optional<std::string> instance)>
+    // instance copy, or a full or gone layer (logged). instance: kast.transfer's instance = key, layer its layer =
+    // (nullopt: none given).
+    std::function<bool(entt::entity, uint16_t map, proto::Vec3 pos, float heading, std::optional<std::string> instance,
+                       std::optional<uint32_t> layer)>
         transfer;
     std::function<std::optional<InstanceInfo>()> instance;    // kast.map.instance; unset or nullopt: not a copy
     std::function<const map::Spawn*(uint32_t record)> spawn;  // a SpawnRef's spawn file entry
@@ -134,6 +138,10 @@ public:
     // empty or longer than kMaxInstanceKeyBytes, disables that system like any callback error. Callable from inside
     // another system's callback (kast.transfer).
     std::optional<std::string> instance_key(entt::entity e, uint16_t map);
+    // The layer a system's layerFor(e, map) picks for e's arrival on layered world map `map`: the first integer in
+    // [0, UINT32_MAX] one returns, in system order; nullopt if none does. e null (a login: no entity yet) is nil in
+    // Lua. Anything else returned disables that system, as for instance_key.
+    std::optional<uint32_t> layer_for(entt::entity e, uint16_t map);
     // Whether a character may be created with these (C++-checked) options: every system with a validateCharacter must
     // return true for (name, {key = value, ...}). No system has one: only empty options pass. An error rejects, and
     // disables that system like any callback's.

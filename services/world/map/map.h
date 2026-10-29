@@ -83,8 +83,9 @@ struct Spawn {
 // the declared tiles (map.json "terrainUv": "tiled" | "map").
 enum class TerrainUv { Tiled, Map };
 
-// map.json "type": a world map runs as one context for everyone; an instance map has none until someone enters, then
-// one copy per instance key (docs/services/world/instances.html).
+// map.json "type": a world map runs as one context for everyone (with "layerCap": one per layer, opened as the map
+// fills); an instance map has none until someone enters, then one copy per instance key
+// (docs/services/world/instances.html).
 enum class MapType { World, Instance };
 
 struct MapInfo {
@@ -100,10 +101,12 @@ struct MapInfo {
     Areas areas;                                     // areas.json, loaded separately (parse_areas); empty if none
     std::vector<Spawn> spawns;                       // every owned tile's spawn file (parse_spawns); empty if none
     MapType type = MapType::World;
-    // Instance maps only: players per copy (nullopt: no limit), seconds an empty copy lives on, and where a character
-    // goes when its copy is gone (required; the loader checks it is on a loaded world map's tiles).
+    // Instance maps only: players per copy (nullopt: no limit), seconds an empty copy lives on (an extra layer too), and
+    // where a character goes when its copy is gone (required; the loader checks it is on a loaded world map's tiles).
     std::optional<uint32_t> maxPlayers;
     uint32_t emptyTimeoutSec = 300;
+    // World maps only: players per layer (nullopt: one context, no layers; docs/services/world/maps.html#layers).
+    std::optional<uint32_t> layerCap;
     std::optional<Portal> exit;
 
     bool instanced() const { return type == MapType::Instance; }
