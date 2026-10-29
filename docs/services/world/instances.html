@@ -74,7 +74,9 @@ copy spawns its own NPCs.</p>
   makes a new keyless copy. Keys are per map. A new copy gets a process-unique <code>uint32</code> instanceId &ge; 1 (counting up from one above the highest
   <code>characters.instance_id</code> of the realm, read at startup before players are accepted, so an id saved in an earlier run names no
   copy of this one; once <code>UINT32_MAX</code> is used no more copies are made, and the transfer is refused like a full copy:
-  <code>transfer refused: instance ids exhausted</code> logged, <code>instance.full</code> published), loads <code>npcs/</code> and <code>systems/</code> and runs their
+  <code>transfer refused: no new instance copy</code> <code>{reason: "instance ids exhausted"}</code> logged, <code>instance.full</code> published). The same
+  refusal, with <code>reason: "entity ids low"</code>, comes when fewer than 65536 entity indices are unused (kept for world maps and live copies,
+  <a href="maps.html#map-contexts">entity ids</a>); a copy takes its ids in blocks of 256, so about 1800 copies live at once fit. A new copy loads <code>npcs/</code> and <code>systems/</code> and runs their
   <code>init</code>; it is logged as <code>instance created</code> <code>{map, name, instance, key}</code>.</li>
 <li><strong>Within a copy:</strong> <code>kast.transfer</code> onto the copy's own map without <code>instance</code> (or with its own key) teleports within the copy; with
   another key it moves to that copy. Copies of one map share the map id, so the client gets <code>MapChange</code> with the same map id (see

@@ -62,6 +62,7 @@ public:
     entt::registry& registry(uint16_t map) { return context(map).registry(); }
     // A live copy of an instance map, or null (tests).
     MapContext* copy(uint16_t map, uint32_t instance) const;
+    Shared& shared() { return shared_; } // tests: use up the entity index space
     // Every live context, in map then instanceId order.
     std::vector<ContextInfo> contexts() const;
     // The registry of the context e is in, or null if e is not in the world (tests).

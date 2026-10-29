@@ -55,17 +55,25 @@ void move_entity(entt::registry& from, entt::registry& to, entt::entity e, const
     from.destroy(e);
 }
 
-std::pair<uint32_t, uint32_t> Shared::block() {
+namespace {
+constexpr uint32_t kIndices = entt::entt_traits<entt::entity>::entity_mask; // index tombstone excluded
+}
+
+std::pair<uint32_t, uint32_t> Shared::block(uint32_t size) {
     std::lock_guard lk(mu_);
-    if (!ranges_.empty()) {
+    if (size < kIdBlock && !ranges_.empty()) {
         const auto range = ranges_.back();
         ranges_.pop_back();
         return range;
     }
-    constexpr uint32_t kIndices = entt::entt_traits<entt::entity>::entity_mask; // index tombstone excluded
-    if (kIndices - next_ < kIdBlock) throw std::length_error("out of entity ids");
-    next_ += kIdBlock;
-    return {next_ - kIdBlock, next_};
+    if (kIndices - next_ < size) return {};
+    next_ += size;
+    return {next_ - size, next_};
+}
+
+bool Shared::room_for_copy() {
+    std::lock_guard lk(mu_);
+    return ranges_.size() >= 2 || kIndices - next_ >= kReserve;
 }
 
 void Shared::give_back(std::vector<entt::entity> freed, std::pair<uint32_t, uint32_t> a, std::pair<uint32_t, uint32_t> b) {
@@ -92,7 +100,8 @@ entt::entity IdPool::generate(Shared& shared) {
     // ponytail: a context past Shared::kIdBlock new ids in one update step takes its block mid-update, so which block
     // depends on the other contexts there; ids stay unique, only the parallel = serial guarantee is gone for them.
     if (block_.first == block_.second) block_ = std::exchange(spare_, {});
-    if (block_.first == block_.second) block_ = shared.block();
+    if (block_.first == block_.second) block_ = shared.block(blockSize_);
+    if (block_.first == block_.second) throw std::length_error("out of entity ids");
     return entt::entity{block_.first++};
 }
 
