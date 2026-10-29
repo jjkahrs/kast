@@ -42,6 +42,19 @@ and check only behaviour.</p>
   refusals (<code>kast.world.post</code> to an instance map, <code>kast.create</code> onto one, bad keys); 600 copies made and destroyed in a row (their
   entity ids recycled); <code>instanceKey</code> errors disabling only that system. <code>world_self_check --instance-bench</code> prints the median
   cost to make and destroy a copy with the sample <code>lua/</code>.</li>
+<li><strong>Layer checks</strong> (<code>lua_checks.cpp</code>, <code>checkLayerManifests</code>, <code>checkLayers</code>, <code>checkLayerOverflow</code>;
+  <a href="maps.html#layers">Maps, Layers</a>), on a test map with <code>layerCap</code> 2 and <code>emptyTimeoutSec</code> 10:
+  <code>layerCap</code> parsed and every refusal (below 1, not an integer, on an instance map with the file named; <code>emptyTimeoutSec</code>
+  on a world map without it); the base layer from startup; below the cap no new layer, at the cap a new one (logged, its own
+  <code>init</code> and Bat), arrivals (logins and transfers) filling the fullest layer with room, not the emptier base; layers sharing
+  no players or NPCs, <code>/say</code> and yell staying in the layer while every layer reports the same map (zone chat); relog into a
+  live layer with room, a full one, a gone one and an instance_id 0 row (at the saved position); <code>layerFor</code> picking a live
+  layer, ignored for a full or a gone one, and asked with <code>e</code> nil at a login; <code>kast.transfer</code> <code>layer =</code> into a layer with
+  room, refused into a full or gone one (<code>false</code>, <code>instance.full</code> <code>{layer}</code>, no <code>MapChange</code>), to another layer
+  of the same map, and a transfer within the map staying in the layer; <code>kast.map.instance()</code> in a layer; an empty extra layer
+  destroyed after 10 s (shutdown run, logged), the empty base never; with entity ids low the player overfilling the base, logged,
+  nobody refused; <code>layerFor</code> errors and bad results disabling only that system. Maps without <code>layerCap</code> are covered by
+  every other check, unchanged.</li>
 <li><strong>Parallel differential check</strong> (<code>self_check.cpp</code>, <code>checkParallelDifferential</code>;
   <a href="maps.html#threading">Threading</a>): seeded random worlds (20 seeds &times; 400 ticks) on 4 maps, each run in two
   <code>World</code>s, one with <code>MAP_THREADS=1</code> and one with 4, driven alike: logins (some next to a map's portal) and logouts,
@@ -217,6 +230,12 @@ and check only behaviour.</p>
   Scenario 42 (<code>instance-restart</code>, <code>instance-restart-verify</code>): a bot logs out inside a copy (saved with its instance id),
   the script restarts <code>world</code>, and the character enters at the crypt's exit: copies are memory-only.
   <code>tests/integration.sh --instances</code> runs only 17, 41 and 42 (export <code>MAP_THREADS</code> to run them at that setting).</li>
+<li>Scenario 43 (<code>layers</code>, <a href="maps.html#layers">Layers</a>): the script recreates <code>world</code> with a copy of
+  <code>tests/project/maps</code> whose Start has <code>"layerCap": 2</code> (<code>tests/stack_override.sh</code>; the repo's maps are not changed). Bots A
+  and B enter Start's base layer and see each other; C enters, every layer being full, a new layer: it sees neither A nor B and
+  neither sees it. The admin port's instance list (when <code>WORLD_ADMIN_SECRET</code> is set) shows map 1's base with 2 players and the
+  new layer with 1, and the world logged <code>layer created</code>. The script then recreates <code>world</code> with the default maps.
+  <code>tests/integration.sh --layers</code> runs only 43.</li>
 <li>Scenario 0 runs <code>kast_mapbake</code> in the image on the mounted hills (into <code>/tmp</code>; the maps are read-only) and logs
   the fresh and stored navtiles' checksums.</li>
 <li>Scenario 19 (<code>terrain</code>) reads <code>maps/hills</code> itself (<code>--map-root</code>, the maps mounted into the bot). Bots A and B take
@@ -278,6 +297,12 @@ and check only behaviour.</p>
   every <code>INSTANCE_SIZE</code> of them (default the map's <code>maxPlayers</code>: 2) send the same instance key (the sample
   <code>test_hooks.lua</code>'s <code>client.test.instance_key</code>) before walking to Start's <code>crypt_gate</code>, so each group gets its own copy; the
   summary's <code>instance_keys</code> counts the copies. Example: <code>COUNT=200 MAPS=1,4,5,6 MAP_THREADS=4 bash tests/load.sh</code> (25 copies).</li>
+<li id="load"><strong>Layers:</strong> <code>LAYER_CAP=500</code> gives <code>START_MAP</code> <code>"layerCap": 500</code> for this run only
+  (<a href="maps.html#layers">Layers</a>): the world and the bot mount a copy of <code>tests/project/maps</code> with the field added
+  (<code>tests/stack_override.sh</code>, a compose override in <code>build/stack-override.yml</code>); the repo's maps are not changed. The result
+  shows the peak number of live layers per layered map (from the <code>layer created</code> / <code>layer destroyed</code> lines). Example:
+  <code>MAP_THREADS=4 COUNT=2000 LAYER_CAP=500 bash tests/load.sh</code> (4 layers; with <code>MAP_THREADS=1</code> the layers update one
+  after another and the ticks run over, <a href="maps.html#layers">Layers</a>). Afterwards the script recreates <code>world</code> with the default maps.</li>
 <li><strong>Pass criteria:</strong><ul>
 <li>Bot summary PASS: every bot entered the world (and, with <code>MAPS</code>, reached its map), with no errors, no unexpected
   disconnects and no <code>Correction</code> for honest movers. Without <code>MAPS</code> a wanderer that walks into the sample portal
@@ -285,7 +310,9 @@ and check only behaviour.</p>
 <li>Every 10 s window's tick p99 is under 25 ms, and so is the run total.</li>
 <li>Zero failed save attempts.</li>
 <li>Enter p99 under 500 ms: each bot times connect &rarr; <code>EnterWorldOk</code> (login, character list, create on a first run, enter);
-  the summary has <code>enter_ms_p50</code> and <code>enter_ms_p99</code>. The result also shows the saves lost on the graceful stop.</li>
+  the summary has <code>enter_ms_p50</code> and <code>enter_ms_p99</code>. The result also shows the saves lost on the graceful stop.
+  Known issue: enter p99 is bimodal across runs (41 ms to 6 s), with or without layers; the cause is in the login path, not the
+  tick, and has not been profiled.</li>
 </ul>
 </li>
 <li><strong>Net busy (information only):</strong> the result's <code>net busy % worst window</code> line has each net thread's highest

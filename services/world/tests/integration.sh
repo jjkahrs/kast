@@ -6,6 +6,7 @@
 # --admin runs only scenarios 39-40 (the admin port; WORLD_ADMIN_SECRET in .env).
 # --instances runs only scenarios 17, 41 and 42 (portals, instance maps; 42 restarts world); export MAP_THREADS to run
 # them at that setting.
+# --layers runs only scenario 43 (layers: recreates world with a layered START_MAP, then with the default maps).
 set -u
 cd "$(dirname "$0")/.."
 export MSYS_NO_PATHCONV=1 # Git Bash on Windows: keep container paths as written
@@ -152,6 +153,32 @@ instance_restart() {
 # --instances: only the portal and instance map scenarios.
 if [ "${1:-}" = "--instances" ]; then
     instance_scenarios
+    summary
+fi
+
+# 43: layers (docs/services/world/maps.html#layers): the world recreated with START_MAP at "layerCap": 2 (a copy of the
+# maps, tests/stack_override.sh), then again with the default maps.
+. tests/stack_override.sh
+layer_scenario() {
+    local name="43 layers: START_MAP at layerCap 2, A and B share the base layer, C lands in a new layer and sees neither" log="$LOGDIR/43.log" ok=0
+    echo "--- $name"
+    stack_override 2
+    docker compose up -d world >/dev/null 2>&1
+    wait_healthy world || ok=1
+    WORLD=$(docker compose ps -q world)
+    bot --scenario layers 2>&1 | tee "$log" | grep -v -E '^ *(Container|Network) '
+    [ "${PIPESTATUS[0]}" -eq 0 ] || ok=1
+    docker logs "$WORLD" 2>&1 | grep '"layer created"' | tee -a "$log" | sed 's/^/  log: /' | grep -q . || ok=1
+    stack_default
+    docker compose up -d world >/dev/null 2>&1
+    wait_healthy world || ok=1
+    WORLD=$(docker compose ps -q world)
+    record "$name" $ok "see $log"
+}
+
+# --layers: only the layer scenario.
+if [ "${1:-}" = "--layers" ]; then
+    layer_scenario
     summary
 fi
 
@@ -349,6 +376,7 @@ fi
 
 scenario "41 instances: same key -> one copy, other key -> another (own NPCs), 3rd player refused (instance.full), relog rejoins, empty 5 s -> destroyed, relog -> exit" --scenario instances
 instance_restart
+layer_scenario
 
 admin_scenarios
 summary

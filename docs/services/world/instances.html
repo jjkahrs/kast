@@ -120,7 +120,17 @@ bot scenarios; a game would use its party or raid id.</p>
 <h2 id="admin">Admin</h2>
 <p>The world <a href="protocol.html#admin">admin port</a>'s <code>AdminInstancesReq</code> lists every live context: map id and name, instanceId (0 for a
 world map), key, players, NPCs, when it was made and, for an empty copy, when its timer started. The admin app shows it on its
-<a href="../admin/index.html#instances">Instances</a> page.</p>
+<a href="../admin/index.html#instances">Instances</a> page. A layered world map's extra layers are listed the same way (no key).</p>
+<h2 id="layers">Layers</h2>
+<p>A <a href="maps.html#layers">layered world map</a> (<code>"layerCap"</code>) reuses this machinery for its extra layers, which are copies of
+the world map rather than of an instance map. What is the same: each is its own context, made with a fresh instanceId from the same
+counter, only at serial points, with its own Lua state, tile activation and NPC spawns; it is destroyed after the map's
+<code>emptyTimeoutSec</code> (default 300) with no players, as an empty copy is; <code>characters.instance_id</code> names it for a relog; when no
+copy can be made (ids exhausted, entity ids low) the same checks apply. What differs: no keys and no <code>instanceKey</code> (the
+<code>layerFor</code> hook and the fill-the-fullest placement pick the layer); the base layer (instanceId 0) always exists; a full layer
+opens a new one instead of refusing, and with no new copy possible the player overfills a layer, so a login or a transfer onto a world
+map is never refused because of layers; a gone or full saved layer means placement on the same map, not an <code>exit</code>. Only
+<code>kast.transfer</code>'s explicit <code>layer =</code> is refused like a full copy (<code>instance.full</code> <code>{entity, map, layer}</code>).</p>
 </main>
 </div>
 </body>

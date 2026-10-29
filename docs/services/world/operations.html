@@ -48,7 +48,21 @@
   <code>TICK_HZ</code> 20) or nearly every player is on one map: a single map never splits across threads. Raise it when players spread over
   several maps and <code>p99_ms</code> climbs: with <code>contexts</code> busy maps, about <code>min(contexts, cores - 2)</code> (the net threads, the DB
   workers and the log writer need cores too). More threads than busy maps only wait. If <code>ctx_max_ms</code> is close to <code>p99_ms</code>, one map
-  is the bottleneck and more threads will not help.</li>
+  is the bottleneck and more threads will not help; give that map a <a href="maps.html#layers"><code>layerCap</code></a> instead.
+  Its layers are contexts too, updated one after another at <code>MAP_THREADS=1</code>: set it to about the expected layer count
+  (2000 bots, <code>layerCap</code> 500, 4 layers: tick p99 about 33 ms at 1, about 12 ms at 4).</li>
+<li id="layer-logs"><strong>Layers</strong> (<a href="maps.html#layers">Maps, Layers</a>):<ul>
+<li><code>layer created</code> (info) <code>{map, name, instance, key: null}</code>: every live layer of the map was full, so an extra layer opened.</li>
+<li><code>layer destroyed</code> (info) <code>{map, instance, key: null, npcs}</code>: an extra layer was empty for the map's <code>emptyTimeoutSec</code>.</li>
+<li><code>no new layer: overfilling the fullest</code> (warn) <code>{map, instance, players, cap, reason}</code>: every layer was full and no
+  new one could be made (<code>reason</code>: <code>instance ids exhausted</code> or <code>entity ids low</code>); the player joined the fullest
+  layer anyway.</li>
+<li><code>saved layer not joinable; placing as a new arrival</code> (info) <code>{char, map, instance, reason}</code>: a login saved in a layer
+  that is full (<code>layer full</code>) or gone (<code>layer gone</code>: closed, or a previous run's).</li>
+<li><code>transfer refused: layer full or gone</code> (info) <code>{entity, map, layer}</code>: a <code>kast.transfer</code> with <code>layer =</code>.</li>
+</ul>
+  The number of live layers per map is in the admin port's instance list, or <code>layer created</code> minus <code>layer destroyed</code>
+  (<code>tests/load.sh</code> prints the peak).</li>
 </ul>
 </main>
 </div>

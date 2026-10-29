@@ -6,6 +6,8 @@
 # NET_THREADS (default 4) and MAX_CONNECTIONS (default COUNT + 100) are the world's. Recreates the world first so
 # its run totals cover this test only (and it runs with these settings), and stops it gracefully afterwards to get
 # the "tick stats total" and "net stats total" lines. Also prints each net thread's busy % (information only).
+# LAYER_CAP=500 gives START_MAP "layerCap": 500 for this run only (a copy of the maps: tests/stack_override.sh), and
+# the world is recreated with the default maps afterwards; the result shows the peak live layers per map.
 # Pass: bot summary PASS, every 10 s window's tick p99 < 25 ms, run p99 < 25 ms, zero failed save attempts, and
 # enter p99 (each bot's connect -> EnterWorldOk, the login storm's lobby latency) < 500 ms.
 set -u
@@ -18,6 +20,7 @@ BEHAVIOUR="${BEHAVIOUR:-wander}"
 THREADS="${THREADS:-8}"
 MAPS="${MAPS:-}"
 INSTANCE_SIZE="${INSTANCE_SIZE:-}"
+LAYER_CAP="${LAYER_CAP:-}"
 export MAP_THREADS="${MAP_THREADS:-1}" # read by docker-compose.yml
 export NET_THREADS="${NET_THREADS:-4}"
 export MAX_CONNECTIONS="${MAX_CONNECTIONS:-$((COUNT + 100))}"
@@ -26,6 +29,8 @@ LOG="build/load-$RUN.log"
 P99_LIMIT_MS=25
 ENTER_P99_LIMIT_MS=500
 mkdir -p build
+. tests/stack_override.sh
+stack_override "$LAYER_CAP"
 
 docker compose up -d --no-deps --force-recreate world >/dev/null 2>&1
 for i in $(seq 120); do
@@ -35,20 +40,29 @@ done
 WORLD=$(docker compose ps -q world)
 since=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
-echo "load: $COUNT x $BEHAVIOUR for ${DURATION}s on maps ${MAPS:-START_MAP}, MAP_THREADS=$MAP_THREADS NET_THREADS=$NET_THREADS (run $RUN)"
+echo "load: $COUNT x $BEHAVIOUR for ${DURATION}s on maps ${MAPS:-START_MAP}, MAP_THREADS=$MAP_THREADS NET_THREADS=$NET_THREADS${LAYER_CAP:+, LAYER_CAP=$LAYER_CAP} (run $RUN)"
 docker compose run --rm -T bot --run-id "$RUN" --mode load --count "$COUNT" --behaviour "$BEHAVIOUR" \
     --duration "$DURATION" --threads "$THREADS" ${MAPS:+--maps "$MAPS"} ${INSTANCE_SIZE:+--instance-size "$INSTANCE_SIZE"} 2>&1 | grep -v -E '^ *(Container|Network) ' | tee "$LOG"
 botrc=${PIPESTATUS[0]}
 
 docker compose stop -t 15 world >/dev/null 2>&1 # emits "tick stats total"
 logs=$(docker logs --since "$since" "$WORLD" 2>&1)
-docker compose start world >/dev/null 2>&1
+if [ -n "${COMPOSE_FILE:-}" ]; then
+    stack_default
+    docker compose up -d --no-deps world >/dev/null 2>&1 # back to the default maps
+else
+    docker compose start world >/dev/null 2>&1
+fi
 
 echo
 echo "---- world tick stats (10 s windows with players, then run total) ----"
 echo "$logs" | grep '"tick stats' | grep -v '"population":0,' | sed 's/^/  /'
 echo "$logs" | grep '"tick stats total"' | sed 's/^/  /'
 echo "$logs" | grep '"net stats total"' | sed 's/^/  /'
+if echo "$logs" | grep -qE '"msg":"(layer (created|destroyed)|no new layer[^"]*)"'; then
+    echo "---- layers ----"
+    echo "$logs" | grep -E '"msg":"(layer (created|destroyed)|no new layer[^"]*)"' | sed 's/^/  /'
+fi
 
 worst=$(echo "$logs" | grep '"msg":"tick stats"' | grep -v '"population":0,' | sed -E 's/.*"p99_ms":([0-9.]+).*/\1/' | sort -g | tail -1)
 total=$(echo "$logs" | grep '"tick stats total"' | sed -E 's/.*"p99_ms":([0-9.]+).*/\1/')
@@ -62,6 +76,11 @@ busy() { sed -E 's/.*"busy_pct":\[([^]]*)\].*/\1/'; } # one net stats line -> "a
 networst=$(echo "$logs" | grep '"msg":"net stats"' | busy | awk -F, '{ for (i = 1; i <= NF; i++) if ($i > m[i] || NR == 1) m[i] = $i; n = NF }
     END { for (i = 1; i <= n; i++) printf "%s%s", m[i], (i < n ? " " : "") }')
 nettotal=$(echo "$logs" | grep '"net stats total"' | busy | tr ',' ' ')
+# Live layers per map over the run: the base plus layer created - layer destroyed, at its peak.
+layers=$(echo "$logs" | grep -E '"msg":"layer (created|destroyed)"' | awk '{
+    m = $0; sub(/.*"map":/, "", m); sub(/[,}].*/, "", m)
+    cur[m] += /layer created/ ? 1 : -1; if (cur[m] > peak[m]) peak[m] = cur[m]
+} END { for (m in peak) printf "%smap %s: %d", (n++ ? ", " : ""), m, peak[m] + 1 }')
 
 ok=0
 echo
@@ -75,6 +94,8 @@ echo "  lost saves on shutdown:      ${lost:-?}"
 echo "  enter p50 / p99:             ${enter50:-?} / ${enter99:-?} ms (p99 limit $ENTER_P99_LIMIT_MS)"
 echo "  net busy % worst window:     ${networst:-?} (per net thread; information only)"
 echo "  net busy % run total:        ${nettotal:-?}"
+[ -z "$layers" ] && layers=$( [ -n "$LAYER_CAP" ] && echo "1 (no layer created)" || echo "none (no layerCap)")
+echo "  peak layers:                 $layers"
 [ "$botrc" -eq 0 ] || ok=1
 awk -v w="${worst:-999}" -v t="${total:-999}" -v l=$P99_LIMIT_MS 'BEGIN { exit !(w < l && t < l) }' || ok=1
 [ "${failed:-1}" = 0 ] || ok=1

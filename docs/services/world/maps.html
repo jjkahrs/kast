@@ -29,7 +29,8 @@ joined only by transfers. Players and NPCs on different maps never see each othe
   &quot;material&quot;: &quot;materials/terrain_grass.mat&quot;,
   &quot;nav&quot;: {&quot;agentRadius&quot;: 0.4, &quot;agentHeight&quot;: 1.8, &quot;maxClimb&quot;: 0.5, &quot;maxSlopeDeg&quot;: 45, &quot;cellSize&quot;: 0.5} }
 </code></pre>
-<p>A map is a <em>world</em> map (the default: one context for everyone) or, with <code>"type": "instance"</code>, an
+<p>A map is a <em>world</em> map (the default: one context for everyone; with <code>layerCap</code>, one per
+<a href="#layers">layer</a>) or, with <code>"type": "instance"</code>, an
 <a href="instances.html">instance map</a>, run as one copy per instance key, with <code>maxPlayers</code>, <code>emptyTimeoutSec</code> and a required
 <code>exit</code>.</p>
 <ul>
@@ -40,7 +41,8 @@ joined only by transfers. Players and NPCs on different maps never see each othe
   name only locates the files. <code>version</code> must be 1.</li>
 <li><strong>Required:</strong> <code>version</code>, <code>id</code>, <code>tiles</code> and <code>spawn.pos</code> (on a declared tile). <code>name</code>, <code>spawn.heading</code>, <code>heightRange</code>,
   <code>material</code>, <code>terrainUv</code> (<code>"tiled"</code> or <code>"map"</code>; anything else fails the map), <code>nav</code> and <code>type</code> (<code>"world"</code> or <code>"instance"</code>, with the
-  <a href="instances.html#manifest">instance fields</a>, which on a world map fail it) are optional, and unknown keys
+  <a href="instances.html#manifest">instance fields</a>, which on a world map fail it) and <code>layerCap</code> (world maps
+  only, <a href="#layers">Layers</a>) are optional, and unknown keys
   (such as the editor Zone Builder's <code>terrainColors</code>) are ignored. The game client's terrain uses <code>heightRange</code>,
   <code>material</code>, <code>terrainUv</code> and <code>nav.maxSlopeDeg</code> (<a href="../../engine/terrain.html">Engine, Terrain</a>); the server uses <code>heightRange</code> and the heightmaps for the <a href="#ground">ground</a>. <code>map/heights.h</code> (heightmap decoding and the shared
   ground triangles) is part of <code>kast_map</code>, so the server build needs vcpkg's <code>stb</code>.</li>
@@ -134,6 +136,60 @@ belongs to no map. Contexts are updated one after another on the tick thread, or
   tick thread.</li>
 <li><strong>Cost:</strong> the tick stats lines show each context's update time (<a href="operations.html#tick-stats">Operations</a>). The bench
   <code>map_threads_bench</code> (4 maps of 100 moving players and 100 Guards) runs a tick in under 40% of the 1-thread time with 4.</li>
+</ul>
+
+<h2 id="layers">Layers</h2>
+<p>Like WoW's layering or GW2's overflow, a crowded world map can run as several copies, <em>layers</em>, each holding at most
+<code>layerCap</code> players, so no copy gets crowded (interest management costs about players &times; players in view). Players in
+different layers of a map never see or hear each other; everything else about the map is the same.</p>
+<pre><code class="language-json">{ &quot;version&quot;: 1, &quot;id&quot;: 1, &quot;name&quot;: &quot;Eastlands&quot;, &quot;tiles&quot;: [[0, 0, 7, 7]],
+  &quot;spawn&quot;: {&quot;pos&quot;: [1024, 0, 1024]},
+  &quot;layerCap&quot;: 500, &quot;emptyTimeoutSec&quot;: 300 }
+</code></pre>
+<ul>
+<li><strong><code>layerCap</code>:</strong> optional, world maps only, an integer &ge; 1: players per layer (NPCs do not count). Without it the map
+  runs one context, exactly as before. On an instance map it fails the map (<code>maps/crypt/map.json: "layerCap" is only for world
+  maps; an instance map uses "maxPlayers"</code>), as does a value below 1 (<code>"layerCap" must be an integer &gt;= 1</code>).
+  <code>emptyTimeoutSec</code> (default 300) is allowed with it: how long an empty extra layer lives on. Parsed in <code>kast_map</code>, so the
+  editor's Zone Builder and <code>kast_mapbake</code> check it too.</li>
+<li><strong>The base layer:</strong> instanceId 0, the map's ordinary context. It starts with the scripts, at startup, and never closes.</li>
+<li><strong>Extra layers</strong> are <a href="instances.html">instance copies</a> of the world map, made by the same machinery: each its own
+  <a href="#map-contexts">context</a> (registry, AOI grid, Lua state with its own <code>init</code>, tile activation and NPC spawns) with a
+  fresh instanceId from the instance counter, made and destroyed only at serial points. One with no players for the map's
+  <code>emptyTimeoutSec</code> runs its systems' <code>shutdown</code>, loses its NPCs and is destroyed, as an empty instance copy is. Each logs
+  <code>layer created</code> / <code>layer destroyed</code> <code>{map, instance}</code> (<a href="operations.html#layer-logs">Operations</a>).</li>
+<li><strong>Placement,</strong> for every arrival on the map (a login, a portal, a transfer from another map):
+  <ol>
+  <li>the systems' <a href="lua.html#systems"><code>layerFor(e, map)</code></a>, asked in system order: a live layer with room that one
+  returns is joined;</li>
+  <li>else the fullest live layer with room;</li>
+  <li>else a new layer.</li>
+  </ol>
+  Room is the player count at the last serial point plus the players already queued for that layer, as for an instance copy's
+  <code>maxPlayers</code>. There is no rebalancing: players are never moved between layers by the server.</li>
+<li><strong>Within the map</strong> a transfer or portal keeps the player in its layer. <code>kast.transfer(e, {map =, position =, layer =
+  id})</code> moves to that layer if it is live with room; else it returns <code>false</code> and publishes <code>instance.full</code>
+  <code>{entity, map, layer}</code>, nothing moves (<a href="lua.html#systems">Lua</a>).</li>
+<li><strong>Never refused:</strong> when no new layer can be made (instance ids exhausted, or entity ids low), the player joins the fullest
+  layer over its cap and <code>no new layer: overfilling the fullest</code> is logged (warn). A login or a transfer onto a world map is never
+  refused because of layers.</li>
+<li><strong>NPCs</strong> do not count towards the cap and never open a layer: an NPC transferred or <code>kast.create</code>d onto the map from
+  another goes to the base layer (or the live layer a <code>layer =</code> names). A layer's own NPCs come from its spawn files.</li>
+<li><strong>Threads:</strong> layers spread players over contexts, but with <code>MAP_THREADS=1</code> the contexts still update one after
+  another. Measured (2000 bots, <code>layerCap</code> 500, 4 layers): tick p99 about 33 ms at <code>MAP_THREADS=1</code>, about 12 ms at
+  <code>MAP_THREADS=4</code>. On a layered map set <code>MAP_THREADS</code> to about the expected layer count
+  (<a href="#threading">Threading</a>).</li>
+<li><strong>Relog:</strong> <code>characters.instance_id</code> holds the layer, as for an instance copy. On login the saved layer is rejoined if it is
+  live with room; else (full, closed, or a previous run's) placement, at the saved position (<code>saved layer not joinable; placing as a new
+  arrival</code>, logged). Rows with instance_id 0 go straight to placement. At a login there is no entity yet: the base layer's
+  <code>layerFor</code> is asked with <code>e</code> nil.</li>
+<li><strong>Chat:</strong> <code>/say</code>, yell and emote reach players in view in the same layer only (each layer has its own registry and grid).
+  Zone chat is per map id, so it spans every layer, unchanged (<a href="../chat/index.html">Chat</a>).</li>
+<li><strong>Lua:</strong> <code>kast.map.instance()</code> in a layer is <code>{id, map, layer = true, base}</code> (<code>base</code>: id 0). A
+  <code>kast.world.post</code> to the map reaches every layer's bus.</li>
+<li><strong>Admin:</strong> layers are listed in the admin port's instance list (map, instanceId, players, NPCs, empty timer; no key).</li>
+<li><strong>Load test:</strong> <code>LAYER_CAP=500 tests/load.sh</code> applies <code>layerCap</code> to <code>START_MAP</code> for one run
+  (<a href="tests.html#load">Tests</a>).</li>
 </ul>
 
 <h2 id="tile-activation">Tile activation</h2>

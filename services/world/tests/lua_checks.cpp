@@ -7049,6 +7049,333 @@ void checkEntityIdsLow() {
     check(w.world.map_of(b) == 1, "entity ids low: the world map still takes players");
 }
 
+// --- layers (docs/services/world/maps.html#layers) ---
+
+// map.json "layerCap": world maps only, an integer >= 1; emptyTimeoutSec allowed with it; errors name the field (and,
+// from Maps::load, the file).
+void checkLayerManifests() {
+    std::string err;
+    const auto layered = map::parse_manifest(Json::parse(R"({"version":1,"id":1,"tiles":[[0,0,0,0]],"spawn":{"pos":[1,0,1]},
+        "layerCap":500,"emptyTimeoutSec":60})"), err);
+    check(layered && !layered->instanced() && layered->layerCap == 500u && layered->emptyTimeoutSec == 60,
+          "layer manifest parses: " + err);
+    const auto defaults = map::parse_manifest(Json::parse(R"({"version":1,"id":1,"tiles":[[0,0,0,0]],"spawn":{"pos":[1,0,1]},"layerCap":1})"), err);
+    check(defaults && defaults->layerCap == 1u && defaults->emptyTimeoutSec == 300, "layer defaults: emptyTimeoutSec 300");
+    const auto plain = map::parse_manifest(Json::parse(R"({"version":1,"id":1,"tiles":[[0,0,0,0]],"spawn":{"pos":[1,0,1]}})"), err);
+    check(plain && !plain->layerCap, "no layerCap: no layers");
+
+    const std::string base = R"("version":1,"id":6,"tiles":[[0,0,0,0]],"spawn":{"pos":[1,0,1]})";
+    const std::pair<std::string, const char*> bad[] = {
+        {R"("layerCap":0)", "\"layerCap\" must be an integer >= 1 (leave it out for one layer)"},
+        {R"("layerCap":1.5)", "\"layerCap\" must be an integer >= 1"},
+        {R"("layerCap":"2")", "\"layerCap\" must be an integer >= 1"},
+        {R"("layerCap":4294967296)", "\"layerCap\" must be an integer >= 1"},
+        {R"("type":"instance","layerCap":2,"exit":{"map":1,"pos":[10,0,20]})", "\"layerCap\" is only for world maps; an instance map uses \"maxPlayers\""},
+        {R"("emptyTimeoutSec":5)", "\"emptyTimeoutSec\" is only for instance maps (\"type\": \"instance\") or layered world maps (\"layerCap\")"},
+        {R"("layerCap":2,"emptyTimeoutSec":-1)", "\"emptyTimeoutSec\" must be an integer in [0, 31536000] (a year)"},
+        {R"("layerCap":2,"maxPlayers":2)", "\"maxPlayers\" is only for instance maps"},
+    };
+    for (const auto& [fields, want] : bad) {
+        err.clear();
+        const bool refused = !map::parse_manifest(Json::parse("{" + base + "," + fields + "}"), err);
+        check(refused && contains(err, want), std::string("layer manifest refused: ") + want + " (got: " + err + ")");
+    }
+    LuaRoot r;
+    r.write("start/map.json", R"({"version":1,"id":1,"tiles":[[0,0,1,1]],"spawn":{"pos":[256,0,256]},"layerCap":2})");
+    r.write("crypt/map.json", R"({"version":1,"id":6,"tiles":[[0,0,0,0]],"spawn":{"pos":[50,0,50]},"type":"instance",
+        "layerCap":2,"exit":{"map":1,"pos":[200,0,200]}})");
+    std::vector<std::string> errors;
+    world::Maps::load(r.root, errors);
+    check(errors.size() == 1 && errors[0] == "maps/crypt/map.json: \"layerCap\" is only for world maps; an instance map uses \"maxPlayers\"",
+          "layerCap on an instance map refused with the file named: " + joined(errors));
+}
+
+// test_maps plus map 3 "fields": layered (layerCap 2, emptyTimeoutSec 10), 2x2 tiles, a Bat spawn at (100, 0, 100).
+world::Maps layer_maps() {
+    world::Maps maps = test_maps();
+    std::string err;
+    auto m = map::parse_manifest(Json::parse(R"({"version":1,"id":3,"name":"fields","tiles":[[0,0,1,1]],
+        "spawn":{"pos":[256,0,256]},"layerCap":2,"emptyTimeoutSec":10})"), err);
+    check(m.has_value(), "layer_maps: " + err);
+    m->spawns.push_back({"bat_1", "Bat", {100, 0, 100}, 0, -1, {}, "maps/fields/.server/spawns/0_0.json"});
+    maps.add(std::move(*m));
+    return maps;
+}
+
+constexpr const char* kLayerSystem = R"lua(
+local picks, loginPick = {}, nil -- layerFor's answers: by entity (a "pick" client event), and for a login (e nil)
+return {
+    init = function()
+        local i = kast.map.instance()
+        if i and i.layer then kast.log(string.format("init layer %d base %s map %d", i.id, tostring(i.base), i.map)) end
+        kast.subscribe("client.pick", function(e) picks[e.entity] = e.data.layer end)
+        kast.subscribe("client.loginpick", function(e) loginPick = e.data.layer end)
+        kast.subscribe("client.go", function(e) -- onto map 3 (or data.map), with the client's layer = if any
+            local ok = kast.transfer(e.entity, {map = e.data.map or 3, position = {x = 100, y = 0, z = 110}, layer = e.data.layer})
+            kast.log(string.format("go %d %s", e.entity, tostring(ok)))
+        end)
+        kast.subscribe("client.whoami", function(e)
+            local i = kast.map.instance()
+            if i then kast.log(string.format("whoami %d: map %d id %d layer %s base %s", e.entity, i.map, i.id, tostring(i.layer), tostring(i.base)))
+            else kast.log(string.format("whoami %d: nil", e.entity)) end
+        end)
+        kast.subscribe("instance.full", function(p)
+            kast.log(string.format("full %d map %d layer %s", p.entity, p.map, tostring(p.layer)))
+        end)
+        kast.subscribe("client.api", function(e)
+            raises('kast.transfer: "layer" is only for layered world maps ("layerCap"); map 2 has none',
+                   function() kast.transfer(e.entity, {map = 2, position = {x = 1, y = 0, z = 1}, layer = 0}) end)
+            raises('kast.transfer: "layer" must be an integer in [0, 4294967295], got -1',
+                   function() kast.transfer(e.entity, {map = 3, position = {x = 1, y = 0, z = 1}, layer = -1}) end)
+            raises('kast.transfer: "layer" must be an integer in [0, 4294967295], got x',
+                   function() kast.transfer(e.entity, {map = 3, position = {x = 1, y = 0, z = 1}, layer = "x"}) end)
+            raises('kast.transfer: "instance" is only for instance maps; map 3 is a world map',
+                   function() kast.transfer(e.entity, {map = 3, position = {x = 1, y = 0, z = 1}, instance = "a"}) end)
+            kast.log("layer api checked")
+        end)
+    end,
+    layerFor = function(e, map)
+        kast.log(string.format("layerFor %s %d", tostring(e), map))
+        if e == nil then return loginPick end
+        return picks[e]
+    end,
+    shutdown = function()
+        local i = kast.map.instance()
+        if i and i.layer then kast.log(string.format("shutdown layer %d", i.id)) end
+    end,
+    update = function() end,
+}
+)lua";
+
+// A layered map (cap 2): its base layer from startup; logins and transfers fill the fullest layer with room, a new one
+// opens only when all are full, each with its own NPCs and Lua state, apart from the others (no Spawn, no say across);
+// relog rejoins the saved layer, else placement at the saved position; layerFor picks a live layer with room, ignored
+// otherwise (e nil at a login); kast.transfer layer = moves there, refused when full or gone; within the map a transfer
+// stays in the layer; an empty extra layer closes after emptyTimeoutSec, the base never; kast.map.instance.
+void checkLayers() {
+    LogCapture capture;
+    LuaRoot r;
+    r.write("npcs/bat.lua", "return { name = 'Bat', template = 'BatTpl' }");
+    r.write("systems/layers.lua", std::string(kLuaExpect) + kLayerSystem);
+    world::WorldRules rules;
+    rules.firstInstanceId = 1;
+    TestWorld w({}, rules, layer_maps());
+    check(w.world.load_scripts(r.root).empty(), "layers: loads");
+    const auto contexts = [&] {
+        std::vector<std::string> out;
+        for (const auto& c : w.world.contexts()) out.push_back(std::format("{}/{}:{}", c.map, c.instance, c.players));
+        return joined(out);
+    };
+    check(contexts() == "1/0:0; 3/0:0" && said("init layer 0 base true map 3"),
+          "layers: START_MAP's context and map 3's base layer from startup: " + contexts());
+    TimePoint now = T0;
+    const auto tick = [&] { w.world.tick(now += std::chrono::milliseconds(50)); };
+    const auto event = [&](entt::entity e, const std::string& name, nlohmann::json data = nlohmann::json::object()) {
+        w.world.push_client_event(e, name, std::move(data));
+    };
+    const auto inst = [&](entt::entity e) {
+        entt::registry* reg = w.world.registry_of(e);
+        return reg ? std::format("{}/{}", reg->get<world::MapRef>(e).map, reg->get<world::MapRef>(e).instance) : "gone";
+    };
+    const auto to1 = [&](entt::entity e) { return w.world.transfer(e, {1, {1000, 0, 1000}, 0}); };
+    const auto to3 = [&](entt::entity e) { return w.world.transfer(e, {3, {103, 0, 100}, 0}); };
+
+    // 1. Ann and Bob log in: the base holds 2, no new layer. Cid: every layer full -> layer 1. Dan, from map 1: the
+    // fullest with room, layer 1.
+    const auto ann = w.spawn(1, 1, "Ann", 100, 100, "", 3), bob = w.spawn(2, 2, "Bob", 101, 100, "", 3);
+    check(inst(ann) == "3/0" && inst(bob) == "3/0" && contexts() == "1/0:0; 3/0:2", "layers: below the cap no new layer: " + contexts());
+    clear_log();
+    const auto cid = w.spawn(3, 3, "Cid", 102, 100, "", 3);
+    check(inst(cid) == "3/1" && logged("\"msg\":\"layer created\"") && logged("\"instance\":1") &&
+              said("init layer 1 base false map 3") && contexts() == "1/0:0; 3/0:2; 3/1:1",
+          "layers: at the cap a new layer opens (id 1, logged, its own init): " + contexts());
+    const auto dan = w.spawn(4, 4, "Dan", 1000, 1000);
+    check(to3(dan) && inst(dan) == "3/1" && contexts() == "1/0:0; 3/0:2; 3/1:2",
+          "layers: a transfer from another map joins the fullest layer with room: " + contexts());
+    tick();
+    tick();
+    const auto bats = [&](uint32_t layer) {
+        std::vector<uint32_t> out;
+        entt::registry& reg = layer ? w.world.copy(3, layer)->registry() : w.world.registry(3);
+        for (auto [e, npc] : reg.view<world::Npc>().each()) out.push_back(wire(e));
+        return out;
+    };
+    check(bats(0).size() == 1 && bats(1).size() == 1 && bats(0) != bats(1), "layers: each layer spawned its own Bat");
+    const auto seen = [&](uint32_t sid, uint32_t id) {
+        for (const auto& s : w.sent.of<proto::Spawn>(sid)) if (s.entityId == id) return true;
+        return false;
+    };
+    check(seen(1, wire(bob)) && seen(3, wire(dan)) && !seen(3, wire(ann)) && !seen(3, wire(bob)) && !seen(1, wire(cid)) &&
+              !seen(1, bats(1)[0]) && !seen(3, bats(0)[0]),
+          "layers: layers share no players and no NPCs");
+    event(ann, "whoami");
+    event(cid, "whoami");
+    tick();
+    check(said(std::format("whoami {}: map 3 id 0 layer true base true", wire(ann))) &&
+              said(std::format("whoami {}: map 3 id 1 layer true base false", wire(cid))),
+          "layers: kast.map.instance() is {id, map, layer = true, base}");
+
+    // 7. Zone chat: every layer reports map 3 (what GameServer::report_maps sends the chat link); say and yell stay in
+    // the layer.
+    check(w.world.map_of(ann) == 3 && w.world.map_of(cid) == 3, "layers: zone chat: players in different layers are on the same map (zone)");
+    w.sent.clear();
+    w.world.push_say(ann, {proto::ChatKind::say, "hello base"});
+    w.world.push_say(cid, {proto::ChatKind::yell, "HEY layer one"});
+    tick();
+    const auto heard = [&](const std::string& text) {
+        std::set<uint32_t> out;
+        for (uint32_t sid : {1u, 2u, 3u, 4u})
+            for (const auto& m : w.sent.of<proto::ChatMsg>(sid)) if (m.text == text) out.insert(sid);
+        return out;
+    };
+    check(heard("hello base") == std::set<uint32_t>{1, 2} && heard("HEY layer one") == std::set<uint32_t>{3, 4},
+          "layers: say and yell reach only their own layer");
+
+    // Eve: all full -> layer 2. Ann and Bob leave the base; Fay fills layer 2 (1 player), not the emptier base.
+    const auto eve = w.spawn(5, 5, "Eve", 100, 100, "", 3);
+    check(inst(eve) == "3/2", "layers: all full again -> layer 2");
+    to1(ann);
+    to1(bob);
+    const auto fay = w.spawn(6, 6, "Fay", 100, 100, "", 3);
+    check(inst(fay) == "3/2" && contexts() == "1/0:2; 3/0:0; 3/1:2; 3/2:2",
+          "layers: an arrival fills the fullest layer with room, not the emptier base: " + contexts());
+    check(to3(ann) && inst(ann) == "3/0", "layers: then the base, the only one with room");
+
+    // 2. Relog: Dan's save names layer 1; it has room after he left: he rejoins it. Saved in a full layer, a gone one or
+    // none: placement, at the saved position.
+    w.sent.clear();
+    w.world.despawn(dan);
+    check(w.sent.saves.back().mapId == 3 && w.sent.saves.back().instanceId == 1, "layers: the save carries map 3, layer 1");
+    const auto row = [](uint64_t id, const std::string& name, uint32_t instance) {
+        db::CharRow r{id, 1, name, 3, {120, 0, 120}, 0, "", {}};
+        r.instanceId = instance;
+        return r;
+    };
+    const auto dan2 = w.world.spawn(14, row(4, "Dan", 1), now);
+    const auto ok14 = w.sent.of<proto::EnterWorldOk>(14);
+    check(inst(dan2) == "3/1" && ok14.size() == 1 && ok14[0].map == 3 && ok14[0].pos == proto::Vec3{120, 0, 120},
+          "layers: relog into a live layer with room rejoins it at the saved position");
+    clear_log();
+    const auto gus = w.world.spawn(17, row(7, "Gus", 1), now); // layer 1: Cid and Dan
+    const auto ok17 = w.sent.of<proto::EnterWorldOk>(17);
+    check(inst(gus) == "3/0" && ok17.size() == 1 && ok17[0].pos == proto::Vec3{120, 0, 120} &&
+              logged(R"("reason":"layer full")"),
+          "layers: relog into a full layer -> placement (the base, with room) at the saved position, logged");
+    const auto hal = w.world.spawn(18, row(8, "Hal", 999), now); // a previous run's, or a closed layer's
+    check(inst(hal) == "3/3" && logged(R"("reason":"layer gone")"), "layers: relog into a gone layer -> placement (all full: layer 3)");
+    clear_log();
+    const auto ivy = w.world.spawn(19, row(9, "Ivy", 0), now);
+    check(inst(ivy) == "3/3" && !logged("saved layer not joinable"), "layers: saved with instance 0 -> placement, nothing logged");
+    check(contexts() == "1/0:1; 3/0:2; 3/1:2; 3/2:2; 3/3:2", "layers: 4 full layers: " + contexts());
+
+    // 3. layerFor: Eve and Ann leave (layers 2 and 0 have room; placement would take the base, the lower id). Bob's
+    // hook picks 2: layer 2. Ann's picks the full layer 1: ignored -> the base. Eve's picks 999: ignored -> all full,
+    // a new layer 4.
+    to1(eve);
+    to1(ann);
+    clear_log();
+    event(bob, "pick", {{"layer", 2}});
+    event(bob, "go");
+    tick();
+    check(said(std::format("layerFor {} 3", wire(bob))) && said(std::format("go {} true", wire(bob))) && inst(bob) == "3/2",
+          "layers: layerFor's live layer with room is joined, over the placement's pick");
+    event(ann, "pick", {{"layer", 1}});
+    event(ann, "go");
+    tick();
+    check(inst(ann) == "3/0", "layers: layerFor naming a full layer is ignored: " + inst(ann));
+    event(eve, "pick", {{"layer", 999}});
+    event(eve, "go");
+    tick();
+    check(inst(eve) == "3/4", "layers: layerFor naming a gone layer is ignored: " + inst(eve));
+    // At a login: the base layer's hook, e nil. Fay leaves layer 2 (layers 2 and 4 have room, the placement's pick 2).
+    to1(fay);
+    event(gus, "loginpick", {{"layer", 4}});
+    tick();
+    const auto jon = w.spawn(10, 10, "Jon", 100, 100, "", 3);
+    check(said("layerFor nil 3") && inst(jon) == "3/4", "layers: at a login layerFor(nil, map) picks the layer: " + inst(jon));
+
+    // 4. kast.transfer layer =: Fay into layer 2 (room); Kim into the now full layer 2: false, instance.full, no
+    // MapChange, she stays; into 999: false. Within the map: Ann to layer 3 (Hal left it), then without layer = she
+    // stays in layer 3.
+    event(fay, "go", {{"layer", 2}});
+    tick();
+    check(said(std::format("go {} true", wire(fay))) && inst(fay) == "3/2", "layers: kast.transfer layer = moves there");
+    const auto kim = w.spawn(11, 11, "Kim", 1000, 1000);
+    tick();
+    w.sent.clear();
+    clear_log();
+    event(kim, "go", {{"layer", 2}});
+    event(kim, "go", {{"layer", 999}});
+    tick();
+    tick();
+    check(said_at(std::format("go {} false", wire(kim))).size() == 2 && said(std::format("full {} map 3 layer 2", wire(kim))) &&
+              said(std::format("full {} map 3 layer 999", wire(kim))) && logged("transfer refused: layer full or gone") &&
+              w.sent.of<proto::MapChange>(11).empty() && inst(kim) == "1/0",
+          "layers: kast.transfer layer = into a full or gone layer: false, instance.full {layer}, no MapChange, stays");
+    to1(hal);
+    event(ann, "go", {{"layer", 3}});
+    tick();
+    check(inst(ann) == "3/3", "layers: kast.transfer layer = to another layer of the same map: " + inst(ann));
+    w.sent.clear();
+    event(ann, "go");
+    tick();
+    const auto annMc = w.sent.of<proto::MapChange>(1);
+    check(inst(ann) == "3/3" && annMc.size() == 1 && annMc[0].pos.x == 100 && annMc[0].pos.z == 110,
+          "layers: a transfer within the map stays in the layer");
+    event(ann, "api");
+    tick();
+    check_lua_expectations("layers", "layer api checked");
+
+    // 5. Layer 4 empties (Eve, Jon out) and the base too (Ann and Gus): 10 s later layer 4 is gone (shutdown, logged), the
+    // base stays.
+    for (auto e : {eve, jon, gus}) to1(e);
+    to1(ann);
+    tick();
+    check(w.world.copy(3, 4) && w.world.copy(3, 4)->empty_since(), "layers: layer 4 empty: its timer runs");
+    now += std::chrono::milliseconds(9800); // the timer started at the transfers' serial point, a tick before
+    tick();
+    check(w.world.copy(3, 4) != nullptr, "layers: not yet 10 s empty");
+    clear_log();
+    now += std::chrono::milliseconds(200);
+    tick();
+    check(w.world.copy(3, 4) == nullptr && said("shutdown layer 4") && logged("\"msg\":\"layer destroyed\""),
+          "layers: 10 s empty -> layer 4 destroyed, its shutdown run, logged");
+    now += std::chrono::seconds(60);
+    tick();
+    check(contexts() == "1/0:6; 3/0:0; 3/1:2; 3/2:2; 3/3:1", "layers: the empty base never closes: " + contexts());
+    for (const auto& s : w.world.script_status()) check(s.ok, "layers: system still enabled " + s.error);
+}
+
+// 6. No new layer possible (entity ids low): the player overfills the fullest layer, logged; nobody is refused, at a
+// login or a transfer. layerFor errors and bad results disable only that system.
+void checkLayerOverflow() {
+    LogCapture capture;
+    LuaRoot r;
+    r.write("npcs/bat.lua", "return { name = 'Bat', template = 'BatTpl' }");
+    r.write("systems/a_bad.lua", "return { layerFor = function(e, map) return 'one' end, update = function() end }");
+    r.write("systems/b_neg.lua", "return { layerFor = function(e, map) return -1 end, update = function() end }");
+    r.write("systems/c_err.lua", "return { layerFor = function(e, map) error('boom') end, update = function() end }");
+    r.write("systems/d_good.lua", "return { layerFor = function(e, map) return 0 end, update = function() end }");
+    TestWorld w({}, {}, layer_maps());
+    check(w.world.load_scripts(r.root).empty(), "layer overflow: loads");
+    const auto a = w.spawn(1, 1, "Ann", 100, 100, "", 3), b = w.spawn(2, 2, "Bob", 100, 100, "", 3);
+    const auto status = w.world.script_status();
+    check(status.size() == 4 && !status[0].ok && contains(status[0].error, "layerFor must return nil or a layer id") &&
+              !status[1].ok && !status[2].ok && contains(status[2].error, "boom") && status[3].ok,
+          "layerFor: a string, a negative number and an error disable their systems; the next one answers");
+    while (w.world.shared().room_for_copy()) w.world.shared().block(world::Shared::kIdBlock);
+    clear_log();
+    const auto c = w.spawn(3, 3, "Cid", 100, 100, "", 3);
+    const auto d = w.spawn(4, 4, "Dan", 1000, 1000);
+    check(w.world.transfer(d, {3, {100, 0, 100}, 0}), "layer overflow: the transfer is not refused");
+    const auto contexts = w.world.contexts();
+    check(contexts.size() == 2 && contexts[1].map == 3 && contexts[1].players == 4 && w.world.map_of(c) == 3 &&
+              w.world.map_of(d) == 3 && w.world.map_of(a) == 3 && w.world.map_of(b) == 3,
+          "layer overflow: no new layer; the base holds 4 over its cap of 2");
+    check(logged("no new layer: overfilling the fullest") && logged(R"("reason":"entity ids low")"),
+          "layer overflow: logged with why");
+}
+
 int lua_checks(int& checks) {
     checkCodec();
     checkDefinitionParsing();
@@ -7130,6 +7457,9 @@ int lua_checks(int& checks) {
     checkInstanceIdsExhausted();
     checkManyCopies();
     checkEntityIdsLow();
+    checkLayerManifests();
+    checkLayers();
+    checkLayerOverflow();
     checkLuaFileCache();
     checkAreaShapes();
     checkAreaLoading();

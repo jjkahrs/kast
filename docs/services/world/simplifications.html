@@ -46,6 +46,11 @@
 <li><strong>Instance ids never wrap:</strong> each run's copies count up from one above the highest saved <code>characters.instance_id</code>,
   so a saved id names no copy of this run. After 2<sup>32</sup> &minus; 1 copies ever made in a realm no more are made (transfers into a new copy
   are refused like a full one); reset <code>characters.instance_id</code> to 0 (those players enter at the exits) if a realm ever gets there.</li>
+<li><strong>Layers fill the fullest, with no rebalancing:</strong> an arrival joins the fullest <a href="maps.html#layers">layer</a> with
+  room, and the server never moves players between layers, so layers emptied by logouts stay thin until their last player leaves (and
+  an extra layer closes). There is no player command or client UI to switch layers; a <code>layerFor</code> hook or <code>kast.transfer</code>'s
+  <code>layer =</code> is the way. With no new layer possible the player overfills the fullest layer. Merge thin layers (at a loading
+  screen or a portal) if a game needs them full.</li>
 <li><strong>Map contexts never stop:</strong> a world map's context, once started, stays for the life of the process, like its tiles.
   An instance copy is destroyed once empty for its map's <code>emptyTimeoutSec</code>; its entity ids go back to the pool.</li>
 <li><strong>Every context keeps every spawn record:</strong> each map context has the full list of spawn file entries (a pointer and a

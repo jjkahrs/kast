@@ -51,7 +51,8 @@ struct System {
     std::string path; // "systems/regen.lua"
     std::filesystem::path file;
     sol::environment env;
-    sol::protected_function update, shutdown, onEnter, onLeave, onMapLeave, onMapEnter, validateCharacter, instanceKey;
+    sol::protected_function update, shutdown, onEnter, onLeave, onMapLeave, onMapEnter, validateCharacter, instanceKey,
+        layerFor;
     std::vector<EventBus::Subscription> subscriptions; // kast.subscribe; cleared when the system is disabled
     bool ok = false;
     std::string error;
@@ -186,7 +187,8 @@ struct Runtime::Impl {
                                   std::pair{"onLeave", &system.onLeave}, std::pair{"onMapLeave", &system.onMapLeave},
                                   std::pair{"onMapEnter", &system.onMapEnter},
                                   std::pair{"validateCharacter", &system.validateCharacter},
-                                  std::pair{"instanceKey", &system.instanceKey}}) {
+                                  std::pair{"instanceKey", &system.instanceKey},
+                                  std::pair{"layerFor", &system.layerFor}}) {
             sol::object fn = table[name];
             if (fn.get_type() == sol::type::lua_nil) continue;
             if (fn.get_type() != sol::type::function) return std::format("{}: \"{}\" must be a function", system.path, name);
@@ -583,20 +585,22 @@ struct Runtime::Impl {
         return value.as<std::string>();
     }
 
-    // kast.transfer(e, map, position, heading?) or kast.transfer(e, {map =, position =, heading =?, instance =?}): a
-    // player or NPC to a point on a declared tile of a loaded map (the same map too). heading defaults to the current
-    // one. instance: the instance key, onto an instance map (the instanceKey hooks are not asked). false: this process
-    // does not own the destination, or the instance copy is full (logged).
+    // kast.transfer(e, map, position, heading?) or kast.transfer(e, {map =, position =, heading =?, instance =?,
+    // layer =?}): a player or NPC to a point on a declared tile of a loaded map (the same map too). heading defaults to
+    // the current one. instance: the instance key, onto an instance map (the instanceKey hooks are not asked). layer: a
+    // layer's instanceId, onto a layered world map (the layerFor hooks are not asked). false: this process does not own
+    // the destination, or the instance copy is full, or the layer full or gone (logged).
     bool transfer(lua_State* L, const sol::object& id, const sol::object& mapValue, const sol::object& posValue,
                   const sol::object& headingValue) {
         const entt::entity e = entity(L, id, "kast.transfer");
         sol::object mapArg = mapValue, posArg = posValue, headingArg = headingValue;
         std::optional<std::string> key;
+        std::optional<uint32_t> layer;
         if (mapValue.get_type() == sol::type::table) {
             const sol::table opts = mapValue.as<sol::table>();
             for (const auto& [k, unused] : opts) {
                 const std::string name = k.get_type() == sol::type::string ? k.as<std::string>() : "";
-                if (name != "map" && name != "position" && name != "heading" && name != "instance")
+                if (name != "map" && name != "position" && name != "heading" && name != "instance" && name != "layer")
                     raise(L, std::format("kast.transfer: unknown option {}", to_string(L, k)));
             }
             mapArg = opts["map"];
@@ -604,6 +608,9 @@ struct Runtime::Impl {
             headingArg = opts["heading"];
             if (const sol::object k = opts["instance"]; k.get_type() != sol::type::lua_nil)
                 key = instance_key(L, "kast.transfer: ", k);
+            if (const sol::object l = opts["layer"]; l.get_type() != sol::type::lua_nil && !(layer = layer_id(l)))
+                raise(L, std::format("kast.transfer: \"layer\" must be an integer in [0, {}], got {}", UINT32_MAX,
+                                     to_string(L, l)));
         }
         const uint16_t map = map_id(L, "kast.transfer: ", mapArg);
         const proto::Vec3 pos = position(L, "kast.transfer: ", posArg);
@@ -611,42 +618,67 @@ struct Runtime::Impl {
             raise(L, std::format("kast.transfer: position ({}, {}) is not on a declared tile of map {}", pos.x, pos.z, map));
         if (key && !npcs.map(map)->instanced())
             raise(L, std::format("kast.transfer: \"instance\" is only for instance maps; map {} is a world map", map));
+        if (layer && !npcs.map(map)->layerCap)
+            raise(L, std::format("kast.transfer: \"layer\" is only for layered world maps (\"layerCap\"); map {} has none", map));
         const float heading = headingArg.get_type() == sol::type::lua_nil
                                   ? reg.get<world::Transform>(e).heading
                                   : finite(L, "kast.transfer: ", "heading", headingArg);
-        return npcs.transfer(e, map, pos, heading, std::move(key));
+        return npcs.transfer(e, map, pos, heading, std::move(key), layer);
     }
 
     // This context's instance copy (NpcHooks::instance), or nullopt.
     std::optional<InstanceInfo> own_instance() const { return npcs.instance ? npcs.instance() : std::nullopt; }
 
-    std::optional<std::string> instance_key(entt::entity e, uint16_t map) {
-        // Possibly inside another callback (kast.transfer in an update): call()'s state is put back afterwards.
+    // A layer's instanceId: an integer in [0, UINT32_MAX], else nullopt.
+    static std::optional<uint32_t> layer_id(const sol::object& value) {
+        const double number = value.get_type() == sol::type::number ? value.as<double>() : NAN;
+        if (!(number >= 0 && number <= double(UINT32_MAX) && number == std::floor(number))) return std::nullopt;
+        return static_cast<uint32_t>(number);
+    }
+
+    // The first value a system's hook (slot) returns that accept takes, in system order; nil skips the system, anything
+    // else disables it ("<path>: <name> must return <want>, got ..."). Possibly inside another callback (kast.transfer
+    // in an update): call()'s state is put back afterwards.
+    template <class T, class Accept>
+    std::optional<T> first_hook_result(sol::protected_function System::*slot, const char* name, const std::string& want,
+                                       const sol::object& e, uint16_t map, Accept accept) {
         System* caller = current;
         const bool keep = std::exchange(keepResult, true);
         sol::object outerKept = std::exchange(kept, sol::object());
         const bool outerTrue = returnedTrue;
-        std::optional<std::string> key;
+        std::optional<T> value;
         for (System& s : systems) {
-            if (key) break;
-            if (!s.ok || !s.instanceKey.valid()) continue;
-            run(s, s.instanceKey, "instanceKey", wire(e), map);
+            if (value) break;
+            if (!s.ok || !(s.*slot).valid()) continue;
+            run(s, s.*slot, name, e, map);
             const sol::object result = std::exchange(kept, sol::object());
             if (!s.ok || !result.valid() || result.get_type() == sol::type::lua_nil) continue;
-            if (result.get_type() == sol::type::string && !result.as<std::string>().empty() &&
-                result.as<std::string>().size() <= kMaxInstanceKeyBytes) {
-                key = result.as<std::string>();
-                continue;
-            }
-            disable(s, std::format("{}: instanceKey must return nil or a non-empty string of at most {} bytes, got {}",
-                                   s.path, kMaxInstanceKeyBytes, to_string(lua.lua_state(), result)));
-            log::error("Lua system disabled", {{"system", s.path}, {"callback", "instanceKey"}, {"error", s.error}});
+            if ((value = accept(result))) continue;
+            disable(s, std::format("{}: {} must return {}, got {}", s.path, name, want, to_string(lua.lua_state(), result)));
+            log::error("Lua system disabled", {{"system", s.path}, {"callback", name}, {"error", s.error}});
         }
         current = caller;
         keepResult = keep;
         kept = std::move(outerKept);
         returnedTrue = outerTrue;
-        return key;
+        return value;
+    }
+
+    std::optional<std::string> instance_key(entt::entity e, uint16_t map) {
+        static const std::string want = std::format("nil or a non-empty string of at most {} bytes", kMaxInstanceKeyBytes);
+        return first_hook_result<std::string>(&System::instanceKey, "instanceKey", want, sol::make_object(lua, wire(e)),
+                                              map, [](const sol::object& r) -> std::optional<std::string> {
+                                                  if (r.get_type() == sol::type::string && !r.as<std::string>().empty() &&
+                                                      r.as<std::string>().size() <= kMaxInstanceKeyBytes)
+                                                      return r.as<std::string>();
+                                                  return std::nullopt;
+                                              });
+    }
+
+    std::optional<uint32_t> layer_for(entt::entity e, uint16_t map) {
+        static const std::string want = std::format("nil or a layer id (an integer in [0, {}])", UINT32_MAX);
+        const sol::object id = e == entt::null ? sol::make_object(lua, sol::lua_nil) : sol::make_object(lua, wire(e));
+        return first_hook_result<uint32_t>(&System::layerFor, "layerFor", want, id, map, layer_id);
     }
 
     // kast.map.area(e) / kast.map.areaAt(map, x, y, z): {id, name, flags, music} of the highest-priority area there
@@ -677,13 +709,18 @@ struct Runtime::Impl {
             return area_table(id, finite(L, "kast.map.areaAt: ", "x", x), finite(L, "kast.map.areaAt: ", "y", y),
                               finite(L, "kast.map.areaAt: ", "z", z));
         });
-        // kast.map.instance(): {id, key, map} of the instance copy this context runs (key nil for a keyless copy), or
-        // nil on a world map.
+        // kast.map.instance(): {id, key, map} of the instance copy this context runs (key nil for a keyless copy);
+        // {id, map, layer = true, base} on a layered world map (base: id 0, the layer that never closes); nil on any
+        // other world map.
         mapApi.set_function("instance", [this]() -> sol::object {
             const auto info = own_instance();
             if (!info) return sol::make_object(lua, sol::lua_nil);
             sol::table t = lua.create_table_with("id", info->id, "map", info->map);
             if (info->key) t["key"] = *info->key;
+            if (info->layer) {
+                t["layer"] = true;
+                t["base"] = info->id == 0;
+            }
             return t;
         });
         // kast.map.spawn(map): {position = {x, y, z}, heading} of the map's spawn point (map.json "spawn").
@@ -1105,6 +1142,7 @@ void Runtime::enter_map(entt::entity e, const Carried& carried) {
 }
 
 std::optional<std::string> Runtime::instance_key(entt::entity e, uint16_t map) { return impl_->instance_key(e, map); }
+std::optional<uint32_t> Runtime::layer_for(entt::entity e, uint16_t map) { return impl_->layer_for(e, map); }
 
 bool Runtime::validate_character(const std::string& name, const proto::CharOptions& options) {
     bool hooked = false;
