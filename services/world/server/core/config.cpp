@@ -49,6 +49,7 @@ ConfigResult load_config(const EnvLookup& env) {
     l.str("DB_PASSWORD", c.dbPassword, true);
     l.str("DB_NAME", c.dbName, true);
     l.num("DB_CONNECT_TIMEOUT_SECONDS", c.dbConnectTimeoutSec, 1, 60);
+    l.num("DB_POOL_SIZE", c.dbPoolSize, 1, 32);
     l.str("MIGRATIONS_DIR", c.migrationsDir);
 
     l.num("REALM_ID", c.realmId, 1, u32max, true);

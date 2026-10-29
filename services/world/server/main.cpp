@@ -83,7 +83,8 @@ int main() {
         asio::ssl::context tls = net::make_server_tls({cfg.tlsCertFile, cfg.tlsKeyFile, cfg.tlsDevCertDir});
         auto post = [&io](std::function<void()> f) { asio::post(io, std::move(f)); };
 
-        db::DbWorker dbWorker({dbOpts, cfg.realmId, Millis(cfg.saveRetryMinMs), Millis(cfg.saveRetryMaxMs)}, post);
+        db::DbWorker dbWorker({dbOpts, cfg.realmId, Millis(cfg.saveRetryMinMs), Millis(cfg.saveRetryMaxMs), cfg.dbPoolSize},
+                              post);
         TokenService tokens({cfg.jwksUrl, {cfg.jwtIssuer, cfg.jwtAudience, cfg.jwtClockSkewSec},
                              Millis(cfg.jwksRefreshSec * 1000ull), Millis(cfg.jwksMinRefetchSec * 1000ull),
                              Millis(cfg.jwksTimeoutMs)},

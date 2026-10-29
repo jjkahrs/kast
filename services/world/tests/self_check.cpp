@@ -1,5 +1,5 @@
 // Assert-style checks for the world server's pure logic: frame codec (every message), frame rejection, names,
-// movement, AOI sets, chat sanitizing and rate limits, config validation, send fan-out (one encode), buffered session reads over a 127.0.0.1 TLS loopback, tick stats and JWT/JWKS verification with
+// movement, AOI sets, chat sanitizing and rate limits, config validation, the DB save queue (no MySQL), send fan-out (one encode), buffered session reads over a 127.0.0.1 TLS loopback, tick stats and JWT/JWKS verification with
 // locally generated RSA keys; lua_checks.cpp covers the Lua layer and the maps (manifests, World on several maps). No database or outside network; time is passed in (only the lag-simulator fan-out waits a few ms).
 // Exit 0 if every check passes. Run by CTest as world_self_check.
 #include "auth/jwks_cache.h"
@@ -9,6 +9,7 @@
 #include "core/rate_limiter.h"
 #include "core/tick_stats.h"
 #include "core/utc.h"
+#include "db/db_worker.h"
 #include "net/session.h"
 #include "net/tls_context.h"
 #include "world/aoi_grid.h"
@@ -853,6 +854,14 @@ void checkConfig() {
     env["MAP_THREADS"] = "4";
     check(load_config(lookup).errors.empty() && load_config(lookup).config.mapThreads == 4, "MAP_THREADS 4 read");
     env.erase("MAP_THREADS");
+    check(ok.config.dbPoolSize == 4, "DB_POOL_SIZE defaults to 4");
+    for (const char* bad : {"0", "33", "abc"}) {
+        env["DB_POOL_SIZE"] = bad;
+        check(load_config(lookup).errors.size() == 1, (std::string("DB_POOL_SIZE ") + bad + " refused").c_str());
+    }
+    env["DB_POOL_SIZE"] = "1";
+    check(load_config(lookup).errors.empty() && load_config(lookup).config.dbPoolSize == 1, "DB_POOL_SIZE 1 read");
+    env.erase("DB_POOL_SIZE");
     env["START_MAP"] = "65536";
     check(load_config(lookup).errors.size() == 1, "START_MAP above 65535 refused");
     env["START_MAP"] = "2";
@@ -1961,6 +1970,40 @@ static void disable_crash_dialogs() {
 #endif
 }
 
+// DbWorker's save queue without MySQL: shard routing, latest wins (keeping the retry schedule), fair due order.
+void checkSaveQueue() {
+    using namespace kast::db;
+    check(shard_of(9, 4) == 1 && shard_of(12, 4) == 0 && shard_of(9, 1) == 0, "a character's saves go to worker charId % N");
+
+    const TimePoint t0{};
+    PendingSaves p;
+    CharSave a;
+    a.charId = 7;
+    a.pos = {1, 0, 1};
+    queue_save(p, a, t0);
+    a.pos = {2, 0, 2};
+    queue_save(p, a, t0 + Millis(5));
+    check(p.size() == 1 && p[7].save.pos.x == 2 && p[7].due == t0 + Millis(5), "latest save wins");
+    p[7].attempts = 3; // failing: retry scheduled at +1 s
+    p[7].due = t0 + Millis(1000);
+    a.pos = {3, 0, 3};
+    queue_save(p, a, t0 + Millis(10));
+    check(p[7].save.pos.x == 3 && p[7].attempts == 3 && p[7].due == t0 + Millis(1000),
+          "a newer save keeps the retry schedule of a failing one");
+
+    PendingSaves q;
+    for (uint64_t id = 1; id <= 20; ++id) {
+        CharSave s;
+        s.charId = id;
+        queue_save(q, s, t0 + Millis(100 - id)); // higher ids queued earlier
+    }
+    q[3].due = t0 + Millis(500); // backing off
+    const auto due = due_saves(q, t0 + Millis(200), 8);
+    check(due == std::vector<uint64_t>{20, 19, 18, 17, 16, 15, 14, 13}, "due saves: at most N, earliest due first");
+    check(due_saves(q, t0 + Millis(200), 100).size() == 19, "a backing-off save is not due");
+    check(due_saves(q, TimePoint::max(), SIZE_MAX).size() == 20, "shutdown flush takes every save");
+}
+
 int main(int argc, char** argv) {
     disable_crash_dialogs();
     if (argc > 1 && std::string_view(argv[1]) == "--log-bench") return log_bench();
@@ -1983,6 +2026,7 @@ int main(int argc, char** argv) {
     checkClientEvents();
     checkMessageRate();
     checkConfig();
+    checkSaveQueue();
     checkLagSim();
     checkSendMany();
     checkSessionReads();
