@@ -79,6 +79,9 @@ cmake --preset release
 cmake --build --preset release
 ctest --preset release
 
+:: performance tests (GPU time, frame budgets): not in the presets above
+ctest --preset perf
+
 cmake --preset relwithdebinfo
 cmake --build --preset relwithdebinfo
 ctest --preset relwithdebinfo

@@ -114,7 +114,11 @@ if(EXISTS "${KAST_STARTER_MMO}")
                              KAST_STARTER_MMO_TEST_LUA="${CMAKE_CURRENT_SOURCE_DIR}/../../cmake/starter_mmo_test_server.lua")
 endif()
 add_test(NAME world_self_check COMMAND world_self_check)
-# Caller-side logging cost vs a synchronous stdout write, and no lines lost under queue pressure.
+# No log line lost under queue pressure (4 threads logging as fast as they can).
+add_test(NAME log_pressure COMMAND world_self_check --log-pressure)
+# Performance (LABELS perf): left out of the debug / release / linux-release test presets, so a busy machine or docker
+# builder can't fail a build; ctest --preset perf (or perf-linux) runs them.
+# Caller-side logging cost vs a synchronous stdout write (printed, not checked).
 add_test(NAME log_bench COMMAND world_self_check --log-bench)
 # ns per aoi_system call: 500 / 2000 players, idle, 10% and 100% moving (printed, not checked).
 add_test(NAME aoi_bench COMMAND world_self_check --aoi-bench)
@@ -122,6 +126,9 @@ add_test(NAME aoi_bench COMMAND world_self_check --aoi-bench)
 add_test(NAME activation_bench COMMAND world_self_check --activation-bench)
 # p50/p95 tick ms of 4 maps x (100 moving players + 100 Guards) at MAP_THREADS=1 and 4; fails if 4 > 40% of 1 (>= 4 cores).
 add_test(NAME map_threads_bench COMMAND world_self_check --map-threads-bench)
+# The self-check with its timing checks' speed limits on (replication idle tick, kast.query, the Lua bridge; Release).
+add_test(NAME world_timing_bench COMMAND world_self_check --timing)
+set_tests_properties(log_bench aoi_bench activation_bench map_threads_bench world_timing_bench PROPERTIES LABELS perf)
 # Lines logged right before a crash or a fatal startup error still reach stdout.
 add_test(NAME log_flush COMMAND ${CMAKE_COMMAND} -DCHECK=$<TARGET_FILE:world_self_check> -DWORLD=$<TARGET_FILE:kast_world>
   -DOUT=${CMAKE_CURRENT_BINARY_DIR} -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/log_flush.cmake)

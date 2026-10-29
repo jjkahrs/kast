@@ -1341,23 +1341,33 @@ double log_info_ns(int n) {
     return ns;
 }
 
-int log_bench() {
+bool stdout_to_null() {
 #ifdef _WIN32
     FILE* null = nullptr;
-    if (freopen_s(&null, "NUL", "w", stdout) != 0) return 1;
+    return freopen_s(&null, "NUL", "w", stdout) == 0;
 #else
-    if (!std::freopen("/dev/null", "w", stdout)) return 1;
+    return std::freopen("/dev/null", "w", stdout) != nullptr;
 #endif
-    constexpr int kLines = 100000;
-    log_info_ns(kLines / 10); // warm up (backend thread, queue allocation)
-    const double before = sync_stdout_ns(kLines);
-    const double after = log_info_ns(kLines);
+}
+
+constexpr int kLogLines = 100000;
+
+int log_bench() {
+    if (!stdout_to_null()) return 1;
+    log_info_ns(kLogLines / 10); // warm up (backend thread, queue allocation)
+    const double before = sync_stdout_ns(kLogLines);
+    const double after = log_info_ns(kLogLines);
     std::fprintf(stderr, "log bench: %d lines, sync stdout %.0f ns/line, log::info %.0f ns/line (caller side)\n",
-                 kLines, before, after);
+                 kLogLines, before, after);
     // ponytail: printed, not checked; one timing sample on a busy CI or docker builder is too noisy to fail a build on
     if (after >= before) std::fprintf(stderr, "log bench: NOTE log::info was not faster this run\n");
+    return 0;
+}
 
-    // Queue pressure: 4 threads log as fast as they can (several MiB each, faster than stdout); none is dropped.
+// ctest log_pressure: 4 threads log as fast as they can (several MiB each, faster than stdout); none is dropped.
+int log_pressure() {
+    if (!stdout_to_null()) return 1;
+    constexpr int kLines = kLogLines;
     std::atomic<int> seen{0};
     log::set_test_sink([&seen](const std::string&) { ++seen; });
     std::vector<std::thread> threads;
@@ -1366,7 +1376,7 @@ int log_bench() {
     for (auto& th : threads) th.join();
     log::flush();
     log::set_test_sink(nullptr);
-    std::fprintf(stderr, "log bench: %d of %d lines reached the sink\n", seen.load(), 4 * kLines);
+    std::fprintf(stderr, "log pressure: %d of %d lines reached the sink\n", seen.load(), 4 * kLines);
     check(seen == 4 * kLines, "no log line is dropped under queue pressure");
     std::fprintf(stderr, "%d checks, %d failed\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
@@ -1871,7 +1881,7 @@ int map_threads_bench() {
     if (one.p95 < 0 || four.p95 < 0) return 1;
 #ifndef NDEBUG
     // Measured: MSVC Debug runs 4 threads at 140-230% of 1 thread's time (its checked STL and debug heap take
-    // process-wide locks), so a Debug build says nothing about the speedup; Release and the Docker build check it.
+    // process-wide locks), so a Debug build says nothing about the speedup; Release checks it (ctest --preset perf).
     std::fprintf(stderr, "map threads bench: SKIPPED the 40%% threshold: a Debug build (build Release to check it)\n");
     return 0;
 #else
@@ -1930,6 +1940,7 @@ int log_crash(std::string_view how) {
 } // namespace
 
 int lua_checks(int& checks); // lua_checks.cpp
+extern bool g_timing_gates;    // lua_checks.cpp
 int activation_bench();        // lua_checks.cpp
 int instance_bench();          // lua_checks.cpp
 
@@ -1953,6 +1964,8 @@ static void disable_crash_dialogs() {
 int main(int argc, char** argv) {
     disable_crash_dialogs();
     if (argc > 1 && std::string_view(argv[1]) == "--log-bench") return log_bench();
+    if (argc > 1 && std::string_view(argv[1]) == "--log-pressure") return log_pressure();
+    g_timing_gates = argc > 1 && std::string_view(argv[1]) == "--timing";
     if (argc > 1 && std::string_view(argv[1]) == "--aoi-bench") return aoi_bench();
     if (argc > 1 && std::string_view(argv[1]) == "--activation-bench") return activation_bench();
     if (argc > 1 && std::string_view(argv[1]) == "--instance-bench") return instance_bench();

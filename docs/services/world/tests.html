@@ -12,6 +12,13 @@
 <nav class="side"><h2>World Server</h2><ul><li><a href="index.html">Overview</a></li><li><a href="setup.html">Setup and commands</a></li><li><a href="configuration.html">Configuration</a></li><li><a href="security.html">Security behaviour</a></li><li><a href="maps.html">Maps</a></li><li><a href="areas.html">Areas</a></li><li><a href="instances.html">Instances</a></li><li><a href="persistence.html">Persistence</a></li><li><a href="lua.html">Lua components and systems</a></li><li><a href="npcs.html">NPCs</a></li><li><a href="events.html">Events</a></li><li><a href="state-machines.html">State machines</a></li><li><a href="operations.html">Operations</a></li><li><a href="tests.html" class="active">Tests</a></li><li><a href="simplifications.html">Deliberate simplifications</a></li><li><a href="protocol.html">Protocol</a></li></ul></nav>
 <main>
 <h1 id="tests">Tests</h1>
+<p id="perf"><code>ctest --preset debug</code>, <code>release</code> and <code>linux-release</code> (the Docker build) run only the
+correctness tests. The performance tests carry <code>LABELS perf</code> and run with <code>ctest --preset perf</code> (Release) or
+<code>perf-linux</code>: <code>log_bench</code>, <code>aoi_bench</code>, <code>activation_bench</code>, <code>map_threads_bench</code> and
+<code>world_timing_bench</code>. A speed limit depends on what else the machine runs, so it never fails a build.
+<code>world_timing_bench</code> is <code>world_self_check --timing</code>: the self-check with its timing checks' speed limits on
+(replication idle tick, <code>kast.query</code>, the Lua bridge; Release only). Without <code>--timing</code> they print their numbers
+and check only behaviour.</p>
 <ul>
 <li><strong>Self-check</strong> (<code>tests/self_check.cpp</code> + <code>tests/lua_checks.cpp</code>, ctest <code>world_self_check</code>): assert-style checks of the pure logic with an injected clock, so nothing sleeps (except the send fan-out check: <code>net::send_many</code> to five sessions on unconnected sockets encodes the message once and leaves exactly <code>proto::encode</code> of it in each one's send buffer, also through the lag simulator, whose timers it waits a few ms for). The Lua checks write their scripts to a temp folder and drive a <code>World</code> with captured sends, saves and log lines. A batching check moves 3 players and a script NPC in view of
   2 still players and asserts each of the 5 gets exactly one <code>EntityMoves</code> with every other mover's move and never
@@ -56,7 +63,7 @@
   tiles, each with 100 players moving 8 m/s and 100 patrolling spawn-file Guards, with <code>MAP_THREADS=1</code> and 4. Prints the
   hardware thread count; fails if the 4-thread p95 is above 40% of the 1-thread p95. With fewer than 4 hardware threads, or in a
   Debug build (MSVC's checked STL and debug heap take process-wide locks: 4 threads measured at 140-230% of 1), it prints
-  that the threshold was skipped instead; the Release and Docker (Linux release) builds check it.</li>
+  that the threshold was skipped instead; Release builds check it (<code>ctest --preset perf</code> or <code>perf-linux</code>).</li>
 <li><strong>AOI cost</strong> (ctest <code>aoi_bench</code>, <code>world_self_check --aoi-bench</code>): ns per <code>aoi_system</code> call with 500 and
   2000 players (plus a fifth as many NPCs) on a 2 km map, all idle, 10% and 100% moving a short step each tick. Printed, not checked.</li>
 <li><strong>Tile activation</strong> (<code>checkTileActivation</code> in <code>lua_checks.cpp</code>, the sample <code>lua/</code> plus a probe system logging what
@@ -87,9 +94,9 @@
   tile map, (a) alone and (b) with 10,000 patrolling spawn-file Guards on 100 tiles 9 or more tiles away. Before (b) a
   scout logs in on each Guard tile and out again, so the 10,000 exist and sleep. Fails if (b) is more than 110% of (a).
   Before tile activation (b) was about 270 times (a) (26 ms against 0.1 ms, Release).</li>
-<li><strong>Logging</strong> (ctest <code>log_bench</code> and <code>log_flush</code>): <code>log_bench</code> (<code>world_self_check --log-bench</code>, stdout to the null device)
-  prints the caller-side ns per line of <code>log::info</code> and of the old synchronous write (printed only: one timing sample is too noisy to fail a build on),
-  and checks that 4 threads &times; 100,000 lines all reach the sink. <code>log_flush</code> checks that the line logged right before a SIGSEGV on the main thread
+<li><strong>Logging</strong> (ctest <code>log_bench</code>, <code>log_pressure</code> and <code>log_flush</code>): <code>log_bench</code> (perf; <code>world_self_check --log-bench</code>, stdout to the null device)
+  prints the caller-side ns per line of <code>log::info</code> and of the old synchronous write (printed only: one timing sample is too noisy to fail a build on).
+  <code>log_pressure</code> (<code>world_self_check --log-pressure</code>) checks that 4 threads &times; 100,000 lines all reach the sink. <code>log_flush</code> checks that the line logged right before a SIGSEGV on the main thread
   or another thread, an <code>abort()</code>, and a SIGKILL while the writer is busy (a <code>warn</code> line;
   <code>world_self_check --log-crash segv|segv-thread|abort|kill</code>) and before <code>kast_world</code>'s fatal startup error (a missing <code>MAP_ROOT</code>)
   is on stdout, and that the logger leaves SIGTERM to the app's own handler (<code>--log-crash sigterm</code>).</li>

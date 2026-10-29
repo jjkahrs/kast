@@ -16,6 +16,11 @@
 every test runs with <code>KAST_WINDOW_POS=secondary</code>, which opens windows on the first display that isn't the primary one
 (with only one display they open on it, with a warning). Configure with <code>-DKAST_TEST_WINDOW_POS=X,Y</code> (e.g.
 <code>cmake --preset debug -DKAST_TEST_WINDOW_POS=-1900,40</code>) to pin them to a desktop position instead.</p>
+<p id="perf">The performance tests carry <code>LABELS perf</code> and are left out of the <code>debug</code>, <code>release</code> and
+<code>relwithdebinfo</code> test presets, so a busy machine can't fail a build: <code>player_sdfgi_gpu_time</code>,
+<code>player_voxelgi_gpu_time</code> and <code>starter_mmo_nameplates_perf</code>. Run them, alone and with GPU-heavy apps closed, with
+<code>ctest --preset perf</code> (Debug build) or <code>perf-release</code> (where <code>starter_mmo_nameplates_perf</code> also checks its
+16.7 ms budget). The world server's benches work the same way (<a href="../services/world/tests.html#perf">World tests</a>).</p>
 <p id="sdfgi-gpu-limit"><code>player_sdfgi_gpu_time</code> holds the SDFGI view's and the frame's 99th percentile GPU time under
 <code>KAST_SDFGI_GPU_P99_MS</code> whole milliseconds: 4 by default, the <a href="../engine/sdfgi.html">SDFGI</a> budget. A machine
 whose GPU (or what else runs on it) can't hold that sets more in its own build cache only, e.g.

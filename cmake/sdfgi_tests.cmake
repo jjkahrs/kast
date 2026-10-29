@@ -243,5 +243,6 @@ add_test(NAME player_sdfgi_gpu_time
           -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/player_test.cmake")
 set_tests_properties(player_sdfgi_screenshot PROPERTIES FIXTURES_REQUIRED game_sdfgi_built
                      FIXTURES_SETUP player_sdfgi_shot TIMEOUT 90)
-set_tests_properties(player_sdfgi_gpu_time PROPERTIES FIXTURES_REQUIRED game_sdfgi_path_built TIMEOUT 90 RUN_SERIAL TRUE)
+set_tests_properties(player_sdfgi_gpu_time PROPERTIES FIXTURES_REQUIRED game_sdfgi_path_built TIMEOUT 90 RUN_SERIAL TRUE
+                     LABELS perf) # ctest --preset perf, not the debug / release presets
 set_tests_properties(player_sdfgi_matches_editor PROPERTIES FIXTURES_REQUIRED "player_sdfgi_shot;sg_sdfgi_still_shot")
