@@ -88,3 +88,22 @@ a size against bench 8 x 8 as well as against size 0. The FAILs are load.sh's ho
 follow the navmesh, and steps onto slopes too steep for it are corrected (`off_mesh`). An earlier 64 x 64 run had 327
 of 500 bots time out on CharCreate (enter p99 3,010 ms); a rerun and a 500-bot direct run entered all 500 in < 35 ms p99,
 so it was treated as the known bimodal enter latency (docs/services/world/tests.html), not size.
+
+## After phase 3: editor terrain by camera radius
+
+The Scene view meshes only the tiles within `zone::kEditRadius` = 4 of the camera's pivot (9 x 9 at most); a map past
+9 x 9 frames those around its centre. Same machine and settings as the baseline, 2026-10-30. The machine's speed moved
+between passes (8 x 8, unchanged code path, measured 117.7 then 71-86 FPS in later passes); the table is the pass with
+the fastest 8 x 8 (14:02), the range over four later passes in brackets.
+
+| Size | Terrain meshes (logged) | FPS average | FPS lowest | Peak RAM | Peak GPU memory | Result |
+|------|-------------------------|-------------|------------|----------|-----------------|--------|
+| 8 x 8 | 64 | 117.7 (71-86) | 108.8 (62-79) | 477 MB | 503 MB | meets 60 |
+| 16 x 16 | 81 | 97.9 (69-99) | 90.9 (59-86) | 577 MB | 575 MB | meets 60 |
+| 32 x 32 | 81 | 93.6 (65-95) | 79.6 (58-84) | 688 MB | 587 MB | meets 60 |
+| 64 x 64 | 81 | 85.9 (56-86) | 79.9 (50-78) | 1,065 MB | 571 MB | meets 60 in a fast pass; 56-60 in slow ones |
+
+The 64 x 64 crash was the Map tab: one thumbnail texture per tile, 4096 of bgfx's 4096 texture handles. Maps past
+1024 tiles get no thumbnails until phase 4 builds only visible cells'. The 32 x 32 black screenshots are gone. 64 x 64
+stays slower than 16 x 16 with the same 81 meshes: per-frame work over every tile (Map tab `declared_tiles`, Zone tab
+grid, preview checks) is phase 4 / 6.

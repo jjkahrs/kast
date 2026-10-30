@@ -204,6 +204,8 @@ function EditorSculpt([int]$n) {
     }
     $draws = Select-String -Path $log -Pattern 'Scene view: Tris \S+\s+Draws ([0-9]+)' -ErrorAction SilentlyContinue | Select-Object -Last 1
     if ($draws) { $line += ", Scene view $($draws.Matches[0].Groups[1].Value) draws" }
+    $meshes = Select-String -Path $log -Pattern 'Zone view: ([0-9]+) terrain meshes' -ErrorAction SilentlyContinue | Select-Object -Last 1
+    if ($meshes) { $line += ", $($meshes.Matches[0].Groups[1].Value) terrain meshes" }
     Log "$line, peak RAM $(Mb $r.PeakWs) (private $(Mb $r.PeakPrivate)), peak GPU dedicated $(Mb $r.PeakGpu)$(if ($r.Exit -ne 0) { LastError $log })"
 }
 

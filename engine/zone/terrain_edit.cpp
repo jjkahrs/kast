@@ -326,6 +326,17 @@ TileSet declared_tiles(const km::MapInfo& info) {
     return tiles;
 }
 
+bool same_terrain_mesh(const km::MapInfo& a, const km::MapInfo& b) {
+    const auto box = [](const km::MapInfo& info) {
+        std::array<int32_t, 4> r{INT32_MAX, INT32_MAX, INT32_MIN, INT32_MIN};
+        for (const km::TileRect& t : info.tiles)
+            r = {std::min(r[0], t.x0), std::min(r[1], t.z0), std::max(r[2], t.x1), std::max(r[3], t.z1)};
+        return r;
+    };
+    return a.id == b.id && a.heightRange == b.heightRange && a.material == b.material && a.terrainUv == b.terrainUv &&
+           (a.terrainUv != km::TerrainUv::Map || box(a) == box(b));
+}
+
 Json tile_rects(const TileSet& tiles) {
     // Runs per row: z -> [x0, x1] pairs, in order.
     std::map<int32_t, std::vector<std::array<int32_t, 2>>> rows;

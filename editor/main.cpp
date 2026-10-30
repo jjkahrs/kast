@@ -61,7 +61,7 @@
 namespace {
 
 constexpr float kZoneNearPlane = 0.5f; // the editor camera's planes while the Scene view shows a zone
-constexpr float kZoneFarPlane = 6000.0f;
+constexpr float kZoneFarPlane = 8000.0f; // the camera's 5 km farthest dolly + the meshed tiles' far corner, ~1.8 km
 // Each viewport's shadow maps, then its scene and post passes (see SceneViewport, GameViewport).
 constexpr bgfx::ViewId kViewportViews = kast::Renderer::kShadowViews + kast::PostProcess::kViews;
 constexpr bgfx::ViewId kSceneView = 0; // then its overlays (view 0 too: 256 views hold no more)
@@ -2110,10 +2110,11 @@ int main(int argc, char** argv)
             hierarchy && !ImGui::FindWindowSettingsByID(ImHashStr(MapPanel::kWindow)))
             ImGui::SetNextWindowDockID(hierarchy->DockId, ImGuiCond_FirstUseEver);
         mapPanel.draw(doc, zone, files);
-        zoneRender.sync(showZone() ? zone.zone() : nullptr, doc.project ? doc.project->root : std::filesystem::path(),
-                        viewport.renderer());
+        zoneRender.sync(showZone() ? zone.zone() : nullptr, {doc.camera.pivot.x, doc.camera.pivot.z},
+                        doc.project ? doc.project->root : std::filesystem::path(), viewport.renderer());
         viewport.setExtraScene(zoneRender.scene());
-        // A whole 2 km+ map in view: a farther far plane, and a farther near plane for depth precision.
+        // The meshed tiles (zone::kEditRadius around the pivot) in view from the farthest dolly: a farther far plane, and
+        // a farther near plane for depth precision.
         doc.camera.nearPlane = zoneRender.scene() ? kZoneNearPlane : EditorCamera::kNear;
         doc.camera.farPlane = zoneRender.scene() ? kZoneFarPlane : EditorCamera::kFar;
         viewport.draw(doc); // submitted before Game so Scene is the front tab on first run

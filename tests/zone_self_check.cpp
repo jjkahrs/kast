@@ -16,6 +16,7 @@
 #include <terrain.h>
 #include <tile_scenes.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 
@@ -1198,6 +1199,49 @@ void check_terrain_gen() {
 
 // Tile scenes (engine/tile_scenes.h, the Map tab and Play's streaming): paths, cell states, out-of-bounds roots, the
 // streaming diff, event payloads, the thumbnail colors, and a tile removed in the Zone tab keeping its scene (an orphan).
+// The editor's Scene view: meshes for the tiles around the camera's pivot, and a manifest edit rebuilds them only when
+// what the renderer reads from the map changed.
+void check_edit_view() {
+    km::MapInfo big;
+    big.tiles = {{0, 0, kMaxMapTiles - 1, kMaxMapTiles - 1}};
+    const float mid = kMaxMapTiles / 2 * km::kTileSize + 10;
+    const auto here = kast::tiles_around(big, {mid, mid}, kEditRadius);
+    const int side = 2 * kEditRadius + 1;
+    CHECK(here.size() == size_t(side * side));
+    // One tile east: a column goes, a column comes, the rest stay.
+    const auto east = kast::tiles_around(big, {mid + km::kTileSize, mid}, kEditRadius);
+    const auto kept = std::ranges::count_if(east, [&](km::TileKey t) { return std::ranges::find(here, t) != here.end(); });
+    CHECK(east.size() == here.size() && kept == side * (side - 1));
+    CHECK(kast::tiles_around(big, {10, 10}, kEditRadius).size() == size_t((kEditRadius + 1) * (kEditRadius + 1)));
+    CHECK(kast::tiles_around(big, {-5000, -5000}, kEditRadius).empty());
+    km::MapInfo eight;
+    eight.tiles = {{0, 0, 7, 7}};
+    CHECK(kast::tiles_around(eight, {1024, 1024}, kEditRadius).size() == 64); // framed: all of an 8 x 8 map
+
+    km::MapInfo moved = big;
+    moved.spawn = {500, 0, 500};
+    moved.name = "renamed";
+    moved.tiles.push_back({kMaxMapTiles, 0, kMaxMapTiles, 0}); // a tile added at the edge, Tiled UVs
+    CHECK(same_terrain_mesh(big, moved));
+    for (const auto change : std::initializer_list<void (*)(km::MapInfo&)>{
+             [](km::MapInfo& m) { m.heightRange = std::array<float, 2>{0, 500}; },
+             [](km::MapInfo& m) { m.material = "materials/rock.mat"; },
+             [](km::MapInfo& m) { m.terrainUv = km::TerrainUv::Map; },
+             [](km::MapInfo& m) { m.id = 99; }}) {
+        km::MapInfo other = big;
+        change(other);
+        CHECK(!same_terrain_mesh(big, other));
+    }
+    km::MapInfo mapUv = big, grown;
+    mapUv.terrainUv = km::TerrainUv::Map;
+    grown = mapUv;
+    grown.tiles.push_back({kMaxMapTiles, 0, kMaxMapTiles, 0}); // Map UVs: a bigger bounding box moves every UV
+    CHECK(!same_terrain_mesh(mapUv, grown));
+    grown = mapUv;
+    grown.spawn = {1, 0, 1};
+    CHECK(same_terrain_mesh(mapUv, grown));
+}
+
 void check_tile_scenes() {
     using kast::TileCell;
     CHECK(kast::tileScenePath("tilegrid", {1, 2}) == "maps/tilegrid/scenes/1_2.scene");
@@ -1331,6 +1375,7 @@ int main(int argc, char** argv) {
     check_terrain_gen();
     check_round_trip(kSource / "tests" / "project", "rt_tilegrid", "tilegrid");
     check_tile_scenes();
+    check_edit_view();
     if (failures) std::fprintf(stderr, "%d check(s) failed\n", failures);
     else std::printf("zone builder self-check: all passed\n");
     return failures ? 1 : 0;

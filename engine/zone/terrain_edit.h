@@ -116,6 +116,13 @@ kast::Material terrain_material(const std::string& texturePath);
 
 // The declared tiles, sorted.
 TileSet declared_tiles(const kast::map::MapInfo& info);
+// The editor's Scene view meshes the declared tiles within this many tiles (a square, kast::tiles_around) of the
+// camera's pivot: 9 x 9 tiles, an 8 x 8 map whole when framed. The rest keep only their heights.
+constexpr int kEditRadius = 4;
+// Whether a tile's terrain mesh built under map a is still right under b: what the renderer reads from the map (id,
+// height range, material, UV mode and, for Map UVs, the declared tiles' bounding box) is the same. A spawn, an area or a
+// tile added elsewhere (Tiled UVs) keeps every mesh.
+bool same_terrain_mesh(const kast::map::MapInfo& a, const kast::map::MapInfo& b);
 // The fewest-ish rects covering tiles: runs along x per row, merged with the next rows that have the same run.
 Json tile_rects(const TileSet& tiles);
 // Declares tile t (false if it already is). Its heights start flat at heightMin, then take the shared edges of the

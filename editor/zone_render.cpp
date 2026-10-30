@@ -2,11 +2,13 @@
 
 #include <zone/terrain_edit.h>
 
+#include <log.h>
 #include <math3d.h>
 
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <format>
 
 namespace {
 
@@ -22,6 +24,7 @@ void ZoneRender::clear(kast::Renderer& renderer)
 {
     scene_ = {};
     tiles_.clear();
+    loggedTiles_ = 0;
     objects_.clear();
     info_ = nullptr;
     manifest_ = nullptr;
@@ -31,61 +34,66 @@ void ZoneRender::clear(kast::Renderer& renderer)
         renderer.setPreview({}, {}, {}, {});
 }
 
-void ZoneRender::sync(const zone::ZoneDoc* zone, const std::filesystem::path& projectRoot, kast::Renderer& renderer)
+void ZoneRender::sync(const zone::ZoneDoc* zone, std::array<float, 2> centre, const std::filesystem::path& projectRoot,
+                      kast::Renderer& renderer)
 {
     if (zone != zone_ && zone_) // another (or no) document: start over, so nothing built from the old one stays
         clear(renderer);
     zone_ = zone;
     if (!zone)
         return;
-    syncTiles(*zone);
+    syncTiles(*zone, centre);
     syncPreview(*zone, renderer);
     syncObjects(*zone, projectRoot);
 }
 
-// A tile's data changes (and the renderer rebuilds only that tile's mesh) only
-// when its heights or the manifest do.
-void ZoneRender::syncTiles(const zone::ZoneDoc& zone)
+// A tile's data changes (and the renderer rebuilds only that tile's mesh) only when its heights or what the manifest
+// gives its mesh do. Tiles come and go with the camera.
+// ponytail: unthrottled, as Play's streaming: crossing a tile edge builds a row of 2 * kEditRadius + 1 meshes in one
+// frame (a hitch); cap the builds per frame, nearest first, if it shows.
+void ZoneRender::syncTiles(const zone::ZoneDoc& zone, std::array<float, 2> centre)
 {
     if (zone.state.manifest != manifest_) {
         manifest_ = zone.state.manifest;
         std::string err;
         auto info = zone.info(err); // validate() reports err
+        const bool same = info && info_ && zone::same_terrain_mesh(*info_, *info);
         info_ = info ? std::make_shared<const km::MapInfo>(std::move(*info)) : nullptr;
-        for (auto& [key, tile] : tiles_)
-            tile.built = false; // every tile's data changes with the manifest
+        if (!same)
+            for (auto& [key, tile] : tiles_)
+                tile.built = false;
     }
+    const std::vector<km::TileKey> wanted = info_ ? kast::tiles_around(*info_, centre, zone::kEditRadius)
+                                                  : std::vector<km::TileKey>();
     for (auto it = tiles_.begin(); it != tiles_.end();) {
-        if (info_ && info_->has_tile(it->first)) {
+        if (std::ranges::find(wanted, it->first) != wanted.end()) {
             ++it;
             continue;
         }
         scene_.registry().destroy(it->second.entity);
         it = tiles_.erase(it);
     }
-    if (!info_)
-        return;
-    for (const km::TileRect& r : info_->tiles)
-        for (int32_t z = r.z0; z <= r.z1; ++z)
-            for (int32_t x = r.x0; x <= r.x1; ++x) {
-                const zone::TileKey key{x, z};
-                const auto found = zone.state.heights.find(key);
-                const zone::HeightsPtr heights = found == zone.state.heights.end() ? nullptr : found->second;
-                Tile& tile = tiles_[key];
-                if (tile.built && tile.heights == heights)
-                    continue;
-                if (tile.entity == entt::null) {
-                    tile.entity = scene_.registry().create();
-                    scene_.registry().emplace<kast::TerrainTile>(tile.entity, int(info_->id), x, z);
-                }
-                auto data = std::make_shared<kast::TerrainTileData>();
-                data->map = info_;
-                data->tile = key;
-                data->heights = heights ? *heights : km::flat_heights();
-                scene_.registry().get<kast::TerrainTile>(tile.entity).data = std::move(data);
-                tile.heights = heights;
-                tile.built = true;
-            }
+    for (const zone::TileKey key : wanted) {
+        const auto found = zone.state.heights.find(key);
+        const zone::HeightsPtr heights = found == zone.state.heights.end() ? nullptr : found->second;
+        Tile& tile = tiles_[key];
+        if (tile.built && tile.heights == heights)
+            continue;
+        if (tile.entity == entt::null) {
+            tile.entity = scene_.registry().create();
+            scene_.registry().emplace<kast::TerrainTile>(tile.entity, int(info_->id), key.x, key.z);
+        }
+        auto data = std::make_shared<kast::TerrainTileData>();
+        data->map = info_;
+        data->tile = key;
+        data->heights = heights ? *heights : km::flat_heights();
+        scene_.registry().get<kast::TerrainTile>(tile.entity).data = std::move(data);
+        tile.heights = heights;
+        tile.built = true;
+    }
+    if (std::exchange(loggedTiles_, tiles_.size()) != tiles_.size())
+        kast::log::info(std::format("Zone view: {} terrain meshes (tiles within {} of the camera)", tiles_.size(),
+                                    zone::kEditRadius));
 }
 
 // When the map uses its generated terrain material: re-bakes its texture into the renderer's preview after the heights
@@ -198,9 +206,9 @@ void ZoneRender::drawOverlays(ImDrawList* draw, const float* viewProj, float x, 
         const float x0 = key.x * km::kTileSize, z0 = key.z * km::kTileSize, x1 = x0 + km::kTileSize, z1 = z0 + km::kTileSize;
         g.line({x0, z0}, {x1, z0}, kTileLine, 1.5f);
         g.line({x0, z0}, {x0, z1}, kTileLine, 1.5f);
-        if (!info_->has_tile({key.x, key.z + 1}))
+        if (!tiles_.contains({key.x, key.z + 1})) // the meshed tiles' edge
             g.line({x0, z1}, {x1, z1}, kTileLine, 1.5f);
-        if (!info_->has_tile({key.x + 1, key.z}))
+        if (!tiles_.contains({key.x + 1, key.z}))
             g.line({x1, z0}, {x1, z1}, kTileLine, 1.5f);
     }
     const zone::Vec3 spawn = g.ground(info_->spawn[0], info_->spawn[2]);

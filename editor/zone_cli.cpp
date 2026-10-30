@@ -678,6 +678,12 @@ void frameZone(EditorCamera& camera, const zone::ZoneDoc& zone)
         box.min = bx::min(box.min, {r.x0 * km::kTileSize, range[0], r.z0 * km::kTileSize});
         box.max = bx::max(box.max, {(r.x1 + 1) * km::kTileSize, range[1], (r.z1 + 1) * km::kTileSize});
     }
+    // A map bigger than the Scene view meshes (zone::kEditRadius around the pivot): the meshed tiles around its centre.
+    const km::TileKey c = km::tile_of((box.min.x + box.max.x) * 0.5f, (box.min.z + box.max.z) * 0.5f);
+    box.min = bx::max(box.min, {(c.x - zone::kEditRadius) * km::kTileSize, range[0],
+                                (c.z - zone::kEditRadius) * km::kTileSize});
+    box.max = bx::min(box.max, {(c.x + zone::kEditRadius + 1) * km::kTileSize, range[1],
+                                (c.z + zone::kEditRadius + 1) * km::kTileSize});
     camera.focus(box);
 }
 
@@ -694,7 +700,9 @@ void sculptLoop(zone::ZoneDoc& zone, int frame)
         hi[0] = std::max(hi[0], (r.x1 + 1) * kast::map::kTileSize);
         hi[1] = std::max(hi[1], (r.z1 + 1) * kast::map::kTileSize);
     }
-    const float angle = float(frame) * 0.01f, reach = 0.35f * std::min(hi[0] - lo[0], hi[1] - lo[1]);
+    // Within the tiles meshed around a framed map's centre (zone::kEditRadius), so it sculpts what the view shows.
+    const float meshed = float(2 * zone::kEditRadius + 1) * kast::map::kTileSize;
+    const float angle = float(frame) * 0.01f, reach = 0.35f * std::min({hi[0] - lo[0], hi[1] - lo[1], meshed});
     const float x = (lo[0] + hi[0]) * 0.5f + reach * std::cos(angle), z = (lo[1] + hi[1]) * 0.5f + reach * std::sin(angle);
     zone::Brush brush;
     brush.radius = kLoopRadius;

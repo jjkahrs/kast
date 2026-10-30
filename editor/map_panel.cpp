@@ -22,6 +22,7 @@ namespace km = kast::map;
 
 constexpr double kRefreshSeconds = 0.5; // the scene files and counts are read again this often (file changes)
 constexpr int kThumbnailSize = 64;
+constexpr size_t kMaxThumbnails = 1024; // tiles: a 32 x 32 map's
 constexpr float kGap = 2.0f; // pixels between cells
 constexpr ImU32 kButton = IM_COL32(255, 170, 0, 255);    // #ffaa00: an open tile scene
 constexpr ImU32 kHighlight = IM_COL32(255, 204, 0, 255); // #ffcc00: unsaved, the hovered cell, portals
@@ -202,7 +203,11 @@ void MapPanel::syncThumbnails(const zone::ZoneDoc& z, const km::MapInfo& info)
     std::string err;
     const std::optional<zone::Gradient> gradient =
         z.state.manifest.contains("terrainColors") ? zone::parse_gradient(z.state.manifest, err) : std::nullopt;
-    const zone::TileSet declared = zone::declared_tiles(info);
+    zone::TileSet declared = zone::declared_tiles(info);
+    // ponytail: one texture per tile, and bgfx has 4096 texture handles in all: a map past kMaxThumbnails tiles gets
+    // none (plain cells) rather than running out; build only the visible cells' when the grid zooms and pans.
+    if (declared.size() > kMaxThumbnails)
+        declared.clear();
     std::erase_if(thumbnails_, [&](auto& entry) {
         if (declared.contains(entry.first))
             return false;

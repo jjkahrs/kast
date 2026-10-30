@@ -133,3 +133,18 @@ foreach(case "max|${cap},${cap}|Zone: new map maps/big \\(id [0-9]+, ${cap}x${ca
             --settings-file "${KAST_ZONE_OUT}/new_map_${name}_settings.json" --new-map "big,${size}" --headless)
   set_tests_properties(zone_cli_new_map_${name} PROPERTIES PASS_REGULAR_EXPRESSION "${expect}")
 endforeach()
+
+# The Scene view meshes only the tiles within zone::kEditRadius (4) of the camera's pivot (the log's mesh count): a new
+# 12 x 12 map (in memory, not saved) framed at its centre, 9 x 9; with the camera on its corner tile, 5 x 5. The tile
+# borders over 81 tiles pass ImGui's 64k vertices per draw list (the backend's vertex offsets).
+foreach(case "centre||81" "corner|--focus 10,10,500|25")
+  string(REPLACE "|" ";" case "${case}")
+  list(GET case 0 name)
+  list(GET case 1 focus)
+  list(GET case 2 meshes)
+  add_test(NAME editor_zone_view_${name}
+    COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${KAST_ZONE_OUT}/view_${name}.png"
+            "-DEXTRA_ARGS=--project ${starter} --new-map big,12,12 ${focus} --size 1600x900" -DFRAMES=30
+            "-DEXPECT_OUTPUT=Zone view: ${meshes} terrain meshes" -DEXPECT_COUNT=1 "-DFORBID_OUTPUT=\\[error\\]"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+endforeach()

@@ -1,6 +1,6 @@
-// The open zone in the Scene view (edit mode): every declared tile of the ZoneDoc as a TerrainTile and every zone object
-// as its prefab, in a scene of their own that SceneViewport draws with the edited scene (Renderer::render's extra), plus
-// the tile-border and map-spawn overlays. Reads the ZoneDoc's in-memory state each frame, so edits show at once.
+// The open zone in the Scene view (edit mode): the ZoneDoc's declared tiles near the camera as TerrainTiles and every
+// zone object as its prefab, in a scene of their own that SceneViewport draws with the edited scene (Renderer::render's
+// extra), plus the tile-border and map-spawn overlays. Reads the ZoneDoc's in-memory state each frame, so edits show at once.
 #pragma once
 
 #include <zone/zone_doc.h>
@@ -36,18 +36,21 @@ struct GroundDraw {
 
 class ZoneRender {
 public:
-    // Mirrors zone (null: clears everything) into scene(); a tile or object file is rebuilt only when it changed (its
-    // heights buffer, the manifest, its objects JSON). The generated-terrain material previews through renderer
-    // (Renderer::setPreview) before it is saved. Call once a frame before the Scene view renders.
-    void sync(const zone::ZoneDoc* zone, const std::filesystem::path& projectRoot, kast::Renderer& renderer);
+    // Mirrors zone (null: clears everything) into scene(): its declared tiles within zone::kEditRadius of centre (the
+    // camera's pivot, x and z), built as they come near and dropped as they go; a tile or object file is rebuilt only
+    // when it changed (its heights buffer, what the manifest gives its mesh, zone::same_terrain_mesh; its objects
+    // JSON). The generated-terrain material previews through renderer (Renderer::setPreview) before it is saved. Call
+    // once a frame before the Scene view renders.
+    void sync(const zone::ZoneDoc* zone, std::array<float, 2> centre, const std::filesystem::path& projectRoot,
+              kast::Renderer& renderer);
     // The zone's entities for Renderer::render; null with no zone.
     const kast::Scene* scene() const { return info_ ? &scene_ : nullptr; }
-    // Tile borders and the map spawn (with its heading) over the Scene view image at (x, y), width x height (ImGui
-    // points), seen through viewProj.
+    // The meshed tiles' borders and the map spawn (with its heading) over the Scene view image at (x, y), width x
+    // height (ImGui points), seen through viewProj.
     void drawOverlays(ImDrawList* draw, const float* viewProj, float x, float y, float width, float height) const;
 
 private:
-    void syncTiles(const zone::ZoneDoc& zone);
+    void syncTiles(const zone::ZoneDoc& zone, std::array<float, 2> centre);
     void syncPreview(const zone::ZoneDoc& zone, kast::Renderer& renderer);
     void syncObjects(const zone::ZoneDoc& zone, const std::filesystem::path& projectRoot);
     void clear(kast::Renderer& renderer);
@@ -66,7 +69,8 @@ private:
     const zone::ZoneDoc* zone_ = nullptr; // the last synced, for the overlays
     zone::Json manifest_;                 // what tiles_ were built from
     std::shared_ptr<const kast::map::MapInfo> info_;
-    zone::TileMap<Tile> tiles_;
+    zone::TileMap<Tile> tiles_; // the meshed tiles, around the camera
+    size_t loggedTiles_ = 0;    // tiles_.size() last logged
     zone::TileMap<ObjectTile> objects_;
     kast::PrefabCache prefabs_;     // for the open project
     zone::Json previewManifest_;    // what the preview was baked from

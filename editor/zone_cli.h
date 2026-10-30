@@ -51,7 +51,8 @@ std::optional<std::array<float, 3>> parseFocus(std::string_view text);
 std::optional<std::array<int, 2>> parseTile(std::string_view text);
 // The ground height at (x, z) of zone (0 off the map or with no zone), for --focus.
 float groundY(const zone::ZoneDoc* zone, float x, float z);
-// Points camera at the whole of zone's tiles, as the window opens on a map the zone flags opened.
+// Points camera at the whole of zone's tiles (a map past 9 x 9: the ones the Scene view meshes around its centre), as the
+// window opens on a map the zone flags opened.
 void frameZone(EditorCamera& camera, const zone::ZoneDoc& zone);
 // One frame of --sculpt-loop (the --log-fps sculpting benchmark): a brush circling the map's centre across tile
 // borders, raising for 2 s then lowering for 2 s, straight on the state, outside undo.
