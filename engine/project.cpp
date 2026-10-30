@@ -16,7 +16,7 @@ namespace {
 using Json = nlohmann::ordered_json;
 
 constexpr const char* kProjectKeys[] = {"version", "name", "startScene"}; // required
-constexpr const char* kOptionalProjectKeys[] = {"stateMachines", "audio", "online", "gui"};
+constexpr const char* kOptionalProjectKeys[] = {"stateMachines", "audio", "online", "gui", "input"};
 
 std::string validate(const Json& json)
 {
@@ -132,6 +132,8 @@ bool loadProject(const std::filesystem::path& file, Project& out, std::string& e
             }
             if (std::string guiError; reason.empty() && json.contains("gui") && !guiConfigFromJson(json["gui"], loaded.gui, guiError))
                 reason = "\"gui\": " + guiError;
+            if (reason.empty() && json.contains("input"))
+                loaded.input = parseInputMap(json["input"], file.string());
             if (reason.empty()) {
                 out = std::move(loaded);
                 return true;
@@ -166,6 +168,8 @@ bool saveProject(const Project& project, std::string& error)
     }
     if (project.gui != GuiConfig{})
         json["gui"] = guiConfigToJson(project.gui);
+    if (!project.input.source.is_null())
+        json["input"] = project.input.source;
     const std::filesystem::path file = project.root / kProjectFileName;
     writeAssetRefs(json);
     if (!writeFileAtomic(file, json.dump(2) + '\n')) {

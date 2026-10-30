@@ -1,6 +1,7 @@
 -- The bag window (ui/bag.rml), client side. The server (systems/inventory.lua) owns the bag; this shows the local
 -- player's replicated Inventory (components/inventory.lua) and turns drags into requests:
---   B (or the "bag.toggle" event) opens and closes it; not while typing in a GUI text field.
+--   B or the pad's D-pad down (the "bag" action), or the "bag.toggle" event, opens and closes it; not while typing in
+--   a GUI text field.
 --   Drag a stack onto another slot: kast.world.send("inventory.move", {from, to, item}) — the server moves it to an
 --   empty slot, merges it into the same item (up to maxStack) or swaps it with another. With Shift onto an empty slot,
 --   split = true: half the stack moves. Dropped outside the bag (the world, another window): a confirmation dialog,
@@ -36,7 +37,6 @@ local me                      -- the local player's server entity id
 local items, counts = {}, {}  -- the bag as last replicated
 local shown = {}              -- slot -> "item:count" drawn, to write only changed slots
 local open = false
-local held = false            -- B down last frame
 local hovered                 -- slot whose tooltip shows
 local doomed                  -- {slot, item} waiting for the destroy confirmation
 local gear = {gear = {}, names = {}, slots = {}} -- the server's "equipment.gear"
@@ -148,9 +148,7 @@ return {
 
     update = function(dt)
         local inWorld = kast.world and kast.world.state() == "inWorld"
-        local down = inWorld and not kast.gui.focusedField() and kast.input.keyDown("B")
-        if down and not held then setOpen(not open) end
-        held = down
+        if inWorld and not kast.gui.focusedField() and kast.input.actionPressed("bag") then setOpen(not open) end
         if open then
             local slot = slotOf(kast.gui.hovered())
             if slot ~= hovered then showTooltip(slot) end

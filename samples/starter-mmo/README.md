@@ -92,6 +92,26 @@ running it twice adds nothing.
 
 ### 5. Play
 
+Controls (keyboard and mouse, or one gamepad; the bindings are `project.kast`'s `"input"` actions and axes,
+[docs/engine/lua-systems.html](../../docs/engine/lua-systems.html#input-actions)). Nothing moves while typing in a GUI
+text field, and in the world only; dead, only the camera works.
+
+| Action | Keyboard and mouse | Gamepad |
+| --- | --- | --- |
+| Run forward / backpedal | W / S | Left stick up / down (partly pushed: slower) |
+| Turn (strafe with the right button held) | A / D | Left stick left / right |
+| Orbit the camera | Left drag (right drag: turn the character too) | Right stick |
+| Zoom | Wheel | — |
+| Jump | Space | A |
+| Powers 1 / 2 / 3 | 1 / 2 / 3 | X / Y / B |
+| Next target | Tab | RB |
+| Clear the target | Esc | LB |
+| Use (the Meadow Shrine) | E | D-pad up |
+| Bag | B | D-pad down |
+| Quest log | L | View / Back |
+| Character window | C | Start |
+| Select, loot, talk | Left / right click | — |
+
 - **Realm**: pick `Starter Realm`.
 - **Characters**: pick a class (the button turns `#ffcc00` and a line describes it), type a name (3-16 letters),
   **Create character**, then click it: `Play <Name> (<Class>)`. Create without a class only says `Pick a class first.`;
@@ -356,6 +376,8 @@ of the client project, in dot-folders or elsewhere.
   - `starter_mmo_live_shrine`: at the Meadow Shrine, `[E] Use the Meadow Shrine`, a real E press, and the server's
     blessing in the chat box.
   - `starter_mmo_live_combat_target`: a left click selects the Bat (target frame and marker).
+  - `starter_mmo_live_pad`: a virtual gamepad (the editor's `--sim-gamepad`) next to the Bat: RB selects it, X
+    predicts Strike, A jumps (over 1 m) and the left stick walks the character off.
   - `starter_mmo_live_combat`: Tab, Esc, Tab, then Strike (the action bar's first button) until the Bat dies.
   - `starter_mmo_live_combat_guard`: three Strikes on the Guard, which hits back.
   - `starter_mmo_live_death`, `starter_mmo_live_revive`: the Guard kills the Warrior `Fallen`; dead, then revived at

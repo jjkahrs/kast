@@ -104,6 +104,16 @@ released, cursor unlocked) whenever the Game panel or the editor window loses fo
 switches scenes; <code>kast_player.exe</code> clears it the same way on window focus loss and scene switches. The cursor stays
 normal unless a system locks it with <code>kast.input.setCursorLocked(true)</code> (<code>kast::CursorLock</code>: SDL relative mouse mode,
 the cursor hidden; on unlock it reappears where the lock began).</p>
+<p id="gamepad"><strong>Gamepad</strong>: a connected gamepad drives the game only while the Game panel has input, the same rule
+as the keyboard: its buttons and sticks reach <code>Document::input</code> (and <code>kast.input.gamepad*</code>, the project's
+<a href="../engine/lua-systems.html#input-actions">input actions and axes</a>) while the Game panel is focused and playing, and
+are released whenever that input is lost. The pad is still picked up (<code>kast.input.gamepadConnected()</code> is true) with
+another panel focused. The editor itself takes no gamepad input: the Scene view camera and the panels stay on mouse and
+keyboard. See <a href="../engine/lua-systems.html#gamepad">Gamepad</a> for the one-pad rule and deadzones.</p>
+<p><strong>Tests</strong>: <code>--sim-gamepad frame,frames,control=value[+control=value...]</code> (repeatable, with <code>--play</code>;
+<code>kast_player.exe</code> takes it too) plugs in an SDL virtual gamepad and holds those controls (button names at 1, axis names
+-1..1, triggers 0..1) for <code>frames</code> frames from <code>frame</code>, e.g. <code>--sim-gamepad 30,50,lefty=-1+rightx=1</code>; with
+<code>--sim-on-log</code> the frames count from that log line.</p>
 <p id="stats-overlay"><strong>Stats overlay (F3)</strong>: during Play (playing or paused), with the Game panel focused, F3 shows
 or hides one line at the bottom-left of the Game image: <code>FPS 144  Ping 42 ms</code> (then <code>VoxelGI 0.31 ms</code> while VoxelGI
 volumes relight and <code>SDFGI 0.40 ms</code> while <a href="../engine/sdfgi.html">SDFGI</a> is on: the GPU time of their compute

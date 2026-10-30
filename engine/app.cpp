@@ -145,7 +145,7 @@ std::optional<std::pair<int, int>> parseWindowPos(std::string_view text)
 
 int run(const AppConfig& config, const AppHooks& hooks)
 {
-    if (!SDL_Init(SDL_INIT_VIDEO))
+    if (!SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD)) // gamepads: kast::Input
         return fail(config, std::format("SDL_Init failed: {}", SDL_GetError()), nullptr);
     log::info("SDL initialized");
 

@@ -29,6 +29,7 @@
 #include <files.h>
 #include <gui.h>
 #include <input.h>
+#include <input_actions.h>
 #include <log.h>
 #include <lua_components.h>
 #include <lua_systems.h>
@@ -58,6 +59,7 @@
 #include <shader.h>
 #include <shader_graph.h>
 #include <shadow.h>
+#include <sim_gamepad.h>
 #include <sky.h>
 #include <frustum.h>
 #include <lod.h>
@@ -923,6 +925,261 @@ std::filesystem::path luaTestDir()
     removeTree(dir);
     std::filesystem::create_directories(dir / "scripts");
     return dir;
+}
+
+// Gamepads through SDL virtual joysticks (no hardware): the first connected is adopted, the next takes over when it goes.
+void checkGamepadInput()
+{
+    if (!SDL_InitSubSystem(SDL_INIT_GAMEPAD)) {
+        check(false, std::format("SDL gamepad subsystem: {}", SDL_GetError()).c_str());
+        return;
+    }
+    const auto attach = [] {
+        SDL_VirtualJoystickDesc desc;
+        SDL_INIT_INTERFACE(&desc);
+        desc.type = SDL_JOYSTICK_TYPE_GAMEPAD;
+        desc.naxes = SDL_GAMEPAD_AXIS_COUNT;
+        desc.nbuttons = SDL_GAMEPAD_BUTTON_COUNT;
+        return SDL_AttachVirtualJoystick(&desc);
+    };
+    const auto device = [](SDL_EventType type, SDL_JoystickID id) {
+        SDL_Event event{};
+        event.gdevice = {.type = type, .which = id};
+        return event;
+    };
+    const auto button = [](SDL_JoystickID id, SDL_GamepadButton which, bool down) {
+        SDL_Event event{};
+        event.gbutton = {.type = down ? SDL_EVENT_GAMEPAD_BUTTON_DOWN : SDL_EVENT_GAMEPAD_BUTTON_UP, .which = id,
+                         .button = static_cast<Uint8>(which), .down = down};
+        return event;
+    };
+    const auto axis = [](SDL_JoystickID id, SDL_GamepadAxis which, float value) {
+        SDL_Event event{};
+        event.gaxis = {.type = SDL_EVENT_GAMEPAD_AXIS_MOTION, .which = id, .axis = static_cast<Uint8>(which),
+                       .value = static_cast<Sint16>(value * 32767.0f)};
+        return event;
+    };
+    const auto close = [](float a, float b) { return std::abs(a - b) < 1e-3f; };
+    const SDL_JoystickID first = attach(), second = attach();
+    check(first != 0 && second != 0, "two virtual gamepads attach");
+
+    kast::Input input;
+    input.onEvent(device(SDL_EVENT_GAMEPAD_ADDED, first));
+    input.onEvent(device(SDL_EVENT_GAMEPAD_ADDED, second));
+    check(input.gamepad && input.gamepadId == first, "the first connected gamepad is the active one");
+    input.onEvent(button(first, SDL_GAMEPAD_BUTTON_SOUTH, true));
+    input.onEvent(button(second, SDL_GAMEPAD_BUTTON_EAST, true));
+    check(input.padButtons[SDL_GAMEPAD_BUTTON_SOUTH] && !input.padButtons[SDL_GAMEPAD_BUTTON_EAST],
+          "pad button down recorded; another pad's buttons are ignored");
+    input.onEvent(button(first, SDL_GAMEPAD_BUTTON_SOUTH, false));
+    check(!input.padButtons[SDL_GAMEPAD_BUTTON_SOUTH], "pad button up recorded");
+
+    input.onEvent(axis(first, SDL_GAMEPAD_AXIS_LEFTX, 0.15f));
+    check(input.padAxis(SDL_GAMEPAD_AXIS_LEFTX) == 0.0f, "a stick inside its deadzone reads 0");
+    input.onEvent(axis(first, SDL_GAMEPAD_AXIS_LEFTY, 0.15f)); // together 0.21 from the centre: just past it
+    check(input.padAxis(SDL_GAMEPAD_AXIS_LEFTX) > 0.0f && input.padAxis(SDL_GAMEPAD_AXIS_LEFTX) < 0.02f,
+          "the stick deadzone is radial: both axes together pass it");
+    input.onEvent(axis(first, SDL_GAMEPAD_AXIS_LEFTY, 0.0f));
+    input.onEvent(axis(first, SDL_GAMEPAD_AXIS_LEFTX, 0.6f));
+    check(close(input.padAxis(SDL_GAMEPAD_AXIS_LEFTX), 0.5f), "past the deadzone a stick is rescaled: 0.6 reads 0.5");
+    input.onEvent(axis(first, SDL_GAMEPAD_AXIS_LEFTX, -1.0f));
+    check(close(input.padAxis(SDL_GAMEPAD_AXIS_LEFTX), -1.0f), "full deflection reads -1");
+    check(close(input.padAxis(SDL_GAMEPAD_AXIS_LEFTX, 0.5f), -1.0f), "full deflection reads -1 with a deadzone override");
+    input.onEvent(axis(first, SDL_GAMEPAD_AXIS_LEFTX, 0.4f));
+    check(input.padAxis(SDL_GAMEPAD_AXIS_LEFTX, 0.5f) == 0.0f, "a deadzone override");
+    input.onEvent(axis(first, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER, 0.05f));
+    check(input.padAxis(SDL_GAMEPAD_AXIS_RIGHT_TRIGGER) == 0.0f, "a trigger inside its deadzone reads 0");
+    input.onEvent(axis(first, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER, 0.55f));
+    check(close(input.padAxis(SDL_GAMEPAD_AXIS_RIGHT_TRIGGER), 0.5f), "a trigger is rescaled past its deadzone: 0.55 reads 0.5");
+
+    input.onEvent(button(first, SDL_GAMEPAD_BUTTON_NORTH, true));
+    input.clear();
+    check(input.gamepadId == first && input.gamepad && !input.padButtons[SDL_GAMEPAD_BUTTON_NORTH] &&
+              input.padAxes == std::array<float, kast::Input::kPadAxisCount>{},
+          "clear releases pad buttons and axes, the pad stays active");
+    input.onEvent(button(first, SDL_GAMEPAD_BUTTON_NORTH, true));
+    input.onEvent(axis(first, SDL_GAMEPAD_AXIS_RIGHTY, 1.0f));
+    SDL_Event focus{};
+    focus.type = SDL_EVENT_WINDOW_FOCUS_LOST;
+    input.onEvent(focus);
+    check(input.gamepadId == first && !input.padButtons[SDL_GAMEPAD_BUTTON_NORTH] &&
+              input.padAxis(SDL_GAMEPAD_AXIS_RIGHTY) == 0.0f,
+          "window focus loss releases pad buttons and axes");
+
+    input.onEvent(button(first, SDL_GAMEPAD_BUTTON_WEST, true));
+    input.onEvent(axis(first, SDL_GAMEPAD_AXIS_LEFTX, 1.0f));
+    SDL_DetachVirtualJoystick(first);
+    input.onEvent(device(SDL_EVENT_GAMEPAD_REMOVED, first));
+    check(input.gamepad && input.gamepadId == second && !input.padButtons[SDL_GAMEPAD_BUTTON_WEST] &&
+              input.padAxis(SDL_GAMEPAD_AXIS_LEFTX) == 0.0f,
+          "disconnecting the active pad releases its state and the next connected one takes over");
+    SDL_DetachVirtualJoystick(second);
+    input.onEvent(device(SDL_EVENT_GAMEPAD_REMOVED, second));
+    check(!input.gamepad && input.gamepadId == 0, "no pad left: none is active");
+
+    // --sim-gamepad's virtual pad: scripted values, back to rest after their frames (triggers released at rest).
+    kast::SimGamepad sim;
+    std::string error;
+    check(!sim.add("5,2,jump=1", error) && contains(error, "unknown control \"jump\"") && contains(error, "leftshoulder"),
+          "--sim-gamepad: an unknown control is refused, listing the valid ones");
+    check(!sim.add("5", error) && !sim.add("5,0,a=1", error) && !sim.add("5,2,a", error), "--sim-gamepad: malformed values refused");
+    check(sim.add("5,2,a=1+leftx=-1+righttrigger=1", error), "--sim-gamepad parses");
+    sim.attach();
+    int count = 0;
+    SDL_JoystickID* ids = SDL_GetGamepads(&count);
+    SDL_Gamepad* pad = count == 1 ? SDL_OpenGamepad(ids[0]) : nullptr;
+    SDL_free(ids);
+    const auto state = [&](int frame) {
+        sim.apply(frame);
+        SDL_UpdateGamepads();
+        return std::tuple(SDL_GetGamepadButton(pad, SDL_GAMEPAD_BUTTON_SOUTH), SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_LEFTX),
+                          SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_RIGHT_TRIGGER),
+                          SDL_GetGamepadAxis(pad, SDL_GAMEPAD_AXIS_LEFT_TRIGGER));
+    };
+    check(pad && state(4) == std::tuple(false, Sint16(0), Sint16(0), Sint16(0)), "--sim-gamepad: a pad at rest before its frame");
+    check(pad && state(5) == std::tuple(true, Sint16(-32767), Sint16(32767), Sint16(0)), "--sim-gamepad: the values on their frames");
+    check(pad && state(7) == std::tuple(false, Sint16(0), Sint16(0), Sint16(0)), "--sim-gamepad: back at rest after them");
+    SDL_CloseGamepad(pad);
+    SDL_QuitSubSystem(SDL_INIT_GAMEPAD);
+}
+
+// Action mapping (input_actions.h): project.kast's "input" block, held / pressed / released, axes, session binds.
+void checkInputActions()
+{
+    const std::string file = "C:/game/project.kast";
+    const kast::InputMap map = kast::parseInputMap(nlohmann::ordered_json::parse(R"({
+        "actions": {
+            "jump": ["key:Space", "pad:a"],
+            "fire": ["mouse:left", "pad:x"],
+            "broken": ["key:Space", "pad:jump"],
+            "notAList": "key:E"
+        },
+        "axes": {
+            "move": {"pad": "-lefty", "negative": "S", "positive": "W"},
+            "turn": {"pad": "leftx", "deadzone": 0.5},
+            "noKeys": {"negative": "A"},
+            "badAxis": {"pad": "leftz"}
+        },
+        "extra": 1
+    })"), file);
+    check(map.actions.size() == 2 && map.actions.contains("jump") && map.actions.contains("fire") && map.axes.size() == 2 &&
+              map.axes.contains("move") && map.axes.contains("turn"),
+          "input block: the valid actions and axes load, invalid ones are left out");
+    check(logged("C:/game/project.kast: \"input\".actions.broken: unknown gamepad button \"jump\"") &&
+              logged("\"input\".actions.notAList: must be an array") && logged("\"input\".axes.noKeys:") &&
+              logged("\"input\".axes.badAxis: unknown gamepad axis \"leftz\"") && logged("\"input\".extra: unknown key"),
+          "input block: each invalid entry is logged as an error naming the file and entry");
+    check(map.actions.at("jump") == std::vector<kast::InputBinding>{{kast::InputBinding::Device::Key, SDL_SCANCODE_SPACE},
+                                                                     {kast::InputBinding::Device::Pad, SDL_GAMEPAD_BUTTON_SOUTH}},
+          "input block: key and pad bindings parse");
+    check(map.axes.at("move").invert && map.axes.at("move").padAxis == SDL_GAMEPAD_AXIS_LEFTY &&
+              map.axes.at("turn").deadzone == 0.5f,
+          "input block: an inverted pad axis and a deadzone override");
+
+    kast::InputActions actions;
+    actions.reset(map);
+    kast::Input input;
+    actions.update(&input);
+    check(!actions.held("jump") && !actions.pressed("jump") && !actions.released("jump"), "an action starts up");
+    input.keysDown[SDL_SCANCODE_SPACE] = true;
+    actions.update(&input);
+    check(actions.held("jump") && actions.pressed("jump") && !actions.released("jump"), "actionPressed on the frame it goes down");
+    input.padButtons[SDL_GAMEPAD_BUTTON_SOUTH] = true;
+    actions.update(&input);
+    check(actions.held("jump") && !actions.pressed("jump"), "actionPressed is true for one frame only");
+    input.keysDown[SDL_SCANCODE_SPACE] = false;
+    actions.update(&input);
+    check(actions.held("jump"), "held while any binding is down");
+    input.padButtons[SDL_GAMEPAD_BUTTON_SOUTH] = false;
+    actions.update(&input);
+    check(!actions.held("jump") && actions.released("jump"), "actionReleased on the frame it goes up");
+    actions.update(&input);
+    check(!actions.released("jump"), "actionReleased is true for one frame only");
+    input.buttonsDown[0] = true;
+    actions.update(&input);
+    check(actions.pressed("fire"), "a mouse button binding");
+
+    input.keysDown[SDL_SCANCODE_W] = true;
+    check(actions.axis("move") == 1.0f, "an axis from its positive key");
+    input.padAxes[SDL_GAMEPAD_AXIS_LEFTY] = -0.6f; // stick up: -lefty pushes forward too
+    check(actions.axis("move") == 1.0f, "key and pad together are clamped to 1");
+    input.keysDown[SDL_SCANCODE_W] = false;
+    input.keysDown[SDL_SCANCODE_S] = true;
+    check(std::abs(actions.axis("move") - -0.5f) < 1e-3f, "key and pad parts add: -1 + 0.5");
+    input.padAxes[SDL_GAMEPAD_AXIS_LEFTY] = 1.0f;
+    check(actions.axis("move") == -1.0f, "key and pad together are clamped to -1");
+    input.padAxes[SDL_GAMEPAD_AXIS_LEFTY] = 0.0f;
+    input.padAxes[SDL_GAMEPAD_AXIS_LEFTX] = 0.4f;
+    check(actions.axis("turn") == 0.0f, "an axis' deadzone override applies to its pad axis");
+
+    std::string error;
+    actions.bind("jump", {*kast::parseInputBinding("key:J", error)});
+    input.keysDown[SDL_SCANCODE_J] = true;
+    input.padButtons[SDL_GAMEPAD_BUTTON_SOUTH] = true;
+    actions.update(&input);
+    check(actions.pressed("jump") && actions.map().actions.at("jump").size() == 1, "a session bind replaces the action's bindings");
+    input.keysDown[SDL_SCANCODE_J] = false;
+    actions.update(&input);
+    check(!actions.held("jump"), "after the bind pad:a no longer counts");
+    actions.reset(map);
+    check(actions.map().actions.at("jump").size() == 2, "a new session starts from the project's bindings");
+    check(kast::parseInputBinding("pad:start", error) && !kast::parseInputBinding("mouse:thumb", error) &&
+              contains(error, "left, middle, right, x1 or x2") && !kast::parseInputBinding("Space", error),
+          "binding strings are checked");
+}
+
+// kast.input's gamepad and action functions from Lua, with a project's input map.
+void checkLuaGamepad()
+{
+    const std::filesystem::path dir = luaTestDir();
+    writeFile(dir / "pad.lua", R"lua(local function fails(part, fn)
+    local ok, err = pcall(fn)
+    assert(not ok, "expected an error mentioning " .. part)
+    assert(string.find(err, part, 1, true), "error '" .. tostring(err) .. "' does not mention " .. part)
+end
+local frame = 0
+return { update = function(dt)
+    frame = frame + 1
+    if frame == 1 then
+        assert(kast.input.gamepadConnected() == false, "no pad")
+        assert(kast.input.gamepadButton("a") and not kast.input.gamepadButton("b"), "gamepadButton by name")
+        assert(math.abs(kast.input.gamepadAxis("leftx") - 0.5) < 1e-3, "gamepadAxis with the deadzone applied")
+        assert(kast.input.gamepadAxis("righttrigger") == 0, "gamepadAxis of a trigger at rest")
+        fails('kast.input.gamepadButton: unknown button jump (a, b, x, y, back, guide, start, leftstick', function() kast.input.gamepadButton("jump") end)
+        fails("kast.input.gamepadAxis: unknown axis leftz (leftx, lefty, rightx, righty, lefttrigger, righttrigger)", function() kast.input.gamepadAxis("leftz") end)
+        fails("kast.input.action: unknown action fly (jump)", function() kast.input.action("fly") end)
+        fails("kast.input.actionPressed: unknown action 3 (jump)", function() kast.input.actionPressed(3) end)
+        fails("kast.input.actionReleased: unknown action fly (jump)", function() kast.input.actionReleased("fly") end)
+        fails("kast.input.axis: unknown axis strafe (move)", function() kast.input.axis("strafe") end)
+        fails("kast.input.bind: unknown action fly (jump)", function() kast.input.bind("fly", "key:F") end)
+        fails('kast.input.bind: unknown gamepad button "z"', function() kast.input.bind("jump", "pad:z") end)
+        fails('kast.input.bindAxis: unknown gamepad axis "up"', function() kast.input.bindAxis("move", {pad = "up"}) end)
+        assert(kast.input.action("jump") and kast.input.actionPressed("jump") and not kast.input.actionReleased("jump"),
+               "the pad's a button holds jump, pressed this frame")
+        assert(kast.input.axis("move") == 1, "W pushes move to 1")
+        kast.input.bind("jump", {"key:J"})
+        kast.input.bindAxis("move", {pad = "-lefty"})
+    elseif frame == 2 then
+        assert(not kast.input.action("jump") and kast.input.actionReleased("jump"), "rebound: the a button no longer holds jump")
+        assert(kast.input.axis("move") == 0, "rebound: W no longer moves")
+        kast.log("lua gamepad checks done")
+    end
+end })lua");
+    kast::Scene scene;
+    scene.systems = {"pad.lua"};
+    kast::Input input;
+    input.padButtons[SDL_GAMEPAD_BUTTON_SOUTH] = true;
+    input.padAxes[SDL_GAMEPAD_AXIS_LEFTX] = 0.6f;
+    input.keysDown[SDL_SCANCODE_W] = true;
+    kast::LuaSystems lua;
+    lua.setInputMap(kast::parseInputMap(nlohmann::ordered_json::parse(R"({"actions": {"jump": ["pad:a"]},
+        "axes": {"move": {"negative": "S", "positive": "W"}}})"), "project.kast"));
+    lua.start(scene, dir, "", &input);
+    lua.tick(0.1f);
+    lua.tick(0.1f);
+    checkOk(lua, 0, "kast.input gamepad and action asserts in Lua pass");
+    check(logged("lua gamepad checks done"), "the Lua gamepad checks ran to the end");
+    lua.stop();
 }
 
 void checkSystemsFormat()
@@ -1890,6 +2147,19 @@ void checkProjectFiles()
         error.clear();
         check(!kast::resolveProjectPath(root, path, error) && contains(error, mention), path);
     }
+
+    // The "input" block: an invalid entry is logged and left out, the rest loads; saving writes the block back as read.
+    std::filesystem::create_directories(dir / "input");
+    const std::string inputBlock = R"({"actions": {"jump": ["key:Space", "pad:a"], "bad": ["pad:nope"]}, "axes": {"move": {"pad": "-lefty"}}})";
+    writeFile(dir / "input/project.kast", R"({"version": 1, "name": "Pad", "startScene": null, "input": )" + inputBlock + "}");
+    check(kast::loadProject(dir / "input/project.kast", loaded, error) && loaded.input.actions.size() == 1 &&
+              loaded.input.actions.contains("jump") && loaded.input.axes.contains("move"),
+          "project.kast with an invalid input entry still loads its valid ones");
+    check(logged(std::format("{}: \"input\".actions.bad: unknown gamepad button \"nope\"", (dir / "input/project.kast").string())),
+          "the invalid input entry is logged naming project.kast and the entry");
+    check(kast::saveProject(loaded, error) &&
+              nlohmann::ordered_json::parse(readText(dir / "input/project.kast"))["input"] == nlohmann::ordered_json::parse(inputBlock),
+          "saving keeps the input block as written, the invalid entry too");
 }
 
 // Opening scenes and projects on a Document (the File menu adds dialogs and modals on top).
@@ -17493,6 +17763,15 @@ int main(int argc, char** argv)
         kast::log::info(g_failures == 0 ? "All additive scene checks passed" : std::format("{} additive scene check(s) failed", g_failures));
         return g_failures == 0 ? 0 : 1;
     }
+    if (argc == 2 && std::string_view(argv[1]) == "--input") { // only the keyboard, mouse, gamepad and action checks
+        checkInput();
+        checkGamepadInput();
+        checkInputActions();
+        checkLuaGamepad();
+        removeTree(testRoot());
+        kast::log::info(g_failures == 0 ? "All input checks passed" : std::format("{} input check(s) failed", g_failures));
+        return g_failures == 0 ? 0 : 1;
+    }
     if (argc == 2 && std::string_view(argv[1]) == "--assets") { // only the Assets panel file logic checks
         checkAssets();
         removeTree(testRoot());
@@ -17642,6 +17921,9 @@ int main(int argc, char** argv)
     checkCameras();
     checkStatsOverlay();
     checkInput();
+    checkGamepadInput();
+    checkInputActions();
+    checkLuaGamepad();
     checkRotatorSystem();
     checkSnapshot();
     checkPlayMode();

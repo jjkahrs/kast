@@ -2,6 +2,7 @@
 
 #include "audio.h"
 #include "gui_scale.h"
+#include "input_actions.h"
 
 #include <filesystem>
 #include <optional>
@@ -40,6 +41,9 @@ struct Project {
     // Game GUI scaling defaults and the player's default window (docs/engine/game-gui.html#scaling). Optional in the
     // file ("gui"): absent = all defaults, and saving leaves out the block while it is.
     GuiConfig gui{};
+    // Input actions and axes (input_actions.h). Optional in the file ("input"): invalid entries are logged and left out
+    // at load, and saving writes the block back as it was read.
+    InputMap input{};
 };
 
 // online's own rules, without touching files: authUrl empty or an http(s) URL (set when enabled), caFile a path inside

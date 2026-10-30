@@ -476,6 +476,7 @@ void startPlay(Document& doc)
         std::optional<kast::AuthConfig> auth;
         if (std::string error; doc.project && !(auth = kast::authConfig(*doc.project, error)) && !error.empty())
             kast::log::error(std::format("Online Services: {}; kast.auth is off for this Play session", error));
+        doc.lua.setInputMap(doc.project ? doc.project->input : kast::InputMap{});
         doc.lua.start(doc.scene, doc.project ? std::optional(doc.project->root) : std::nullopt, projectScenePath(doc),
                       &doc.input, doc.project ? doc.project->stateMachines.value_or(std::vector<std::string>{})
                                               : std::vector<std::string>{},

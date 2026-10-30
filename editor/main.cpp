@@ -34,6 +34,7 @@
 #include <prefab.h>
 #include <renderer.h>
 #include <sdfgi.h>
+#include <sim_gamepad.h>
 #include <world_client.h>
 
 #include <SDL3/SDL.h>
@@ -90,7 +91,7 @@ constexpr const char* kUsage =
     "[--open-graph file.kshadergraph] [--graph-add type[,x,y]] [--graph-link N.pin,M.pin] [--graph-unlink N.pin] [--graph-select N[,M...]] "
     "[--graph-delete N[,M...]] [--graph-set N.setting=json] [--graph-comment title,x,y,w,h] [--graph-paste x,y] [--graph-undo N] [--graph-redo N] "
     "[--graph-save] [--graph-add-menu N.pin|/] [--graph-preview sphere|cube|plane] [--graph-view-code] [--preview-model path] [--preview-clip name] [--preview-lod N] "
-    "[--sim-mouse frame,none|left|right[+shift],dx,dy,wheel[,sx,sy[,hold]]] [--sim-key frame,[ctrl+]key]... [--sim-on-log text] [--settings-file settings.json] [--open-preferences] "
+    "[--sim-mouse frame,none|left|right[+shift],dx,dy,wheel[,sx,sy[,hold]]] [--sim-key frame,[ctrl+]key]... [--sim-gamepad frame,frames,control=value[+...]]... [--sim-on-log text] [--settings-file settings.json] [--open-preferences] "
     "[--open-external path] [--drop-model path] [--create-prefab folder|/] [--drop-prefab path[,parentId]] [--drop-prefab-view path,u,v] "
     "[--set-field ID,Component.field,json] [--prefab-revert spec] [--prefab-apply spec] [--prefab-unpack ID] [--edit-prefab path] "
     "[--prefab-save] [--prefab-back] [--open-additive scene]... [--active-scene N] [--move-to-scene ID,N] [--scene-menu N] [--remove-scene N] [--scene-undo N] [--scene-redo N] [--assets-delete path] [--inspector-apply-menu Component.field] [--prefab-back-prompt] [--world-address host:port] [--online-login-env] [--online-compose up|down|ps] [--log-fps] [--log-sdfgi] [--fixed-dt S] [--no-vsync] [--no-instancing] [--no-culling] [--no-lod] [--lod-bias F] [--force-lod N] [--log-lod] [--no-occlusion] [--occlusion-unsupported] [--lod-tint] [--show-occluded] [--show-hiz MIP] [--show-gdata 1|2|3] [--scroll-post-section NAME] [--scene-debug-menu] [--terrain-lod-tint] [--terrain-lod-checker] [--no-terrain-skirts] [--no-audio-device] [--crash abort|assert] [--file-save] [--bake-probes] [--bake-lightmaps] [--bake-lightmaps-async] [--cancel-lightmaps N] [--bake-voxelgi] [zone edits] | "
@@ -225,7 +226,8 @@ struct Options {
     int previewLod = 0;       // and show this LOD of it
     std::optional<SimMouse> simMouse; // push these SDL mouse events on the Game panel (--play) or Scene view (the cursor lock isn't applied)
     std::vector<SimKey> simKeys;      // with --play: these key presses
-    std::string simOnLog;             // --sim-on-log: simMouse's and simKeys' frames count from the first log line with this
+    kast::SimGamepad simGamepad;      // with --play: a virtual gamepad driven by these values (sim_gamepad.h)
+    std::string simOnLog;             // --sim-on-log: simMouse's, simKeys' and simGamepad's frames count from the first log line with this
     std::string projectsFile;       // the recent-projects list; empty = the one in %APPDATA%
     std::string settingsFile;       // the editor settings (editor_settings.h); empty = the one in %APPDATA%
     bool openPreferences = false;   // open the File > Preferences modal for screenshots
@@ -504,13 +506,26 @@ bool parseSceneSetArg(std::string_view arg, int argc, char** argv, int& i, Optio
     return true;
 }
 
+// --sim-gamepad, outside parseArgs' else-if chain like parseGuiScalingArg.
+bool parseSimGamepadArg(std::string_view arg, int argc, char** argv, int& i, Options& options, bool& ok)
+{
+    if (arg != "--sim-gamepad" || i + 1 >= argc)
+        return false;
+    std::string error;
+    ok = options.simGamepad.add(argv[++i], error);
+    if (!ok)
+        kast::log::error(error);
+    return true;
+}
+
 std::optional<Options> parseArgs(int argc, char** argv)
 {
     Options options;
     for (int i = 1; i < argc; ++i) {
         const std::string_view arg = argv[i];
         const bool hasValue = i + 1 < argc;
-        if (bool ok = true; parseGuiScalingArg(arg, argc, argv, i, options, ok) || parseSceneSetArg(arg, argc, argv, i, options, ok)) {
+        if (bool ok = true; parseGuiScalingArg(arg, argc, argv, i, options, ok) || parseSceneSetArg(arg, argc, argv, i, options, ok) ||
+                                parseSimGamepadArg(arg, argc, argv, i, options, ok)) {
             if (!ok)
                 return std::nullopt;
         } else if (arg == "--frames" && hasValue && parsePositive(argv[i + 1], options.frames)) {
@@ -959,8 +974,12 @@ std::optional<Options> parseArgs(int argc, char** argv)
         kast::log::error("--sim-key requires --play, --open-graph or --focus-panel Scene");
         return std::nullopt;
     }
-    if (!options.simOnLog.empty() && !options.simMouse && options.simKeys.empty()) {
-        kast::log::error("--sim-on-log requires --sim-mouse or --sim-key");
+    if (!options.simGamepad.empty() && !options.play) {
+        kast::log::error("--sim-gamepad requires --play");
+        return std::nullopt;
+    }
+    if (!options.simOnLog.empty() && !options.simMouse && options.simKeys.empty() && options.simGamepad.empty()) {
+        kast::log::error("--sim-on-log requires --sim-mouse, --sim-key or --sim-gamepad");
         return std::nullopt;
     }
     if (!options.openExternal.empty() && options.project.empty()) {
@@ -1728,6 +1747,7 @@ int main(int argc, char** argv)
     FrameLimit frames(options->frames, options->screenshot);
     if (options->screenshotOnLog)
         frames.endOnLog(options->screenshotOnLog->first, options->screenshotOnLog->second);
+    kast::SimGamepad simGamepad = options->simGamepad; // attached at init
     size_t simLogSeen = 0; // --sim-on-log: log lines already searched
     std::optional<int> simStart; // the frame --sim-mouse / --sim-key frames count from; unset until --sim-on-log's line
     if (options->simOnLog.empty())
@@ -1785,6 +1805,8 @@ int main(int argc, char** argv)
         viewport.setShowWorldUI(!options->noSceneWorldUI);
         game.init(window);
         game.simulate(options->gameResolution, options->gameDisplayScale);
+        if (!simGamepad.empty())
+            simGamepad.attach();
         kast::gui::init();
         if (!options->openGui.empty()) {
             std::filesystem::path rml = std::filesystem::path(reinterpret_cast<const char8_t*>(options->openGui.c_str()));
@@ -1820,6 +1842,8 @@ int main(int argc, char** argv)
             doc.input.view = game.inputView();
             doc.input.onEvent(event);
             game.onEvent(event);
+        } else if (event.type == SDL_EVENT_GAMEPAD_ADDED || event.type == SDL_EVENT_GAMEPAD_REMOVED) {
+            doc.input.onEvent(event); // the pad is picked whoever has input; its buttons and axes need the Game view's
         }
     };
     FpsLog fpsLog;
@@ -2161,6 +2185,7 @@ int main(int argc, char** argv)
                              SDL_GetWindowID(mainWindow));
             for (const SimKey& key : options->simKeys)
                 pushSimKey(key, frame, SDL_GetWindowID(mainWindow));
+            simGamepad.apply(frame);
         }
 
         ImGui::Render();

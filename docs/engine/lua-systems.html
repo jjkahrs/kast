@@ -157,6 +157,36 @@ a wrong argument type raises a Lua error at the calling line.</p>
 <td><code>true</code> hides the cursor and locks it in the window (relative mode; <code>mouseDelta</code> keeps reporting motion); <code>false</code> shows it where the lock began. Released automatically when the game loses input (see the Game panel above). A non-boolean raises.</td>
 </tr>
 <tr>
+<td><code>kast.input.gamepadConnected()</code></td>
+<td>boolean</td>
+<td>Whether a gamepad is active (see <a href="#gamepad">Gamepad</a>).</td>
+</tr>
+<tr>
+<td><code>kast.input.gamepadButton(name)</code></td>
+<td>boolean</td>
+<td>The active pad's button held down, by SDL's name: <code>"a"</code>, <code>"b"</code>, <code>"x"</code>, <code>"y"</code>, <code>"back"</code>, <code>"guide"</code>, <code>"start"</code>, <code>"leftstick"</code>, <code>"rightstick"</code>, <code>"leftshoulder"</code>, <code>"rightshoulder"</code>, <code>"dpup"</code>, <code>"dpdown"</code>, <code>"dpleft"</code>, <code>"dpright"</code>, <code>"misc1"</code>, <code>"paddle1"</code>..<code>"paddle4"</code>, <code>"touchpad"</code>, <code>"misc2"</code>..<code>"misc6"</code> (Xbox layout: <code>"a"</code> is the bottom face button). An unknown name raises, listing these.</td>
+</tr>
+<tr>
+<td><code>kast.input.gamepadAxis(name)</code></td>
+<td>number</td>
+<td><code>"leftx"</code>, <code>"lefty"</code>, <code>"rightx"</code>, <code>"righty"</code> (-1..1; + is right / down) or <code>"lefttrigger"</code>, <code>"righttrigger"</code> (0..1), with the <a href="#gamepad">deadzone</a> applied. An unknown name raises, listing these.</td>
+</tr>
+<tr>
+<td><code>kast.input.action(name)</code>, <code>kast.input.actionPressed(name)</code>, <code>kast.input.actionReleased(name)</code></td>
+<td>boolean</td>
+<td>A project <a href="#input-actions">action</a>: held (any of its bindings down); went down this frame; went up this frame. Pressed and released are true for exactly one frame. An unknown action raises, listing the defined ones.</td>
+</tr>
+<tr>
+<td><code>kast.input.axis(name)</code></td>
+<td>number</td>
+<td>A project <a href="#input-actions">axis</a>, -1..1: its keys and pad axis added, clamped. An unknown axis raises, listing the defined ones.</td>
+</tr>
+<tr>
+<td><code>kast.input.bind(action, binding)</code>, <code>kast.input.bindAxis(axis, binding)</code></td>
+<td>—</td>
+<td>Replaces an action's bindings (one binding string or a list: <code>kast.input.bind("jump", {"key:J", "pad:a"})</code>) or an axis' (a table shaped like its <code>project.kast</code> entry: <code>{pad = "-lefty", negative = "S", positive = "W"}</code>) for this Play session only; nothing is saved. An unknown name or an invalid binding raises.</td>
+</tr>
+<tr>
 <td><code>kast.loadScene(path [, {additive = true}])</code></td>
 <td>—</td>
 <td>With <code>{additive = true}</code>: loads <code>path</code> on top of the loaded scenes at the end of the frame, its systems not already
@@ -201,7 +231,49 @@ and new entities go into it. Raises if <code>path</code> isn't loaded (counting 
 </tr>
 </tbody>
 </table>
-<p>Input is only live while the Game panel is focused and playing; otherwise every key is up and the delta is 0.</p>
+<p>Input is only live while the Game panel is focused and playing; otherwise every key, mouse and gamepad button is up and the delta is 0.</p>
+<h2 id="gamepad">Gamepad</h2>
+<p>One gamepad drives the game, in the player and in the editor's Play mode: the first one connected (SDL's gamepad API, so
+Xbox, PlayStation, Switch Pro and other mapped controllers). When it is unplugged its buttons and axes are released and
+the next connected pad, if any, takes over; a pad plugged in while none is active becomes the active one. There is no
+pad index: a second pad is ignored until the first goes.</p>
+<p><strong>Deadzones</strong>: each stick has a radial deadzone of 0.2 (the stick's distance from its centre, both axes together)
+and each trigger a deadzone of 0.1. Past it the value is rescaled, so it starts at 0 just outside the deadzone and
+reaches 1 (-1) at full deflection. <code>kast.input.gamepadAxis</code> and <code>kast.input.axis</code> return the rescaled value; an
+axis in <code>project.kast</code> can set its own <code>"deadzone"</code>.</p>
+<p>Losing input (the editor's Game panel unfocused, the window losing focus, a scene switch) releases the pad's buttons
+and axes as it does keys; the pad itself stays active.</p>
+<h2 id="input-actions">Input actions and axes</h2>
+<p>A project can name its controls in <code>project.kast</code>'s optional <code>"input"</code> block, so scripts read
+<code>kast.input.action("jump")</code> instead of Space or the A button, and one script works with keyboard, mouse and pad:</p>
+<pre><code class="language-json">&quot;input&quot;: {
+  &quot;actions&quot;: {
+    &quot;jump&quot;: [&quot;key:Space&quot;, &quot;pad:a&quot;],
+    &quot;fire&quot;: [&quot;mouse:left&quot;, &quot;pad:rightshoulder&quot;],
+    &quot;bag&quot;: [&quot;key:B&quot;, &quot;pad:dpdown&quot;]
+  },
+  &quot;axes&quot;: {
+    &quot;move&quot;: {&quot;pad&quot;: &quot;-lefty&quot;, &quot;negative&quot;: &quot;S&quot;, &quot;positive&quot;: &quot;W&quot;},
+    &quot;turn&quot;: {&quot;pad&quot;: &quot;leftx&quot;, &quot;negative&quot;: &quot;A&quot;, &quot;positive&quot;: &quot;D&quot;},
+    &quot;lookX&quot;: {&quot;pad&quot;: &quot;rightx&quot;, &quot;deadzone&quot;: 0.25}
+  }
+}
+</code></pre>
+<ul>
+<li><strong>Actions</strong>: a name and a list of bindings, any of which holds it: <code>"key:&lt;name&gt;"</code> (the names
+<code>kast.input.keyDown</code> takes), <code>"mouse:left|middle|right|x1|x2"</code>, <code>"pad:&lt;button&gt;"</code> (the names
+<code>kast.input.gamepadButton</code> takes).</li>
+<li><strong>Axes</strong>: <code>"pad"</code>, a pad axis (<code>"-lefty"</code>: negated, so pushing the stick up gives +1), and/or a key
+pair, <code>"negative"</code> (-1) and <code>"positive"</code> (+1). Keys and pad add up, clamped to -1..1. <code>"deadzone"</code> (0 to below 1)
+replaces the default for the pad axis.</li>
+</ul>
+<p>An invalid entry (an unknown key, button or axis name, a missing key pair half, a bad deadzone) is a Console error naming
+the file and the entry, <code>[error] C:/game/project.kast: "input".actions.jump: unknown gamepad button "jmp" (a, b, ...); left
+out</code>, and is left out; the rest of the block and the project still load. Saving the project from the editor writes the
+block back as it was read.</p>
+<p>Each frame, before the systems' updates, every action is sampled once: <code>actionPressed</code> and
+<code>actionReleased</code> compare it with the previous frame, so they are true for exactly one frame and agree across
+systems. Mouse look, drags, clicks and the wheel stay on the raw <code>kast.input.mouse*</code> functions.</p>
 <p>These work the same on <a href="lua-components.html#lua-components">Lua components</a> (<code>kast.get(e, "Health")</code>, ...), whose <code>array</code> fields are
 1-based Lua sequences (<code>{"gold", "potion"}</code>); <code>kast.set</code> replaces an array field as a whole.</p>
 <p>Field values: <code>float</code>/<code>int</code> are Lua numbers (an <code>int</code> field needs an integral number; numbers must be finite),

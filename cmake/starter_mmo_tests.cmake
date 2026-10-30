@@ -203,6 +203,9 @@ foreach(stage
     # Combat (scripts/combat.lua, the server's systems/combat.lua). The screenshot is taken a moment after the driver's
     # "SHOT" line (--screenshot-on-log); FRAMES is only the upper bound. A left click (no drag) selects the Bat:
     "starter_mmo_live_combat_target|combat_target|Fighter|6000|OFF|test driver: target selected Bat .[0-9]+., 1 marker|--sim-mouse 2400,left,0,0,0 --screenshot-on-log 30,SHOT"
+    # A gamepad (--sim-gamepad, from the driver's PAD line): RB selects the Bat, X fires power 1 (predicted), A jumps
+    # (over 1 m up), the left stick pushed forward walks the character off:
+    "starter_mmo_live_pad|pad|Padder|6000|OFF|test driver: target selected Bat .[0-9]+., 1 marker&test driver: PAD.*test driver: predicted strike&test driver: jumped [1-9][.][0-9] m&test driver: moved [0-9.]+ m by the left stick|--sim-gamepad 10,3,rightshoulder=1 --sim-gamepad 40,3,x=1 --sim-gamepad 70,3,a=1 --sim-gamepad 130,90,lefty=-1 --sim-on-log PAD --screenshot-on-log 30,SHOT"
     # Tab, Escape, Tab, then 1 until the Bat dies; it stays as Fighter's corpse:
     "starter_mmo_live_combat|combat|Fighter|6000|OFF|test driver: target selected Bat&test driver: target cleared, 0 marker&test driver: combat log: You cast Strike on Bat for 12&test driver: combat log: Bat dies&test driver: corpse [0-9]+ owner [0-9]+|--screenshot-on-log 45,SHOT"
     # Mid-fight with the Guard: three Strikes, and it hits back:
@@ -339,13 +342,13 @@ add_test(NAME starter_mmo_live_secrets
   COMMAND "${CMAKE_COMMAND}" "-DSAMPLE=${KAST_STARTER}" "-DSTATE=${KAST_STARTER_STATE}" "-DSHOTS=${live_shots}"
           -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/starter_mmo_live_secrets.cmake")
 set_tests_properties(starter_mmo_live_secrets PROPERTIES FIXTURES_REQUIRED starter_mmo_live
-                     DEPENDS "starter_mmo_live_chars;starter_mmo_live_loading;starter_mmo_live_loaded;starter_mmo_live_enter_error;starter_mmo_live_world;starter_mmo_live_chat;starter_mmo_live_chat_down;starter_mmo_live_cavern;starter_mmo_live_travel;starter_mmo_live_camera;starter_mmo_live_camera_zoom;starter_mmo_live_camera_orbit;starter_mmo_live_combat_target;starter_mmo_live_combat;starter_mmo_live_combat_guard;starter_mmo_live_nameplates;starter_mmo_live_death;starter_mmo_live_revive;${inventory_stages};${class_stages};${equip_stages};${quest_stages}"
+                     DEPENDS "starter_mmo_live_chars;starter_mmo_live_loading;starter_mmo_live_loaded;starter_mmo_live_enter_error;starter_mmo_live_world;starter_mmo_live_chat;starter_mmo_live_chat_down;starter_mmo_live_cavern;starter_mmo_live_travel;starter_mmo_live_camera;starter_mmo_live_camera_zoom;starter_mmo_live_camera_orbit;starter_mmo_live_combat_target;starter_mmo_live_pad;starter_mmo_live_combat;starter_mmo_live_combat_guard;starter_mmo_live_nameplates;starter_mmo_live_death;starter_mmo_live_revive;${inventory_stages};${class_stages};${equip_stages};${quest_stages}"
                      SKIP_REGULAR_EXPRESSION "SKIP: ")
 set_tests_properties(starter_mmo_live_setup starter_mmo_live_teardown starter_mmo_live_chars starter_mmo_live_loading
                      starter_mmo_live_loaded starter_mmo_live_enter_error starter_mmo_live_world
                      starter_mmo_live_chat starter_mmo_live_chat_down
                      starter_mmo_live_cavern starter_mmo_live_travel starter_mmo_live_camera starter_mmo_live_camera_zoom
-                     starter_mmo_live_camera_orbit starter_mmo_live_combat_target starter_mmo_live_combat
+                     starter_mmo_live_camera_orbit starter_mmo_live_combat_target starter_mmo_live_pad starter_mmo_live_combat
                      starter_mmo_live_combat_guard starter_mmo_live_nameplates starter_mmo_live_death starter_mmo_live_revive
                      starter_mmo_live_secrets
                      ${inventory_stages} ${class_stages} ${equip_stages} ${quest_stages} PROPERTIES RUN_SERIAL TRUE)

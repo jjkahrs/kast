@@ -1,10 +1,11 @@
--- Interactable zone objects (the Meadow Shrine, maps/meadow/objects): E activates the nearest one within REACH m of
--- the character (kast.nearestInteractable, kast.interact; the engine binds no keys, this script does). Walking into
+-- Interactable zone objects (the Meadow Shrine, maps/meadow/objects): the "use" action (E, or the pad's D-pad up;
+-- project.kast "input") activates the nearest one within REACH m of the character (kast.nearestInteractable,
+-- kast.interact; the engine binds no keys, this script does). Walking into
 -- reach tells the player once per approach. The server checks the range itself; its Lua (systems/shrines.lua) answers
 -- with "shrine.blessing", shown in the chat box (scripts/chat.lua, "chat.local").
 local REACH = 3 -- m from the object's edge: the shrine's server range
 local KEY = "E"
-local player, held, inReach = nil, false, nil
+local player, inReach = nil, nil
 
 local function chat(text) kast.publish("chat.local", {text = text}) end
 
@@ -15,7 +16,6 @@ return {
     end,
     update = function(dt)
         if not (kast.world and kast.world.state() == "inWorld") then
-            held = false
             return
         end
         if not player then
@@ -25,10 +25,8 @@ return {
         local near = kast.nearestInteractable(kast.get(player, "Transform").position, REACH)
         if near and near.id ~= inReach then chat(string.format("[%s] Use the %s", KEY, near.name ~= "" and near.name or "object")) end
         inReach = near and near.id
-        local down = kast.input.keyDown(KEY) and not (kast.gui and kast.gui.focusedField())
-        if down and not held then
+        if kast.input.actionPressed("use") and not (kast.gui and kast.gui.focusedField()) then
             if near then kast.interact(near.id) else chat("There is nothing here to use.") end
         end
-        held = down
     end,
 }

@@ -3,5 +3,25 @@
   "name": "Starter MMO",
   "startScene": { "id": "47da4599-7d2e-4f9d-8b6b-24ca4ef57c2f", "path": "scenes/login.scene" },
   "stateMachines": ["session", "loading"],
-  "online": {"enabled": true, "authUrl": "http://localhost:3100", "caFile": "certs/world_dev_ca.pem"}
+  "online": {"enabled": true, "authUrl": "http://localhost:3100", "caFile": "certs/world_dev_ca.pem"},
+  "input": {
+    "actions": {
+      "jump": ["key:Space", "pad:a"],
+      "power1": ["key:1", "pad:x"],
+      "power2": ["key:2", "pad:y"],
+      "power3": ["key:3", "pad:b"],
+      "targetNext": ["key:Tab", "pad:rightshoulder"],
+      "targetClear": ["key:Escape", "pad:leftshoulder"],
+      "use": ["key:E", "pad:dpup"],
+      "bag": ["key:B", "pad:dpdown"],
+      "questLog": ["key:L", "pad:back"],
+      "character": ["key:C", "pad:start"]
+    },
+    "axes": {
+      "move": {"pad": "-lefty", "negative": "S", "positive": "W"},
+      "turn": {"pad": "leftx", "negative": "A", "positive": "D"},
+      "lookX": {"pad": "rightx"},
+      "lookY": {"pad": "righty"}
+    }
+  }
 }

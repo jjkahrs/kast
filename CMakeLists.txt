@@ -184,7 +184,7 @@ target_compile_options(xatlas PRIVATE /W0 /utf-8)
 # --- engine: reusable by the shipped client, no ImGui/editor code ---
 add_library(kast_engine STATIC
   engine/app.cpp engine/undo.cpp engine/crash_dialogs.cpp engine/log.cpp engine/math3d.cpp engine/scene.cpp engine/scene_io.cpp engine/prefab.cpp engine/components.cpp
-  engine/systems.cpp engine/renderer.cpp engine/shader.cpp engine/shader_graph.cpp engine/shadow.cpp engine/frustum.cpp engine/lod.cpp engine/occlusion.cpp engine/material.cpp engine/asset_ref.cpp engine/input.cpp engine/lua_systems.cpp engine/lua_chat_api.cpp engine/lua_world_api.cpp engine/project.cpp
+  engine/systems.cpp engine/renderer.cpp engine/shader.cpp engine/shader_graph.cpp engine/shadow.cpp engine/frustum.cpp engine/lod.cpp engine/occlusion.cpp engine/material.cpp engine/asset_ref.cpp engine/input.cpp engine/input_actions.cpp engine/sim_gamepad.cpp engine/lua_systems.cpp engine/lua_chat_api.cpp engine/lua_world_api.cpp engine/project.cpp
   engine/state_machines.cpp engine/lua_state_machines.cpp engine/post_process.cpp
   engine/lua_sandbox.cpp engine/lua_components.cpp engine/lua_items.cpp engine/pak.cpp engine/files.cpp engine/play.cpp engine/event_bus.cpp
   engine/gui.cpp engine/gui_render.cpp engine/gui_effects.cpp engine/gui_events.cpp engine/gui_models.cpp engine/gui_widgets.cpp engine/gui_lists.cpp engine/gui_richtext.cpp engine/gui_prefabs.cpp engine/gui_scale.cpp engine/scene_gui.cpp engine/world_ui.cpp engine/window_display.cpp engine/model.cpp engine/animation.cpp engine/physics.cpp
@@ -396,6 +396,32 @@ add_test(NAME game_f3_unfocused
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/game_f3_unfocused.png"
           "-DEXTRA_ARGS=--scene ${KAST_TEST_SCENES}/basic.scene --play --sim-key 30,F3" -DFOCUS_PANEL=Hierarchy
           "-DFORBID_OUTPUT=Stats overlay" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+# Gamepad in Play (docs/engine/lua-systems.html#gamepad): tests/scenes/gamepad.scene's script runs the Player cube on
+# project.kast's "move" / "turn" axes and orbits the camera on "lookX", logging both on its frame 100. A --sim-gamepad
+# virtual pad (left stick forward, right stick right for 50 frames) moves the cube and turns the camera; with no pad
+# nothing moves; with the Hierarchy focused (the Game view without input) the pad is connected but drives nothing.
+set(KAST_GAMEPAD_ARGS "--scene ${KAST_TEST_SCENES}/gamepad.scene --play --fixed-dt 0.0333 --no-audio-device")
+add_test(NAME gamepad_play_before
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/gamepad_before.png"
+          "-DEXTRA_ARGS=${KAST_GAMEPAD_ARGS}" -DFRAMES=140
+          "-DEXPECT_OUTPUT=gamepad test: pad none, position x=0\\.00 z=0\\.00, camera yaw=0\\.00"
+          "-DFORBID_OUTPUT=\\[error\\]|Lua error" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME gamepad_play_after
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/gamepad_after.png"
+          "-DEXTRA_ARGS=${KAST_GAMEPAD_ARGS} --sim-gamepad 30,50,lefty=-1+rightx=1" -DFRAMES=140
+          "-DEXPECT_OUTPUT=gamepad test: pad connected, position x=-?0\\.00 z=-[1-9][0-9]*\\.[0-9][0-9], camera yaw=-[1-9]\\.[0-9][0-9]"
+          "-DFORBID_OUTPUT=\\[error\\]|Lua error" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+add_test(NAME gamepad_play_differs
+  COMMAND "${CMAKE_COMMAND}" "-DA=${CMAKE_CURRENT_BINARY_DIR}/gamepad_before.png" "-DB=${CMAKE_CURRENT_BINARY_DIR}/gamepad_after.png"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/differs_test.cmake")
+set_tests_properties(gamepad_play_before PROPERTIES FIXTURES_SETUP gamepad_before_shot)
+set_tests_properties(gamepad_play_after PROPERTIES FIXTURES_SETUP gamepad_after_shot)
+set_tests_properties(gamepad_play_differs PROPERTIES FIXTURES_REQUIRED "gamepad_before_shot;gamepad_after_shot")
+add_test(NAME gamepad_play_unfocused
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/gamepad_unfocused.png"
+          "-DEXTRA_ARGS=${KAST_GAMEPAD_ARGS} --sim-gamepad 30,50,lefty=-1+rightx=1" -DFRAMES=140 -DFOCUS_PANEL=Hierarchy
+          "-DEXPECT_OUTPUT=gamepad test: pad connected, position x=0\\.00 z=0\\.00, camera yaw=0\\.00"
+          "-DFORBID_OUTPUT=\\[error\\]|Lua error" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
 add_test(NAME game_no_camera
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/game_no_camera.png"
           "-DEXTRA_ARGS=--scene ${KAST_TEST_SCENES}/no_camera.scene --play" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
