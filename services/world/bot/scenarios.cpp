@@ -945,36 +945,6 @@ asio::awaitable<void> respawn(Ctx& x) {
 }
 
 // --- 19: ground on the sample "hills" map (docs/services/world/maps.html#ground) ---
-// A map's manifest and heights, read the way the server reads them (needs --map-root: the server's maps/ folder).
-struct Terrain {
-    map::MapInfo info;
-    map::TileHeights heights;
-    float ground(float x, float z) const { return map::ground_at(info, heights, x, z).value_or(NAN); }
-};
-
-std::optional<Terrain> load_terrain(const std::filesystem::path& folder, std::string& err) {
-    const auto read = [](const std::filesystem::path& p) {
-        std::ifstream in(p, std::ios::binary);
-        return std::string(std::istreambuf_iterator<char>(in), {});
-    };
-    auto info = map::parse_manifest(nlohmann::json::parse(read(folder / "map.json"), nullptr, false), err);
-    if (!info) { err = (folder / "map.json").string() + ": " + err; return std::nullopt; }
-    Terrain t{std::move(*info), {}};
-    for (const auto& r : t.info.tiles)
-        for (int32_t tz = r.z0; tz <= r.z1; ++tz)
-            for (int32_t tx = r.x0; tx <= r.x1; ++tx) {
-                for (const char* ext : {".r16", ".png"}) {
-                    const auto file = folder / "heights" / (std::to_string(tx) + "_" + std::to_string(tz) + ext);
-                    if (!std::filesystem::exists(file)) continue;
-                    auto h = map::decode_heights(read(file), ext, err);
-                    if (!h) { err = file.string() + ": " + err; return std::nullopt; }
-                    t.heights[{tx, tz}] = std::move(*h);
-                    break;
-                }
-            }
-    return t;
-}
-
 // A and B take start's "hills_gate" portal to map 3 and land on the ground; A walks up the slope at ground height (no
 // Correction) and B sees its EntityMoves along the ground; then A flies up and is snapped back with Correction.
 // The walk stays under hills' 40 degree nav.maxSlopeDeg: steeper is off the navmesh (scenario 20).

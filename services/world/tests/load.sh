@@ -8,6 +8,9 @@
 # the "tick stats total" and "net stats total" lines. Also prints each net thread's busy % (information only).
 # LAYER_CAP=500 gives START_MAP "layerCap": 500 for this run only (a copy of the maps: tests/stack_override.sh), and
 # the world is recreated with the default maps afterwards; the result shows the peak live layers per map.
+# MAP_DIR=<maps folder> START_MAP=<id> runs on that folder's maps instead (tests/stack_override.sh), e.g. a generated
+# big map (tools/map_bench); ZONE=<metres> is the wander square's edge (kast_bot --zone, default 2048), TERRAIN=<map
+# folder> makes the wanderers walk at that map's ground height (kast_bot --terrain), as a client does on relief.
 # Pass: bot summary PASS, every 10 s window's tick p99 < 25 ms, run p99 < 25 ms, zero failed save attempts, and
 # enter p99 (each bot's connect -> EnterWorldOk, the login storm's lobby latency) < 500 ms.
 set -u
@@ -21,6 +24,8 @@ THREADS="${THREADS:-8}"
 MAPS="${MAPS:-}"
 INSTANCE_SIZE="${INSTANCE_SIZE:-}"
 LAYER_CAP="${LAYER_CAP:-}"
+ZONE="${ZONE:-}"
+TERRAIN="${TERRAIN:-}"
 export MAP_THREADS="${MAP_THREADS:-1}" # read by docker-compose.yml
 export NET_THREADS="${NET_THREADS:-4}"
 export MAX_CONNECTIONS="${MAX_CONNECTIONS:-$((COUNT + 100))}"
@@ -40,9 +45,9 @@ done
 WORLD=$(docker compose ps -q world)
 since=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 
-echo "load: $COUNT x $BEHAVIOUR for ${DURATION}s on maps ${MAPS:-START_MAP}, MAP_THREADS=$MAP_THREADS NET_THREADS=$NET_THREADS${LAYER_CAP:+, LAYER_CAP=$LAYER_CAP} (run $RUN)"
+echo "load: $COUNT x $BEHAVIOUR for ${DURATION}s on maps ${MAPS:-START_MAP}${MAP_DIR:+ of $MAP_DIR}${ZONE:+, zone ${ZONE} m}${TERRAIN:+, at the ground height of $TERRAIN}, MAP_THREADS=$MAP_THREADS NET_THREADS=$NET_THREADS${LAYER_CAP:+, LAYER_CAP=$LAYER_CAP} (run $RUN)"
 docker compose run --rm -T bot --run-id "$RUN" --mode load --count "$COUNT" --behaviour "$BEHAVIOUR" \
-    --duration "$DURATION" --threads "$THREADS" ${MAPS:+--maps "$MAPS"} ${INSTANCE_SIZE:+--instance-size "$INSTANCE_SIZE"} 2>&1 | grep -v -E '^ *(Container|Network) ' | tee "$LOG"
+    --duration "$DURATION" --threads "$THREADS" ${MAPS:+--maps "$MAPS"} ${INSTANCE_SIZE:+--instance-size "$INSTANCE_SIZE"} ${ZONE:+--zone "$ZONE"} ${TERRAIN:+--terrain "/app/maps/$TERRAIN"} 2>&1 | grep -v -E '^ *(Container|Network) ' | tee "$LOG"
 botrc=${PIPESTATUS[0]}
 
 docker compose stop -t 15 world >/dev/null 2>&1 # emits "tick stats total"

@@ -303,6 +303,12 @@ and check only behaviour.</p>
   shows the peak number of live layers per layered map (from the <code>layer created</code> / <code>layer destroyed</code> lines). Example:
   <code>MAP_THREADS=4 COUNT=2000 LAYER_CAP=500 bash tests/load.sh</code> (4 layers; with <code>MAP_THREADS=1</code> the layers update one
   after another and the ticks run over, <a href="maps.html#layers">Layers</a>). Afterwards the script recreates <code>world</code> with the default maps.</li>
+<li id="load-map-dir"><strong>Other maps:</strong> <code>MAP_DIR=&lt;maps folder&gt; START_MAP=&lt;id&gt;</code> mounts that folder (absolute, or
+  <code>./</code> / <code>../</code> relative to <code>services/world</code>) for the world and the bot instead of <code>tests/project/maps</code>,
+  with that start map, for this run only (the same override); <code>ZONE=&lt;metres&gt;</code> is the wanderers' square edge
+  (<code>kast_bot --zone</code>, default 2048), and <code>TERRAIN=&lt;map folder&gt;</code> makes them walk at that map's ground height
+  (<code>kast_bot --terrain</code>), as a client does on relief. The map size benchmark (<code>tools/map_bench</code>) runs it on its generated maps, e.g.
+  <code>MAP_DIR=C:/dev/kast/build/map_bench/16/project/maps START_MAP=216 ZONE=4096 TERRAIN=bench16 bash tests/load.sh</code>.</li>
 <li><strong>Pass criteria:</strong><ul>
 <li>Bot summary PASS: every bot entered the world (and, with <code>MAPS</code>, reached its map), with no errors, no unexpected
   disconnects and no <code>Correction</code> for honest movers. Without <code>MAPS</code> a wanderer that walks into the sample portal

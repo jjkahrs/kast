@@ -32,6 +32,8 @@ void usage() {
         "                        (round robin), then wanders there clear of the portals\n"
         "  --instance-size N     load: bots per instance copy on an instance map in --maps (default its maxPlayers,\n"
         "                        else 10), each group with its own instance key (the sample test_hooks.lua's)\n"
+        "  --zone M              load: wanderers stay in the square 0..M on x and z (default 2048)\n"
+        "  --terrain DIR         load: wanderers walk at the ground height of that map folder (its map.json and heights)\n"
         "  --auth-key FILE       handshake scenario: auth's private key, to mint an expired token (test only)\n"
         "  --expect-pos X,Y,Z    restart-verify scenario\n"
         "  --map-root DIR        terrain/navmesh scenarios: the server's maps/ folder (ground heights)\n"
@@ -85,6 +87,7 @@ int main(int argc, char** argv) {
         else if (a == "--tag") o.extra["tag"] = val();
         else if (a == "--expect-components") o.extra["expect-components"] = val();
         else if (a == "--zone") o.extra["zone"] = val();
+        else if (a == "--terrain") o.extra["terrain"] = val();
         else if (a == "--maps") o.extra["maps"] = val();
         else if (a == "--instance-size") o.extra["instance-size"] = val();
         else if (a == "--char-option") {

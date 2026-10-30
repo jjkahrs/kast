@@ -142,9 +142,11 @@ struct Wander {
 
 // target: with --maps, the map this bot walks to through the portals and then wanders on (maps: --map-root's).
 // instanceKey: for an instance map target, the key its copy is picked by (sent to the sample test_hooks.lua first).
+// terrain (--terrain): a wanderer without target walks at its ground height, as a client would.
 asio::awaitable<void> run_bot(const Options& o, asio::ssl::context& tls, Stats& st, std::string token,
                               Millis startDelay, std::chrono::steady_clock::time_point end, const BotMaps& maps,
-                              std::optional<uint16_t> target, std::optional<std::string> instanceKey) {
+                              std::optional<uint16_t> target, std::optional<std::string> instanceKey,
+                              const Terrain* terrain) {
     co_await sleep_for(startDelay);
     const auto connectStart = std::chrono::steady_clock::now();
     std::string err;
@@ -248,6 +250,7 @@ asio::awaitable<void> run_bot(const Options& o, asio::ssl::context& tls, Stats& 
                 *pos = wander.step(*pos, m.x0, m.z0, m.x1, m.z1, &m);
             } else {
                 *pos = wander.step(*pos, 0, 0, zone, zone);
+                if (const float y = terrain ? terrain->ground(pos->x, pos->z) : NAN; !std::isnan(y)) pos->y = y;
             }
             c->send(proto::Move{*pos, wander.heading, tick * 100});
             ++st.movesSent;
@@ -288,6 +291,15 @@ int run_load(const Options& o) {
             if (!maps.contains(t)) err += " map " + std::to_string(t) + " is not under --map-root '" + o.mapRoot + "';";
         if (!err.empty() || targets.empty()) {
             std::fprintf(stderr, "--maps: %s\n", err.empty() ? "no map ids" : err.c_str());
+            return 2;
+        }
+    }
+    std::optional<Terrain> terrain;
+    if (const auto it = o.extra.find("terrain"); it != o.extra.end()) {
+        std::string err;
+        terrain = load_terrain(it->second, err);
+        if (!terrain) {
+            std::fprintf(stderr, "--terrain: %s\n", err.c_str());
             return 2;
         }
     }
@@ -337,7 +349,7 @@ int run_load(const Options& o) {
         if (tokens[i].empty()) continue;
         const Millis delay(1000LL * i / std::max(1, o.connectRatePerSec));
         const auto target = targets.empty() ? std::nullopt : std::optional(targets[i % targets.size()]);
-        asio::co_spawn(*ios[i % o.threads], run_bot(o, tls, st, tokens[i], delay, end, maps, target, keys[i]), [&st](std::exception_ptr e) {
+        asio::co_spawn(*ios[i % o.threads], run_bot(o, tls, st, tokens[i], delay, end, maps, target, keys[i], terrain ? &*terrain : nullptr), [&st](std::exception_ptr e) {
             if (!e) return;
             try { std::rethrow_exception(e); } catch (const std::exception& ex) { st.error(ex.what()); }
         });
