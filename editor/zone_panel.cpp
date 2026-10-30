@@ -498,14 +498,15 @@ void ZonePanel::drawTileGrid(zone::ZoneDoc& z, const km::MapInfo& info)
         for (int32_t tx = shown.x0; tx <= shown.x1; ++tx) {
             const km::TileKey t{tx, tz};
             const bool declared = info.has_tile(t);
-            const bool hot = input.hover == t;
+            const bool addable = declared || zone::within_cap(info, t);
+            const bool hot = input.hover == t && addable;
             const ImGuiCol color = hot && ImGui::IsItemActive() ? ImGuiCol_ButtonActive
                                    : hot                        ? ImGuiCol_ButtonHovered
                                    : declared                   ? ImGuiCol_Button
                                                                 : ImGuiCol_FrameBg;
             const ImVec2 min = grid_.corner(t), max{min.x + cell, min.y + cell};
             ImGui::RenderFrame(min, max, ImGui::GetColorU32(color), true, style.FrameRounding);
-            if (labels) {
+            if (labels && addable) {
                 const std::string label = declared ? zone::tile_name(t) : "+";
                 const ImVec2 size = ImGui::CalcTextSize(label.c_str());
                 const ImRect rect(min, max);
@@ -515,11 +516,15 @@ void ZonePanel::drawTileGrid(zone::ZoneDoc& z, const km::MapInfo& info)
             }
         }
     ImGui::PopClipRect();
+    if (input.hover && !zone::within_cap(info, *input.hover))
+        ImGui::SetTooltip("A map is at most %d tiles a side", zone::kMaxMapTiles);
     if (!input.clicked)
         return;
     const km::TileKey t = *input.hover;
-    if (!info.has_tile(t))
-        z.edit([&](zone::ZoneState& s) { zone::add_tile(info, s, t); });
+    if (!info.has_tile(t)) {
+        if (zone::within_cap(info, t))
+            z.edit([&](zone::ZoneState& s) { zone::add_tile(info, s, t); });
+    }
     else if (zone::declared_tiles(info).size() > 1)
         removeTile_ = t;
 }

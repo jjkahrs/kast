@@ -833,6 +833,17 @@ void check_tiles() {
     // Adding 2_0 takes the hill's edge, so the map has no seam.
     doc.edit([&](ZoneState& s) { CHECK(add_tile(info, s, {2, 0})); });
     CHECK(!add_tile(info_of(doc), doc.state, {2, 0})); // already declared
+    {   // One cap for both axes: a tile that would grow the bounding box past kMaxMapTiles a side is refused.
+        km::MapInfo wide = info_of(doc);
+        wide.tiles = {{0, 0, kMaxMapTiles - 1, 0}};
+        ZoneState s = doc.state;
+        CHECK(within_cap(wide, {kMaxMapTiles - 1, kMaxMapTiles - 1}) && within_cap(wide, {3, 1}));
+        CHECK(!within_cap(wide, {kMaxMapTiles, 0}) && !within_cap(wide, {-1, 1}));
+        CHECK(!within_cap(wide, {0, kMaxMapTiles}) && !within_cap(wide, {0, -kMaxMapTiles}));
+        const Json before = s.manifest;
+        CHECK(!add_tile(wide, s, {kMaxMapTiles, 0}) && !add_tile(wide, s, {5, -kMaxMapTiles}) && s.manifest == before);
+        CHECK(add_tile(wide, s, {5, kMaxMapTiles - 1}));
+    }
     info = info_of(doc);
     CHECK(info.has_tile({2, 0}) && doc.state.heights.contains({2, 0}) && seams_equal(doc));
     CHECK(height_at(doc, {2, 0}, 0, 200) == height_at(doc, {1, 0}, 256, 200) && height_at(doc, {2, 0}, 0, 200) > 10);

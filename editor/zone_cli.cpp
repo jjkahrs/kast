@@ -411,7 +411,7 @@ std::optional<bool> objectEdit(zone::ZoneDoc& doc, const Op& op)
 // Runs one zone edit; false (logged) stops the run. brush: --falloff's, for later sculpts.
 bool runOp(ZoneSession& zone, const Op& op, zone::Brush& brush)
 {
-    const auto bad = [&](const char* form) {
+    const auto bad = [&](std::string_view form) {
         kast::log::error(std::format("{} {}: expected {}", op.flag, op.value, form));
         return false;
     };
@@ -481,7 +481,9 @@ bool runOp(ZoneSession& zone, const Op& op, zone::Brush& brush)
             changed = op.flag == "--add-tile" ? zone::add_tile(*info, s, t) : zone::remove_tile(*info, s, t);
         });
         if (!changed)
-            return bad(op.flag == "--add-tile" ? "a tile not on the map" : "a tile on the map (not the last)");
+            return bad(op.flag == "--add-tile"
+                           ? std::format("a tile not on the map, within {} tiles a side", zone::kMaxMapTiles)
+                           : "a tile on the map (not the last)");
         return true;
     }
     if (op.flag == "--set-spawn") {

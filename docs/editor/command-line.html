@@ -599,7 +599,7 @@ the terrain), headings radians, tiles <code>tx,tz</code>. The full list is also 
 </tr>
 <tr>
 <td><code>--new-map &lt;folder&gt;[,W,H[,id]]</code></td>
-<td>A new map (named after its folder) of W x H tiles (default 2 x 2, 1-8 each) with that id (default: the lowest unused). Nothing is written until <code>--save-zone</code>.</td>
+<td>A new map (named after its folder) of W x H tiles (default 2 x 2, 1 to 64 each: <a href="zone-builder.html#map-size-limits">Map size limits</a>) with that id (default: the lowest unused). Nothing is written until <code>--save-zone</code>.</td>
 </tr>
 <tr>
 <td><code>--map-id N</code></td>
@@ -620,7 +620,7 @@ the terrain), headings radians, tiles <code>tx,tz</code>. The full list is also 
 </tr>
 <tr>
 <td><code>--add-tile tx,tz</code>, <code>--remove-tile tx,tz</code></td>
-<td>Add a tile (its edges take its neighbours' heights); remove one (not the last; its files are deleted on save).</td>
+<td>Add a tile (its edges take its neighbours' heights; refused if the map would be wider or deeper than 64 tiles); remove one (not the last; its files are deleted on save).</td>
 </tr>
 <tr><td colspan="2"><strong>Terrain</strong></td></tr>
 <tr>

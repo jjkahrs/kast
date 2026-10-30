@@ -37,8 +37,8 @@ logic (paths, cell states, the streaming diff) is <code>engine/tile_scenes.h</co
 first <code>Terrain</code> entity's map), with the same messages when there is no project, no <code>Terrain</code> entity, or the map does not
 load. Below the map's folder: the grid, a legend, and <strong>Problems</strong>.</p>
 <p><strong>The grid</strong> is the map's bounds from its lowest declared x and z (at least 8 x 8 cells), <strong>+z up</strong> (as the
-Zone tab's tile grid and the default camera). It opens fitted whole to the dock's width (cells up to 96 px; a 64 x 64 map's are a
-few pixels). The <strong>mouse wheel zooms</strong> about the mouse (out to the whole map, in to twice the widest cell) and a
+Zone tab's tile grid and the default camera). It opens fitted whole to the dock's width (cells up to 96 px; a 64 x 64 map's, the largest
+(<a href="zone-builder.html#map-size-limits">Map size limits</a>), are a few pixels). The <strong>mouse wheel zooms</strong> about the mouse (out to the whole map, in to twice the widest cell) and a
 <strong>drag</strong> with any button <strong>pans</strong> (never past the map's edges); a click without a drag picks a cell. Only the
 cells on screen are drawn. Labels and counts show on cells wide enough for them (24 px, more for two-digit names). Each cell shows:</p>
 <ul>

@@ -159,7 +159,9 @@ std::array<float, 2> cell_corner(const GridView& view, TileKey t);
 std::optional<TileKey> cell_at(const GridView& view, std::array<float, 2> p);
 // The fewest-ish rects covering tiles: runs along x per row, merged with the next rows that have the same run.
 Json tile_rects(const TileSet& tiles);
-// Declares tile t (false if it already is). Its heights start flat at heightMin, then take the shared edges of the
+// Whether declaring tile t keeps the map's bounding box within kMaxMapTiles a side.
+bool within_cap(const kast::map::MapInfo& info, TileKey t);
+// Declares tile t (false if it already is, or it would grow the map past kMaxMapTiles a side). Its heights start flat at heightMin, then take the shared edges of the
 // declared neighbours, so no seam appears.
 bool add_tile(const kast::map::MapInfo& info, ZoneState& state, TileKey t);
 // Undeclares tile t (false if it is not declared, or is the last one) and drops its heights, spawn, objects and

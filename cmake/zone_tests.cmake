@@ -118,19 +118,22 @@ add_test(NAME editor_zone_remove_tile_prompt
           -DFOCUS_PANEL=Zone "-DFORBID_OUTPUT=\\[error\\]" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
 
 # --new-map's size cap (zone::kMaxMapTiles, read from zone_io.h): the cap a side opens, one more is refused with the
-# range in the Console. In memory only (--headless, no save).
+# range in the Console; --add-tile past the cap is refused too. In memory only (--headless, no save).
 file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/engine/zone/zone_io.h" cap REGEX "kMaxMapTiles = [0-9]+")
 string(REGEX MATCH "[0-9]+" cap "${cap}")
 math(EXPR over "${cap} + 1")
 foreach(case "max|${cap},${cap}|Zone: new map maps/big \\(id [0-9]+, ${cap}x${cap} tiles\\)"
-             "over|${over},1|--new-map big,${over},1: tiles ${over} x 1: 1 to ${cap} each way")
+             "over|${over},1|--new-map big,${over},1: tiles ${over} x 1: 1 to ${cap} each way"
+             "add_over|${cap},1|--add-tile|${cap},0|--add-tile ${cap},0: expected a tile not on the map, within ${cap} tiles a side")
   string(REPLACE "|" ";" case "${case}")
   list(GET case 0 name)
   list(GET case 1 size)
-  list(GET case 2 expect)
+  list(GET case -1 expect)
+  list(SUBLIST case 2 -1 extra) # more zone flags after --new-map
+  list(REMOVE_AT extra -1)
   add_test(NAME zone_cli_new_map_${name}
     COMMAND kast_editor --project "${starter}" --projects-file "${KAST_ZONE_OUT}/new_map_${name}_projects.json"
-            --settings-file "${KAST_ZONE_OUT}/new_map_${name}_settings.json" --new-map "big,${size}" --headless)
+            --settings-file "${KAST_ZONE_OUT}/new_map_${name}_settings.json" --new-map "big,${size}" ${extra} --headless)
   set_tests_properties(zone_cli_new_map_${name} PROPERTIES PASS_REGULAR_EXPRESSION "${expect}")
 endforeach()
 

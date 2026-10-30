@@ -34,8 +34,8 @@ uint16_t next_map_id(const Project& project);
 // the manifest is invalid.
 std::optional<ZoneDoc> load_map(const Project& project, const std::string& folder, std::string& err);
 
-// The most tiles a side new_map (the New Map dialog, --new-map) makes; the Zone tab's tile grid can still grow a map
-// past it. kast_map and the server have no cap.
+// The most tiles a side a map's bounding box spans: new_map (the New Map dialog, --new-map) and add_tile (the Zone
+// tab's tile grid, --add-tile) refuse more. kast_map and the server have no cap. Measured in tools/map_bench/results.md.
 constexpr int kMaxMapTiles = 64;
 
 // A new map in memory (nothing on disk until saved): tiles [0, 0, width - 1, depth - 1], flat, spawn in the middle

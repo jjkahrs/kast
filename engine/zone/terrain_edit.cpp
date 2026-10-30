@@ -1,5 +1,7 @@
 #include "terrain_edit.h"
 
+#include "zone_io.h" // kMaxMapTiles
+
 #include <scene_io.h> // jsonNumber
 
 #define STB_PERLIN_IMPLEMENTATION
@@ -436,7 +438,14 @@ Json tile_rects(const TileSet& tiles) {
     return rects;
 }
 
+bool within_cap(const km::MapInfo& info, TileKey t) {
+    const km::TileRect b = tile_bounds(info);
+    return std::max(b.x1, t.x) - std::min(b.x0, t.x) < kMaxMapTiles &&
+           std::max(b.z1, t.z) - std::min(b.z0, t.z) < kMaxMapTiles;
+}
+
 bool add_tile(const km::MapInfo& info, ZoneState& state, TileKey t) {
+    if (!within_cap(info, t)) return false;
     TileSet tiles = declared_tiles(info);
     if (!tiles.insert(t).second) return false;
     state.manifest["tiles"] = tile_rects(tiles);

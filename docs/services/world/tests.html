@@ -86,7 +86,7 @@ and check only behaviour.</p>
   Debug build (MSVC's checked STL and debug heap take process-wide locks: 4 threads measured at 140-230% of 1), it prints
   that the threshold was skipped instead; Release builds check it (<code>ctest --preset perf</code> or <code>perf-linux</code>).</li>
 <li><strong>AOI cost</strong> (ctest <code>aoi_bench</code>, <code>world_self_check --aoi-bench</code>): ns per <code>aoi_system</code> call with 500 and
-  2000 players (plus a fifth as many NPCs) on a 2 km map, all idle, 10% and 100% moving a short step each tick. Printed, not checked.</li>
+  2000 players (plus a fifth as many NPCs) on a 2 km map (an 8 x 8 tile area; maps go to 64 x 64, 16 km), all idle, 10% and 100% moving a short step each tick. Printed, not checked.</li>
 <li><strong>Tile activation</strong> (<code>checkTileActivation</code> in <code>lua_checks.cpp</code>, the sample <code>lua/</code> plus a probe system logging what
   <code>kast.query("Npc")</code> returns): no spawn-file NPC however long a world runs with no player; a login spawns its tile's and
   the neighbours' NPCs at once and no farther; a transfer away puts them to sleep without despawning them (absent from

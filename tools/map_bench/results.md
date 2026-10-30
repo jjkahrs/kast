@@ -162,3 +162,15 @@ server change in this phase):
 
 Every size's tick p99 matches bench 8 x 8 (and the baseline); the bench maps' +4-6 ms over size 0 is terrain/navmesh/NPCs,
 not size.
+
+## Chosen cap: 64 x 64
+
+`zone::kMaxMapTiles` = 64. Every gate holds at 64 x 64 after the fixes: editor sculpting 67.9 FPS median (one 1-s window
+at 59.2), Play and `kast_player` average and p99 at or under 2.4 ms (budget 16.7, measured as the baseline was), server
+tick p99 15.40 ms against 15.67 at bench 8 x 8. The single-frame streaming hitch (50-66 ms up to 32 x 32, 8 x 8 included
+at baseline; 82-109 ms at 64 x 64) is today's behaviour, not gated, and documented as a known limit with the rest in
+`docs/editor/zone-builder.html#map-size-limits`.
+
+Confirmation run with the cap set (Release, three passes, 1200 frames each): 64 x 64 sculpting 71.4 / 71.8 / 70.3 FPS
+average, lowest one-second window 60.9 / 63.9 / 65.6, 81 terrain meshes, 1,064 MB RAM, 571 MB GPU; 8 x 8 in the same passes
+71.1 / 91.4 / 85.1.
