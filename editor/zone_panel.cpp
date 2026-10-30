@@ -630,8 +630,6 @@ void ZonePanel::drawNewMapDialog(Document& doc, ZoneSession& zone)
     ImGui::InputInt("Tiles X", &newWidth_);
     ImGui::InputInt("Tiles Z", &newDepth_);
     newId_ = std::clamp(newId_, 0, 0xFFFF);
-    newWidth_ = std::clamp(newWidth_, 1, 8);
-    newDepth_ = std::clamp(newDepth_, 1, 8);
     const bool used = std::ranges::any_of(zone.project().maps, [&](const zone::ProjectMap& m) { return m.info.id == newId_; });
     if (used)
         ImGui::TextColored(kErrorColor, "Id %d is already used", newId_);

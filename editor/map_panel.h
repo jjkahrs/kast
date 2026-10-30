@@ -1,5 +1,5 @@
-// The Map tab (docs/editor/map-builder.html): the open zone (ZoneSession) top-down, one cell per tile of its 8 x 8
-// bounds (+z up, as the Zone tab's tile grid), each showing its tile scene (tile_scenes.h): the cell's state color, the
+// The Map tab (docs/editor/map-builder.html): the open zone (ZoneSession) top-down, one cell per tile of its bounds
+// (at least 8 x 8; +z up, as the Zone tab's tile grid), each showing its tile scene (tile_scenes.h): the cell's state color, the
 // entity count, a terrain thumbnail from the zone's heights and terrainColors, and the map's spawn and portal areas over
 // them. Clicking a declared cell opens its scene additively, closes it (Remove Scene, with its unsaved-changes prompt) or,
 // with none, creates an empty one that Ctrl+S writes to maps/<map>/scenes/<tx>_<tz>.scene. Orphan scenes (on undeclared
@@ -24,7 +24,7 @@
 class MapPanel {
 public:
     static constexpr const char* kWindow = "Map";
-    static constexpr int kGrid = 8; // cells per side: a map's largest size
+    static constexpr int kMinGrid = 8; // cells per side at least: a small map shows the cells around it
 
     // The window; call once a frame after zone.update.
     void draw(Document& doc, const ZoneSession& zone, FileActions& files);

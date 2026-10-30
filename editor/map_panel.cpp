@@ -241,22 +241,25 @@ void MapPanel::drawGrid(Document& doc, const ZoneSession& zone, FileActions& fil
 {
     const zone::ZoneDoc& z = *zone.zone();
     const zone::TileSet declared = zone::declared_tiles(info);
-    km::TileKey first = *declared.begin(); // the bounds' bottom-left: the lowest declared x and z
+    km::TileKey first = *declared.begin(), last = first; // the bounds' bottom-left and top-right corners
     for (const km::TileKey t : declared) {
-        first.x = std::min(first.x, t.x);
-        first.z = std::min(first.z, t.z);
+        first = {std::min(first.x, t.x), std::min(first.z, t.z)};
+        last = {std::max(last.x, t.x), std::max(last.z, t.z)};
     }
+    // ponytail: the whole bounds at once, cells shrink to fit (no labels below 24 px); zoom and pan
+    // when big maps need it.
+    const int grid = std::max({kMinGrid, last.x - first.x + 1, last.z - first.z + 1});
     ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
     ImGui::TextWrapped("maps/%s: click a tile to open, close or create its scene. +z is up.", z.folder.c_str());
     ImGui::PopStyleColor();
-    const float cell = std::clamp(std::floor((ImGui::GetContentRegionAvail().x - kGap * (kGrid - 1)) / kGrid), 24.0f, 96.0f);
+    const float cell = std::clamp(std::floor((ImGui::GetContentRegionAvail().x - kGap * float(grid - 1)) / float(grid)), 4.0f, 96.0f);
     const float pitch = cell + kGap;
     const ImVec2 origin = ImGui::GetCursorScreenPos();
-    ImGui::InvisibleButton("##tiles", {pitch * kGrid - kGap, pitch * kGrid - kGap});
+    ImGui::InvisibleButton("##tiles", {pitch * grid - kGap, pitch * grid - kGap});
     const bool hovered = ImGui::IsItemHovered();
     const bool clicked = ImGui::IsItemClicked(ImGuiMouseButton_Left);
     const auto cellMin = [&](km::TileKey t) {
-        return ImVec2(origin.x + float(t.x - first.x) * pitch, origin.y + float(kGrid - 1 - (t.z - first.z)) * pitch);
+        return ImVec2(origin.x + float(t.x - first.x) * pitch, origin.y + float(grid - 1 - (t.z - first.z)) * pitch);
     };
     // A map position on screen: inside its tile's cell (the gaps between cells are not ground).
     const auto toScreen = [&](float x, float zz) {
@@ -268,9 +271,9 @@ void MapPanel::drawGrid(Document& doc, const ZoneSession& zone, FileActions& fil
     ImDrawList* draw = ImGui::GetWindowDrawList();
     const std::filesystem::path& root = doc.project->root;
     std::optional<km::TileKey> hover;
-    for (int row = 0; row < kGrid; ++row)
-        for (int col = 0; col < kGrid; ++col) {
-            const km::TileKey t{first.x + col, first.z + kGrid - 1 - row};
+    for (int row = 0; row < grid; ++row)
+        for (int col = 0; col < grid; ++col) {
+            const km::TileKey t{first.x + col, first.z + grid - 1 - row};
             const std::optional<kast::SceneSlot> slot = findOpenScene(doc, utf8(tileFile(root, z.folder, t)));
             const kast::TileCell state = kast::tileCell(declared.contains(t), sceneFiles_.contains(t), slot.has_value(),
                                                         slot && sceneDirty(doc, *slot));
@@ -284,13 +287,15 @@ void MapPanel::drawGrid(Document& doc, const ZoneSession& zone, FileActions& fil
                 draw->AddRectFilled(min, max, (borderColor(state) & ~IM_COL32_A_MASK) | IM_COL32(0, 0, 0, 120));
             const std::string label = zone::tile_name(t) + (state == kast::TileCell::Unsaved ? "*" : "");
             const ImVec2 text = ImGui::CalcTextSize(label.c_str());
-            if (state != kast::TileCell::Undeclared)
+            const bool fits = cell >= 24.0f; // the smallest cell labels and counts were laid out for
+            if (fits && state != kast::TileCell::Undeclared)
                 draw->AddRectFilled(min, {min.x + text.x + 4.0f, min.y + text.y}, IM_COL32(0, 0, 0, 160));
-            draw->AddText({min.x + 2.0f, min.y}, state == kast::TileCell::Undeclared ? kFieldHighlight
+            if (fits)
+                draw->AddText({min.x + 2.0f, min.y}, state == kast::TileCell::Undeclared ? kFieldHighlight
                                                  : state == kast::TileCell::Orphan  ? kWarning
                                                                                      : kWhite,
                           label.c_str());
-            if (const auto count = entities_.find(t); count != entities_.end()) {
+            if (const auto count = entities_.find(t); fits && count != entities_.end()) {
                 const std::string n = std::to_string(count->second);
                 const ImVec2 size = ImGui::CalcTextSize(n.c_str());
                 const ImVec2 at{max.x - size.x - 2.0f, max.y - size.y};
@@ -309,7 +314,7 @@ void MapPanel::drawGrid(Document& doc, const ZoneSession& zone, FileActions& fil
         }
 
     // The portal areas (clipped to each cell they cross) and the player spawn with its heading.
-    const ImVec2 gridMax{origin.x + pitch * kGrid - kGap, origin.y + pitch * kGrid - kGap};
+    const ImVec2 gridMax{origin.x + pitch * grid - kGap, origin.y + pitch * grid - kGap};
     draw->PushClipRect(origin, gridMax, true);
     std::string err;
     std::optional<km::Areas> areas = z.state.areas.is_null() ? std::nullopt : km::parse_areas(nlohmann::json(z.state.areas), err);

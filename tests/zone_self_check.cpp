@@ -137,6 +137,13 @@ void check_new_map() {
     std::string err;
     CHECK(!new_map(p, "meadow", "Meadow", id, 2, 2, err)); // folder taken
     CHECK(!new_map(p, "../x", "X", id, 2, 2, err));
+    // The size cap: kMaxMapTiles a side is made, one more (or none) refused with the range in the message.
+    const std::string range = "1 to " + std::to_string(kMaxMapTiles) + " each way";
+    CHECK(new_map(p, "big", "Big", id, kMaxMapTiles, kMaxMapTiles, err));
+    for (const auto [w, d] : {std::pair{kMaxMapTiles + 1, 1}, {1, kMaxMapTiles + 1}, {0, 2}, {2, 0}}) {
+        err.clear();
+        CHECK(!new_map(p, "big", "Big", id, w, d, err) && err.find(range) != std::string::npos);
+    }
     auto doc = new_map(p, "plains", "Plains", id, 2, 2, err);
     CHECK(doc && doc->dirty());
     if (!doc) return;

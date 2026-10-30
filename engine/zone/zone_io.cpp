@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <format>
 #include <regex>
 #include <set>
 #include <tuple>
@@ -193,8 +194,8 @@ std::optional<ZoneDoc> new_map(const Project& project, const std::string& folder
         err = "maps/" + folder + " already exists";
         return std::nullopt;
     }
-    if (width < 1 || depth < 1 || width > 8 || depth > 8) {
-        err = "tiles: 1 to 8 each way";
+    if (width < 1 || depth < 1 || width > kMaxMapTiles || depth > kMaxMapTiles) {
+        err = std::format("tiles {} x {}: 1 to {} each way", width, depth, kMaxMapTiles);
         return std::nullopt;
     }
     ZoneDoc doc;
