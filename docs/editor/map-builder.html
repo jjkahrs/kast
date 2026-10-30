@@ -36,15 +36,19 @@ logic (paths, cell states, the streaming diff) is <code>engine/tile_scenes.h</co
 <code>imgui.ini</code>). It shows the zone of the open scene by the <a href="zone-builder.html#scene-link">Zone tab's rule</a> (the
 first <code>Terrain</code> entity's map), with the same messages when there is no project, no <code>Terrain</code> entity, or the map does not
 load. Below the map's folder: the grid, a legend, and <strong>Problems</strong>.</p>
-<p><strong>The grid</strong> is the map's full 8 x 8 bounds from its lowest declared x and z, <strong>+z up</strong> (as the Zone tab's tile
-grid and the default camera). The cells fit the dock's width (24 to 96 px). Each cell shows:</p>
+<p><strong>The grid</strong> is the map's bounds from its lowest declared x and z (at least 8 x 8 cells), <strong>+z up</strong> (as the
+Zone tab's tile grid and the default camera). It opens fitted whole to the dock's width (cells up to 96 px; a 64 x 64 map's, the largest
+(<a href="zone-builder.html#map-size-limits">Map size limits</a>), are a few pixels). The <strong>mouse wheel zooms</strong> about the mouse (out to the whole map, in to twice the widest cell) and a
+<strong>drag</strong> with any button <strong>pans</strong> (never past the map's edges); a click without a drag picks a cell. Only the
+cells on screen are drawn. Labels and counts show on cells wide enough for them (24 px, more for two-digit names). Each cell shows:</p>
 <ul>
 <li>its <code>tx_tz</code> label (top left, <code>*</code> after it while the tile scene has unsaved changes);</li>
 <li>its tile scene's <strong>entity count</strong> (bottom right): from the open scene when it is open, else read from the file
   (cached; read again when the file changes, every half second at most, and when the open scenes change);</li>
 <li>a <strong>terrain thumbnail</strong> made on the CPU from the zone's in-memory heights, colored by <code>map.json</code>
   <code>terrainColors</code> (grayscale without them); a tile's thumbnail is made again when a Zone tab edit changes its heights or the
-  colors change;</li>
+  colors change. Only the cells on screen have one (64 made a frame at most), freed when they scroll off; cells under 8 px, or
+  more than 1024 on screen, show their state color instead (each thumbnail is a GPU texture);</li>
 <li>the map's <strong>player spawn</strong> (a white dot with a line for its heading) and its <strong>portal areas</strong> from
   <code>areas.json</code> (filled outlines; an area crossing tiles is drawn across each of them).</li>
 </ul>
@@ -124,6 +128,9 @@ restores the open set exactly as it was, unsaved changes included.</p>
 (<a href="command-line.html#map-click">Command line</a>):</p>
 <pre><code class="language-bat">build\debug\kast_editor.exe --scene tests\project\scenes\tilegrid.scene --focus-panel Map --map-click 1,0
 </code></pre>
+<p><code>--grid-view tx,tz,zoom</code> centres the grid (and the Zone tab's tile grid) on tile <code>tx, tz</code> at <code>zoom</code>
+times the fitted cells, after 10 frames; the tab logs <code>Map: view &lt;first&gt;..&lt;last&gt; (&lt;n&gt; px cells, &lt;n&gt;
+thumbnails)</code> on a new map and after it.</p>
 <p><strong>Sample</strong>: <code>tests/project/scenes/tilegrid.scene</code> with <code>tests/project/maps/tilegrid</code> (map 7, 3 x 3 tiles; scenes
 on 0_0, 1_0, 0_1 and 1_1, the out-of-bounds <code>Stray Rock</code> in 0_1, and an orphan on 3_1). The <code>editor_map_*</code> and
 <code>player_tilegrid_stream</code> tests use it (<code>cmake/map_tests.cmake</code>).</p>

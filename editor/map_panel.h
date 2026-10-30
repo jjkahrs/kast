@@ -1,5 +1,5 @@
-// The Map tab (docs/editor/map-builder.html): the open zone (ZoneSession) top-down, one cell per tile of its 8 x 8
-// bounds (+z up, as the Zone tab's tile grid), each showing its tile scene (tile_scenes.h): the cell's state color, the
+// The Map tab (docs/editor/map-builder.html): the open zone (ZoneSession) top-down, one cell per tile of its bounds
+// (at least 8 x 8; +z up, as the Zone tab's tile grid; fitted whole, zoomed with the wheel, panned by a drag), each showing its tile scene (tile_scenes.h): the cell's state color, the
 // entity count, a terrain thumbnail from the zone's heights and terrainColors, and the map's spawn and portal areas over
 // them. Clicking a declared cell opens its scene additively, closes it (Remove Scene, with its unsaved-changes prompt) or,
 // with none, creates an empty one that Ctrl+S writes to maps/<map>/scenes/<tx>_<tz>.scene. Orphan scenes (on undeclared
@@ -8,6 +8,7 @@
 #pragma once
 
 #include "document.h"
+#include "tile_grid.h"
 #include "zone_session.h"
 
 #include <tile_scenes.h>
@@ -24,7 +25,7 @@
 class MapPanel {
 public:
     static constexpr const char* kWindow = "Map";
-    static constexpr int kGrid = 8; // cells per side: a map's largest size
+    static constexpr int kMinGrid = 8; // cells per side at least: a small map shows the cells around it
 
     // The window; call once a frame after zone.update.
     void draw(Document& doc, const ZoneSession& zone, FileActions& files);
@@ -33,6 +34,13 @@ public:
     void click(Document& doc, const ZoneSession& zone, FileActions& files, kast::map::TileKey t);
     // Frees the thumbnails' textures (before bgfx shuts down).
     void shutdown();
+    // --grid-view: centres the grid on tile t at zoom times the fitted cells; logs the view ("Map: view ...") once its
+    // thumbnails are built.
+    void look(kast::map::TileKey t, float zoom)
+    {
+        grid_.look(t, zoom);
+        logView_ = true;
+    }
 
 private:
     // A tile scene file as last read (its modification time, so it is read again only when it changes).
@@ -51,6 +59,7 @@ private:
     void refresh(const Document& doc, const zone::ZoneDoc& z, const kast::map::MapInfo& info);
     // The absolute file of tile t's scene.
     std::filesystem::path tileFile(const std::filesystem::path& root, const std::string& folder, kast::map::TileKey t) const;
+    // The visible declared cells' thumbnails built (a few a frame), the rest freed.
     void syncThumbnails(const zone::ZoneDoc& z, const kast::map::MapInfo& info);
     void drawGrid(Document& doc, const ZoneSession& zone, FileActions& files, const kast::map::MapInfo& info, bool locked);
 
@@ -64,4 +73,7 @@ private:
     std::set<std::string> logged_; // the warnings shown in the Console while they last
     std::map<kast::map::TileKey, Thumbnail, zone::TileLess> thumbnails_;
     std::string thumbnailColors_; // the terrainColors (dumped) the thumbnails were made with
+    size_t thumbnailsPending_ = 0; // visible ones not built yet (a few a frame)
+    TileGrid grid_;
+    bool logView_ = false; // a new map or --grid-view: "Map: view ..." once its thumbnails are built
 };

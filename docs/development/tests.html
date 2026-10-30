@@ -21,6 +21,12 @@ every test runs with <code>KAST_WINDOW_POS=secondary</code>, which opens windows
 <code>player_voxelgi_gpu_time</code> and <code>starter_mmo_nameplates_perf</code>. Run them, alone and with GPU-heavy apps closed, with
 <code>ctest --preset perf</code> (Debug build) or <code>perf-release</code> (where <code>starter_mmo_nameplates_perf</code> also checks its
 16.7 ms budget). The world server's benches work the same way (<a href="../services/world/tests.html#perf">World tests</a>).</p>
+<p id="map-bench">The map size benchmark is a script, not a CTest: <code>tools/map_bench/map_bench.ps1</code> generates 16 x 16,
+32 x 32 and 64 x 64 tile maps under <code>build/map_bench/</code> at run time (heights, a material, spawns, navtiles from
+<code>kast_mapbake</code>) and logs the editor's sculpting FPS, RAM and GPU memory, the frame time in Play and
+<code>kast_player</code> while the camera flies across the map, the world server's startup time and RSS, and
+<code>services/world/tests/load.sh</code> on the map. Release builds, windows off the main monitor; how to run it and the
+measured numbers: <code>tools/map_bench/README.md</code> and <code>tools/map_bench/results.md</code>.</p>
 <p id="sdfgi-gpu-limit"><code>player_sdfgi_gpu_time</code> holds the SDFGI view's and the frame's 99th percentile GPU time under
 <code>KAST_SDFGI_GPU_P99_MS</code> whole milliseconds: 4 by default, the <a href="../engine/sdfgi.html">SDFGI</a> budget. A machine
 whose GPU (or what else runs on it) can't hold that sets more in its own build cache only, e.g.

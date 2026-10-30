@@ -41,10 +41,15 @@ portal moves it to another map (a <code>world.entered</code> / <code>world.mapCh
 <code>scripts/world_flow.lua</code> holds the map-to-scene table.</p>
 
 <h2 id="scene-view">Scene view</h2>
-<p>In edit mode the Scene view draws <strong>every declared tile</strong> of the zone with the map's material (and the
+<p>In edit mode the Scene view draws the declared tiles <strong>within 4 tiles of the camera's pivot</strong> (9 x 9 at most,
+so an 8 x 8 map whole) with the map's material (and the
 <a href="#generated-terrain">generated terrain texture</a>, if any), plus every zone object as its prefab, from the zone's
-in-memory state: edits show straight away. The camera's near and far planes widen while a zone is shown, for 2 km
-maps. Overlays: tile borders, the player spawn (with its heading), areas (portals in blue, the selected one with corner
+in-memory state: edits show straight away. Every tile's heights stay in memory; a tile's mesh is built when the pivot
+comes within range (the Console logs <code>Zone view: N terrain meshes</code>) and freed when it leaves, and a
+<code>map.json</code> edit rebuilds only the meshes it changes (id, height range, material, UV mode, or with Map UVs the
+bounding box). <strong>Focus</strong> on a map wider than 9 tiles frames the 9 x 9 around its centre. While a zone is shown
+the camera's near and far planes are 0.5 m and 8 km (the farthest dolly is 5 km), so the meshed tiles stay in view.
+Overlays (drawn on the meshed tiles only): tile borders, the player spawn (with its heading), areas (portals in blue, the selected one with corner
 handles), spawns (with heading), patrol paths, zone objects (a dot each; obstacles' and interactables' shapes outlined
 on the ground) and the brush ring. They are drawn over the terrain, not hidden by hills.</p>
 <p><strong>Play</strong> does not use the in-memory zone: as before, the terrain streams around the player by
@@ -79,10 +84,11 @@ it, collapsing sections:</p>
 <tr id="map">
 <td><strong>Map</strong></td>
 <td>the map picker (every <code>maps/*/map.json</code> of the project) and <strong>New Map...</strong> (folder: letters, digits, <code>_</code>,
-<code>-</code>; name; id, the lowest unused by default, a used one refused; 1-8 by 1-8 tiles; nothing is written until you save);
+<code>-</code>; name; id, the lowest unused by default, a used one refused; 1 to 64 by 1 to 64 tiles (<a href="#map-size-limits">Map size limits</a>); nothing is written until you save);
 id, name, material (a project <code>.mat</code>), <strong>Type</strong> (World or Instance, <a href="#instance">below</a>), player spawn (x, z on the ground, heading; <strong>Place on terrain</strong> then
-click), own <code>nav</code> settings, and the <strong>tile grid</strong> (+z up): click a free cell to add a tile (its edges take its
-neighbours' heights, so no seam), a tile to remove it (a dialog lists the files that go and the spawns lost). Changing the id
+click), own <code>nav</code> settings, and the <strong>tile grid</strong> (+z up; fitted whole to the tab's width, the mouse wheel
+zooms and a drag pans, as the <a href="map-builder.html#map-tab">Map tab</a>): click a free cell to add a tile (its edges take its
+neighbours' heights, so no seam; cells that would make the map wider or deeper than 64 tiles show no <code>+</code> and refuse), a tile to remove it (a dialog lists the files that go and the spawns lost). Changing the id
 changes the Terrain entity's <code>map</code> too.</td>
 <td><code>map.json</code>; on save, a removed tile's <code>heights/</code>, <code>.server/spawns/</code>, <code>objects/</code>,
 <code>.server/interactables/</code> and <code>.server/nav/</code> files are deleted (to the Recycle Bin); its tile scene (<code>scenes/&lt;tx&gt;_&lt;tz&gt;.scene</code>) is <strong>not</strong>: it stays on disk as an <a href="map-builder.html#validation">orphan</a> the Map tab warns about</td>
@@ -218,7 +224,7 @@ The Scene view shows the result straight away; nothing is written until you save
 <tr>
 <td><code>textures/&lt;folder&gt;_terrain.png</code></td>
 <td>8-bit RGB, the color of the ground at each pixel: 1 px per metre over the bounding box of the declared tiles (256 px
-per tile), shrunk to fit 4096 px on the longest side; grey where no tile is. Row 0 is the box's min z</td>
+per tile), shrunk to fit 4096 px on the longest side (1 px/m up to 16 tiles, 0.5 at 32, 0.25 at 64); grey where no tile is. Row 0 is the box's min z</td>
 </tr>
 <tr>
 <td><code>materials/&lt;folder&gt;_terrain.mat</code></td>
@@ -250,6 +256,50 @@ quitting) counts unsaved zone edits too, and so does changing the map in the Zon
 reloads the zone from disk).</p>
 <p><strong>Read-only.</strong> During Play and in prefab edit mode the tab is read-only (tools off, no zone overlays in the Scene
 view); a note at the top says why.</p>
+
+<h2 id="map-size-limits">Map size limits</h2>
+<p>A map is at most <strong>64 x 64 tiles</strong> (16 km a side; <code>zone::kMaxMapTiles</code> in <code>engine/zone/zone_io.h</code>):
+its declared tiles' bounding box may not be wider or deeper than that. <strong>New Map...</strong>, <code>--new-map</code>, the tile grid and
+<code>--add-tile</code> refuse more (<code>tiles 65 x 1: 1 to 64 each way</code>); the map format, <code>kast_mapbake</code>, the world server and
+the client have no cap. 64 is the largest of 16, 32 and 64 that met every budget in the map size benchmark
+(<code>tools/map_bench</code>, <a href="../development/tests.html#map-bench">Tests</a>; Release, one machine, 2026-10-30; full tables in
+<code>tools/map_bench/results.md</code>):</p>
+<table>
+<thead><tr><th>Size</th><th>Editor sculpting FPS (budget &gt;= 60): before / after</th><th>Editor peak RAM / GPU: before / after</th><th>After: Play; <code>kast_player</code> frame avg / p99 ms (budget 16.7)</th><th>After: server tick p99, 500 players (worst 10 s window)</th><th>Server startup / RSS</th></tr></thead>
+<tbody>
+<tr><td>8 x 8 (old cap)</td><td>116.8 / 85.3</td><td>475 / 503 MB; 476 / 502 MB</td><td>0.65 / 0.88; 0.44 / 1.04</td><td>15.67 ms</td><td>0.15-0.30 s / 22 MB</td></tr>
+<tr><td>16 x 16</td><td>81.7 / 71.1</td><td>1,312 / 1,283 MB; 572 / 571 MB</td><td>0.70 / 1.06; 0.50 / 1.18</td><td>15.77 ms</td><td>0.25 s / 53 MB</td></tr>
+<tr><td>32 x 32</td><td>42.0 (fails) / 70.8</td><td>4,654 / 4,422 MB; 671 / 571 MB</td><td>0.68 / 0.80; 0.45 / 1.39</td><td>15.06 ms</td><td>0.6 s / 160 MB</td></tr>
+<tr><td>64 x 64</td><td>crashed / 67.9 (lowest 1 s window 59.2; a later check 70.3-71.8, lowest 60.9)</td><td>- ; 1,064 / 571 MB</td><td>1.04 / 2.40; 0.90 / 1.36 (Play crashed before)</td><td>15.40 ms</td><td>1.97 s / 582 MB</td></tr>
+</tbody>
+</table>
+<p>"Before" is the 8 x 8 code (<code>main</code>, every tile meshed); "after" the median of three passes on a slower day for the machine
+(8 x 8 itself at 85 instead of 117 FPS). The server's tick p99 is the same at every size (today's default map: 10.6-11.0 ms; the
+bench maps' terrain, navmesh and NPCs add 4-6 ms at 8 x 8 too). What made it fit: the Scene view meshes only the tiles near the
+camera (<a href="#scene-view">above</a>), the Map tab and tile grid draw and thumbnail only the cells on screen, and the Assets panel
+rescans only on a file change.</p>
+<p><strong>Generated terrain texture</strong>: 4096 px on the bounding box's longest side, so 1 px per metre up to 16 tiles, 0.5 at
+32 and 0.25 at 64 (accepted; a bigger texture or one per tile would lift it).</p>
+<p><strong>Known limits</strong> (measured where cheap, not fixed):</p>
+<ul>
+<li><strong>Streaming hitch</strong>: the frame a row of tiles loads (synchronously) takes 50-66 ms up to 32 x 32 (8 x 8 included, as
+  before) and 82-109 ms at 64 x 64. Not size-gated, cause not found.</li>
+<li><strong>Edit radius</strong>: the Scene view meshes 9 x 9 tiles around the pivot, fixed (<code>zone::kEditRadius</code> 4); farther tiles show
+  nothing in edit mode. Zone objects are still built for every tile.</li>
+<li><strong>Lightmap and VoxelGI bakes</strong> gather every tile: about 9 MB per tile (~37 GB at 64 x 64), time linear in tiles.</li>
+<li><strong>Navmesh</strong>: Detour's 32-bit poly refs allow 16,384 polygons per tile at 16 x 16, 4,096 at 32 x 32 and 1,024 at 64 x 64; the bench
+  maps' busiest tile has 419 (2.4x headroom; 358 at 64 x 64, 2.9x). <code>kast_mapbake</code> fails on a tile over the limit
+  (<a href="../services/world/maps.html#navmesh">World Server, Navmesh</a>); <code>DT_POLYREF64</code> is the upgrade path. Paths are capped by
+  <code>kMaxNodes</code> 4096, <code>kMaxPathPolys</code> 1024 and <code>kMaxPathPoints</code> 256, so a very long <code>kast.map.path</code> can fail.</li>
+<li><strong>Generate heights</strong> noise repeats every 256 x Scale m (4 km at the minimum Scale 16).</li>
+<li><strong><code>kast_mapbake</code></strong> bakes serially and keeps every navtile in memory: 1,114 s and 596 MB peak at 64 x 64
+  (15.5 s at 8 x 8).</li>
+<li><strong>World server startup</strong> loads every tile's heights and navtile at once: 1.97 s and 582 MB at 64 x 64 (warm disk cache;
+  14.9 s cold).</li>
+<li><strong><code>kast_player</code></strong> reads the whole <code>game.pak</code>: 989 MB RAM at 64 x 64 (516 MB of heights).</li>
+<li>Bigger than 64 x 64 would need streaming for the editor's heights, the server's and mapbake's loads, and the player's pak, and
+  <code>DT_POLYREF64</code>; positions are f32 (fine to 16 km).</li>
+</ul>
 
 <h2 id="command-line">Command line</h2>
 <p><code>kast_editor</code> runs the same edits from the command line (tests and scripts), e.g.:</p>

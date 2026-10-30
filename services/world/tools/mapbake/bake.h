@@ -20,7 +20,8 @@ struct TileBake {
 // Bakes tile `tile` of the map: its ground triangles plus a border of its neighbours' (tiles on the map only; a tile
 // with no entry in `heights` is flat), so paths cross tile edges. The footprint of every obstacle and interactable in
 // `objects` (the tile's and its neighbours'; visuals are skipped) is cut out, with agentRadius clearance around it.
-// Params: info.nav, or NavParams' defaults if the manifest has none. nullopt with err set if Recast or Detour fail.
+// Params: info.nav, or NavParams' defaults if the manifest has none. nullopt with err set if Recast or Detour fail, or
+// the tile has more polygons than map::max_navtile_polys allows for the map's tile count.
 std::optional<TileBake> bake_tile(const map::MapInfo& info, const map::TileHeights& heights, map::TileKey tile,
                                   std::string& err, const std::vector<map::ZoneObject>& objects = {});
 

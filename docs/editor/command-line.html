@@ -134,6 +134,13 @@
 <td><code>--map-click tx,tz</code> (repeatable)</td>
 <td>Click that cell of the <a href="map-builder.html">Map tab</a>, as the mouse does: open, close or create tile <code>tx, tz</code>'s scene (nothing on an undeclared cell). The first click runs after 12 frames, each further one a frame later, in order (e.g. <code>--map-click 1,0 --map-click 1,0</code> opens 1_0, then closes it). Pair it with <code>--focus-panel Map</code> for screenshots.</td>
 </tr>
+<tr id="grid-view">
+<td><code>--grid-view tx,tz,zoom</code></td>
+<td>After 10 frames, centre the <a href="map-builder.html">Map tab</a>'s grid and the Zone tab's tile grid on tile <code>tx, tz</code> at
+<code>zoom</code> times their fitted cell size (kept on the map), as the mouse wheel and a drag do, and scroll the Zone tab to its grid;
+both log the view (<code>Map: view ...</code>, <code>Zone: tile grid view ...</code>). For tests and screenshots of big maps, e.g.
+<code>--grid-view 60,60,16 --map-click 60,60</code>.</td>
+</tr>
 <tr>
 <td><code>--zone-tool &lt;Tool&gt;</code></td>
 <td>Make that Zone tab tool active after the first 10 frames, as its button does: <code>Raise</code>, <code>Lower</code>, <code>Flatten</code>, <code>SetSpawn</code> (Place on terrain), <code>AreaRect</code>, <code>AreaPolygon</code>, <code>PlaceSpawn</code>, <code>PathPoints</code>, <code>PlaceObject</code> or <code>Scatter</code>. Pair it with <code>--sim-mouse</code> (without <code>--play</code> it acts on the Scene view) for tests and screenshots of the tools: a click or drag uses the tool, a hover shows the brush ring.</td>
@@ -461,7 +468,7 @@ unsaved-changes prompt if that scene has unsaved changes), for screenshots.</td>
 </table>
 <p>Without <code>--project</code>, <code>--scene</code>, <code>--save-scene</code> or <code>--build</code>, <code>kast_editor</code> runs the Project Manager instead of the
 editor. Editor-only flags (<code>--select</code>, <code>--play</code>, <code>--select-network-entity</code>, <code>--add-component-popup</code>, <code>--new-component[-prompt]</code>,
-<code>--new-state-machine-prompt</code>, <code>--open-menu</code>, <code>--open-build-settings</code>, <code>--open-online-settings</code>, <code>--focus-panel</code>, <code>--map-click</code>, <code>--zone-section</code>, <code>--zone-tool</code>, <code>--assets-*</code>, <code>--open-gui</code>,
+<code>--new-state-machine-prompt</code>, <code>--open-menu</code>, <code>--open-build-settings</code>, <code>--open-online-settings</code>, <code>--focus-panel</code>, <code>--map-click</code>, <code>--grid-view</code>, <code>--zone-section</code>, <code>--zone-tool</code>, <code>--assets-*</code>, <code>--open-gui</code>,
 <code>--gui-*</code>, <code>--open-graph</code>, <code>--graph-*</code>, <code>--zone-select</code>, <code>--bake</code>, <code>--mapbake</code>, <code>--file-save</code>, <code>--bake-probes</code>, the <a href="#zone">zone edits</a>) then are invalid arguments, as are Project Manager flags (<code>--launcher</code>, <code>--new-project</code>,
 <code>--launcher-open</code>, <code>--</code>) together with the editor's.</p>
 <h2 id="shader-graph-flags">Shader Graph</h2>
@@ -592,7 +599,7 @@ the terrain), headings radians, tiles <code>tx,tz</code>. The full list is also 
 </tr>
 <tr>
 <td><code>--new-map &lt;folder&gt;[,W,H[,id]]</code></td>
-<td>A new map (named after its folder) of W x H tiles (default 2 x 2, 1-8 each) with that id (default: the lowest unused). Nothing is written until <code>--save-zone</code>.</td>
+<td>A new map (named after its folder) of W x H tiles (default 2 x 2, 1 to 64 each: <a href="zone-builder.html#map-size-limits">Map size limits</a>) with that id (default: the lowest unused). Nothing is written until <code>--save-zone</code>.</td>
 </tr>
 <tr>
 <td><code>--map-id N</code></td>
@@ -613,7 +620,7 @@ the terrain), headings radians, tiles <code>tx,tz</code>. The full list is also 
 </tr>
 <tr>
 <td><code>--add-tile tx,tz</code>, <code>--remove-tile tx,tz</code></td>
-<td>Add a tile (its edges take its neighbours' heights); remove one (not the last; its files are deleted on save).</td>
+<td>Add a tile (its edges take its neighbours' heights; refused if the map would be wider or deeper than 64 tiles); remove one (not the last; its files are deleted on save).</td>
 </tr>
 <tr><td colspan="2"><strong>Terrain</strong></td></tr>
 <tr>

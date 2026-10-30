@@ -116,3 +116,61 @@ add_test(NAME editor_zone_remove_tile_prompt
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/zone_remove_tile_prompt.png"
           "-DEXTRA_ARGS=--scene ${KAST_SHADOW_PROJECT}/terrain.scene --zone-section Map --prompt-remove-tile 1,1 --focus 384,384,150 --size 1600x1000"
           -DFOCUS_PANEL=Zone "-DFORBID_OUTPUT=\\[error\\]" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+
+# --new-map's size cap (zone::kMaxMapTiles, read from zone_io.h): the cap a side opens, one more is refused with the
+# range in the Console; --add-tile past the cap is refused too. In memory only (--headless, no save).
+file(STRINGS "${CMAKE_CURRENT_SOURCE_DIR}/engine/zone/zone_io.h" cap REGEX "kMaxMapTiles = [0-9]+")
+string(REGEX MATCH "[0-9]+" cap "${cap}")
+math(EXPR over "${cap} + 1")
+foreach(case "max|${cap},${cap}|Zone: new map maps/big \\(id [0-9]+, ${cap}x${cap} tiles\\)"
+             "over|${over},1|--new-map big,${over},1: tiles ${over} x 1: 1 to ${cap} each way"
+             "add_over|${cap},1|--add-tile|${cap},0|--add-tile ${cap},0: expected a tile not on the map, within ${cap} tiles a side")
+  string(REPLACE "|" ";" case "${case}")
+  list(GET case 0 name)
+  list(GET case 1 size)
+  list(GET case -1 expect)
+  list(SUBLIST case 2 -1 extra) # more zone flags after --new-map
+  list(REMOVE_AT extra -1)
+  add_test(NAME zone_cli_new_map_${name}
+    COMMAND kast_editor --project "${starter}" --projects-file "${KAST_ZONE_OUT}/new_map_${name}_projects.json"
+            --settings-file "${KAST_ZONE_OUT}/new_map_${name}_settings.json" --new-map "big,${size}" ${extra} --headless)
+  set_tests_properties(zone_cli_new_map_${name} PROPERTIES PASS_REGULAR_EXPRESSION "${expect}")
+endforeach()
+
+# The Scene view meshes only the tiles within zone::kEditRadius (4) of the camera's pivot (the log's mesh count): a new
+# 12 x 12 map (in memory, not saved) framed at its centre, 9 x 9; with the camera on its corner tile, 5 x 5. The tile
+# borders over 81 tiles pass ImGui's 64k vertices per draw list (the backend's vertex offsets).
+foreach(case "centre||81" "corner|--focus 10,10,500|25")
+  string(REPLACE "|" ";" case "${case}")
+  list(GET case 0 name)
+  list(GET case 1 focus)
+  list(GET case 2 meshes)
+  add_test(NAME editor_zone_view_${name}
+    COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${KAST_ZONE_OUT}/view_${name}.png"
+            "-DEXTRA_ARGS=--project ${starter} --new-map big,12,12 ${focus} --size 1600x900" -DFRAMES=30
+            "-DEXPECT_OUTPUT=Zone view: ${meshes} terrain meshes" -DEXPECT_COUNT=1 "-DFORBID_OUTPUT=\\[error\\]"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+endforeach()
+
+# The Map tab's and Zone tab's tile grids on a new cap-size map (in memory, not saved): fitted whole by default (cells too
+# small for thumbnails: none), --grid-view zoomed on its centre, and on its far corner, where --map-click 60,60 creates
+# that tile's scene. Only the visible cells get thumbnails.
+math(EXPR cap_last "${cap} - 1")
+foreach(case "default||Map: view 0_0\\.\\.${cap_last}_${cap_last} \\([0-9]+ px cells, 0 thumbnails\\)|Zone: new map maps/big \\(id [0-9]+, ${cap}x${cap} tiles\\)"
+             "zoomed|--grid-view 32,32,16|Map: view [23][0-9]_[23][0-9]\\.\\.3[2-9]_3[2-9] \\([0-9]+ px cells, [1-9][0-9] thumbnails\\)|Zone: tile grid view [23][0-9]_[23][0-9]\\.\\.3[2-9]_3[2-9] "
+             "panned|--grid-view 60,60,16 --map-click 60,60|Map: view 5[0-9]_5[0-9]\\.\\.${cap_last}_${cap_last} \\([0-9]+ px cells, [1-9][0-9] thumbnails\\).*Map: created maps/big/scenes/60_60.scene for tile 60_60|Zone: tile grid view 5[0-9]_5[0-9]\\.\\.${cap}_${cap} ")
+  string(REPLACE "|" ";" case "${case}")
+  list(GET case 0 name)
+  list(GET case 1 view)
+  list(GET case 2 map_expect)
+  list(GET case 3 zone_expect)
+  add_test(NAME editor_map_tab_big_${name}
+    COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${KAST_ZONE_OUT}/map_tab_big_${name}.png"
+            "-DEXTRA_ARGS=--project ${starter} --new-map big,${cap},${cap} ${view} --size 1600x1000" -DFOCUS_PANEL=Map
+            -DFRAMES=60 "-DEXPECT_OUTPUT=${map_expect}" "-DFORBID_OUTPUT=\\[error\\]" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+  add_test(NAME editor_zone_tab_big_${name}
+    COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${KAST_ZONE_OUT}/zone_tab_big_${name}.png"
+            "-DEXTRA_ARGS=--project ${starter} --new-map big,${cap},${cap} --zone-section Map ${view} --size 1600x1000"
+            -DFOCUS_PANEL=Zone -DFRAMES=60 "-DEXPECT_OUTPUT=${zone_expect}" "-DFORBID_OUTPUT=\\[error\\]"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+endforeach()

@@ -46,6 +46,16 @@ constexpr const char* kTypeNames[] = {"Visual", "Obstacle", "Interactable"}; // 
 
 bool near(ImVec2 a, ImVec2 b) { return (a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y) <= kHandlePx * kHandlePx; }
 
+// j's key, or null (no object, no key): a reference, for what runs every frame over every tile's file.
+const Json& member(const Json& j, const char* key)
+{
+    static const Json none;
+    if (!j.is_object())
+        return none;
+    const auto it = j.find(key);
+    return it != j.end() ? *it : none;
+}
+
 std::string str(const Json& j, const char* key)
 {
     const Json v = j.value(key, Json());
@@ -461,8 +471,7 @@ void ZonePanel::drawObjectOverlays(const GroundDraw& g) const
         }
     }
     for (const auto& [tile, file] : state.spawns) {
-        const Json paths = file.value("paths", Json::object()); // items() must not outlive what it walks
-        for (const auto& [name, route] : paths.items()) {
+        for (const auto& [name, route] : member(file, "paths").items()) { // a reference: no copy per tile a frame
             const Json& points = route.value("points", Json::array());
             const size_t closing = route.value("loop", true) && points.size() > 2 ? 1 : 0;
             for (size_t i = 0; i + 1 < points.size() + closing; ++i) {
@@ -473,8 +482,8 @@ void ZonePanel::drawObjectOverlays(const GroundDraw& g) const
                 if (const auto s = screen(g, vec3(p)[0], vec3(p)[2]))
                     draw->AddCircleFilled(*s, 3.5f, kPathColor);
         }
-        for (const Json& s : file.value("spawns", Json::array())) {
-            const Vec3 p = vec3(s.value("pos", Json()));
+        for (const Json& s : member(file, "spawns")) {
+            const Vec3 p = vec3(member(s, "pos"));
             const auto at = screen(g, p[0], p[2]);
             if (!at)
                 continue;

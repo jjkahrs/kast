@@ -9,6 +9,7 @@
 #pragma once
 
 #include "document.h"
+#include "tile_grid.h"
 #include "viewport.h"
 #include "zone_render.h" // GroundDraw
 #include "zone_session.h"
@@ -63,6 +64,12 @@ public:
     void pollBake();
     // --prompt-remove-tile: opens the remove-tile confirm dialog for t, as clicking it in the tile grid does.
     void askRemoveTile(kast::map::TileKey t) { removeTile_ = t; }
+    // --grid-view: centres the Tiles grid on tile t at zoom times its fitted cells, scrolled into sight.
+    void lookGrid(kast::map::TileKey t, float zoom)
+    {
+        grid_.look(t, zoom);
+        scrollToGrid_ = true;
+    }
     // Points the first Terrain entity (added if there is none) at map id; marks the scene dirty.
     static void setTerrainMap(Document& doc, int id);
 
@@ -75,9 +82,9 @@ public:
     // it too.
     bool sceneInput(ZoneSession& zone, const SceneViewport::Input& input);
     // SceneViewport::overlay, after ZoneRender's: areas, spawns, paths and objects, and the active tool's overlay (the
-    // brush ring, the area being drawn).
+    // brush ring, the area being drawn), on the tiles the Scene view meshes around centre (the camera's pivot).
     void drawSceneOverlay(const ZoneSession& zone, ImDrawList* draw, const float* viewProj, float x, float y, float width,
-                          float height) const;
+                          float height, std::array<float, 2> centre) const;
 
 private:
     // A zone handle being dragged in the Scene view (no tool).
@@ -151,6 +158,8 @@ private:
     std::string newFolder_, newName_, newError_;
     int newId_ = 0, newWidth_ = 2, newDepth_ = 2;
     std::optional<kast::map::TileKey> removeTile_; // asking to confirm its removal
+    TileGrid grid_; // the Tiles section's
+    bool scrollToGrid_ = false;
     bool tabFront_ = false; // the Zone tab showed this frame: its handles are live
     size_t shownProblems_ = 0;
     bool openProblems_ = false;  // new problems: expand the section

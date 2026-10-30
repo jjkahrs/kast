@@ -5801,13 +5801,30 @@ void checkNavmesh() {
     r.write("cliff/map.json", kCliffManifest);
     r.write("flat/map.json", R"({"version":1,"id":2,"tiles":[[0,0,0,0]],"spawn":{"pos":[10,0,10]}})");
     std::map<int, std::string> navtiles;
+    std::map<int, int> polys;
     for (int tx : {0, 1}) {
         r.write(std::format("cliff/heights/{}_0.r16", tx), r16_of(cliff, tx, 0));
         const auto baked = mapbake::bake_tile(*info, heights, {tx, 0}, err);
         check(baked && baked->polys > 0 && baked->navtile.starts_with("KNAV"),
               std::format("bake: tile {}_0 in memory ({} polys) {}", tx, baked ? baked->polys : 0, err));
         if (baked) r.write(std::format("cliff/.server/nav/{}_0.navtile", tx), navtiles[tx] = baked->navtile);
+        polys[tx] = baked ? baked->polys : 0;
     }
+    // The per-tile poly limit (32-bit poly refs), shared by the bake and the server: over it, the bake fails on the tile.
+    static_assert(map::max_navtile_polys(1) == 1 << 22 && map::max_navtile_polys(64) == 65536 &&
+                  map::max_navtile_polys(65) == 32768 && map::max_navtile_polys(16 * 16) == 16384 &&
+                  map::max_navtile_polys(32 * 32) == 4096 && map::max_navtile_polys(64 * 64) == 1024);
+    map::MapInfo crowded = *info; // far-off tiles (not 0_0's neighbours, so its geometry is unchanged): 2 polys per tile
+    crowded.tiles.push_back({0, 2, 1023, 1025});
+    const int crowdedTiles = crowded.tile_count(), limit = map::max_navtile_polys(crowdedTiles);
+    check(crowdedTiles == 1048578 && limit == 2 && polys[0] > limit,
+          std::format("bake: {} tiles, limit {}, tile 0_0 has {} polys", crowdedTiles, limit, polys[0]));
+    err.clear();
+    const auto over = mapbake::bake_tile(crowded, heights, {0, 0}, err);
+    const std::string overWant = std::format(
+        "{} polygons, more than the 2 per tile 32-bit poly refs allow on a map of 1048578 tiles", polys[0]);
+    check(!over && err == overWant, "bake: a tile over the poly limit fails: " + err);
+    err.clear();
     std::vector<std::string> errors;
     world::Maps maps = world::Maps::load(r.root, errors);
     check(errors.empty() && maps.nav().has(1) && !maps.nav().has(2),

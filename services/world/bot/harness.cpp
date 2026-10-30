@@ -1,6 +1,7 @@
 #include "harness.h"
 
 #include <cmath>
+#include <fstream>
 #include <functional>
 #include <random>
 
@@ -111,5 +112,28 @@ std::string random_name(size_t len) {
 }
 
 float distance_xz(const proto::Vec3& a, const proto::Vec3& b) { return std::hypot(a.x - b.x, a.z - b.z); }
+
+std::optional<Terrain> load_terrain(const std::filesystem::path& folder, std::string& err) {
+    const auto read = [](const std::filesystem::path& p) {
+        std::ifstream in(p, std::ios::binary);
+        return std::string(std::istreambuf_iterator<char>(in), {});
+    };
+    auto info = map::parse_manifest(nlohmann::json::parse(read(folder / "map.json"), nullptr, false), err);
+    if (!info) { err = (folder / "map.json").string() + ": " + err; return std::nullopt; }
+    Terrain t{std::move(*info), {}};
+    for (const auto& r : t.info.tiles)
+        for (int32_t tz = r.z0; tz <= r.z1; ++tz)
+            for (int32_t tx = r.x0; tx <= r.x1; ++tx) {
+                for (const char* ext : {".r16", ".png"}) {
+                    const auto file = folder / "heights" / (std::to_string(tx) + "_" + std::to_string(tz) + ext);
+                    if (!std::filesystem::exists(file)) continue;
+                    auto h = map::decode_heights(read(file), ext, err);
+                    if (!h) { err = file.string() + ": " + err; return std::nullopt; }
+                    t.heights[{tx, tz}] = std::move(*h);
+                    break;
+                }
+            }
+    return t;
+}
 
 } // namespace kast::bot

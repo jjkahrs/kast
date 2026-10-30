@@ -225,7 +225,7 @@ bool ZonePanel::sceneInput(ZoneSession& zone, const SceneViewport::Input& input)
 }
 
 void ZonePanel::drawSceneOverlay(const ZoneSession& zone, ImDrawList* draw, const float* viewProj, float x, float y,
-                                 float width, float height) const
+                                 float width, float height, std::array<float, 2> centre) const
 {
     const zone::ZoneDoc* z = zone.zone();
     std::string err;
@@ -233,7 +233,7 @@ void ZonePanel::drawSceneOverlay(const ZoneSession& zone, ImDrawList* draw, cons
     if (!info)
         return;
     draw->PushClipRect(ImVec2(x, y), ImVec2(x + width, y + height), true);
-    const GroundDraw g{draw, viewProj, x, y, width, height, *info, z->state};
+    const GroundDraw g{draw, viewProj, x, y, width, height, *info, z->state, centre};
     drawObjectOverlays(g);
     if (hover_ && (tool_ == Tool::Raise || tool_ == Tool::Lower || tool_ == Tool::Flatten))
         g.circle((*hover_)[0], (*hover_)[2], brush_.radius, kBrushColor);
@@ -473,38 +473,60 @@ void ZonePanel::drawInstance(zone::ZoneDoc& z, const ZoneSession& zone)
 
 void ZonePanel::drawTileGrid(zone::ZoneDoc& z, const km::MapInfo& info)
 {
-    const zone::TileSet tiles = zone::declared_tiles(info);
-    int32_t x0 = INT32_MAX, z0 = INT32_MAX, x1 = INT32_MIN, z1 = INT32_MIN;
-    for (km::TileKey t : tiles) {
-        x0 = std::min(x0, t.x - 1);
-        z0 = std::min(z0, t.z - 1);
-        x1 = std::max(x1, t.x + 1);
-        z1 = std::max(z1, t.z + 1);
-    }
-    ImGui::TextDisabled("Click a free cell to add a tile, a tile to remove it. +z is up.");
-    const float cell = ImGui::GetFrameHeight() * 1.6f;
-    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(2.0f, 2.0f));
-    for (int32_t tz = z1; tz >= z0; --tz) { // +z up, as seen from above with the default camera
-        for (int32_t tx = x0; tx <= x1; ++tx) {
+    // The declared tiles and a free cell around them; fitted whole, the wheel zooms and a drag pans.
+    const km::TileRect box = zone::tile_bounds(info);
+    const km::TileRect bounds{box.x0 - 1, box.z0 - 1, box.x1 + 1, box.z1 + 1};
+    ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+    ImGui::TextWrapped("Click a free cell to add a tile, a tile to remove it; the wheel zooms, a drag pans. +z is up.");
+    ImGui::PopStyleColor();
+    grid_.fit(z.folder, bounds, bounds.x1 - bounds.x0 + 1, bounds.z1 - bounds.z0 + 1, ImGui::GetContentRegionAvail().x,
+              ImGui::GetFrameHeight() * 1.6f);
+    const bool looked = std::exchange(scrollToGrid_, false);
+    if (looked)
+        ImGui::SetScrollHereY(0.0f);
+    const TileGrid::Input input = grid_.area("##tilegrid");
+    // Each visible cell as a button looks (declared: its name; free: "+").
+    const ImGuiStyle& style = ImGui::GetStyle();
+    const float cell = grid_.view().cell;
+    const bool labels = cell >= ImGui::GetFontSize();
+    const km::TileRect shown = grid_.visible();
+    if (looked)
+        kast::log::info(std::format("Zone: tile grid view {}..{} ({:.0f} px cells)", zone::tile_name({shown.x0, shown.z0}),
+                                    zone::tile_name({shown.x1, shown.z1}), cell));
+    ImGui::PushClipRect(grid_.min(), grid_.max(), true);
+    for (int32_t tz = shown.z1; tz >= shown.z0; --tz)
+        for (int32_t tx = shown.x0; tx <= shown.x1; ++tx) {
             const km::TileKey t{tx, tz};
-            const bool declared = tiles.contains(t);
-            ImGui::PushID(int(tx * 7919 + tz));
-            if (!declared)
-                ImGui::PushStyleColor(ImGuiCol_Button, ImGui::GetStyleColorVec4(ImGuiCol_FrameBg));
-            if (ImGui::Button(declared ? zone::tile_name(t).c_str() : "+", ImVec2(cell, cell))) {
-                if (!declared)
-                    z.edit([&](zone::ZoneState& s) { zone::add_tile(info, s, t); });
-                else if (tiles.size() > 1)
-                    removeTile_ = t;
+            const bool declared = info.has_tile(t);
+            const bool addable = declared || zone::within_cap(info, t);
+            const bool hot = input.hover == t && addable;
+            const ImGuiCol color = hot && ImGui::IsItemActive() ? ImGuiCol_ButtonActive
+                                   : hot                        ? ImGuiCol_ButtonHovered
+                                   : declared                   ? ImGuiCol_Button
+                                                                : ImGuiCol_FrameBg;
+            const ImVec2 min = grid_.corner(t), max{min.x + cell, min.y + cell};
+            ImGui::RenderFrame(min, max, ImGui::GetColorU32(color), true, style.FrameRounding);
+            if (labels && addable) {
+                const std::string label = declared ? zone::tile_name(t) : "+";
+                const ImVec2 size = ImGui::CalcTextSize(label.c_str());
+                const ImRect rect(min, max);
+                ImGui::RenderTextClipped({min.x + style.FramePadding.x, min.y + style.FramePadding.y},
+                                         {max.x - style.FramePadding.x, max.y - style.FramePadding.y}, label.c_str(),
+                                         nullptr, &size, style.ButtonTextAlign, &rect);
             }
-            if (!declared)
-                ImGui::PopStyleColor();
-            ImGui::PopID();
-            if (tx < x1)
-                ImGui::SameLine();
         }
+    ImGui::PopClipRect();
+    if (input.hover && !zone::within_cap(info, *input.hover))
+        ImGui::SetTooltip("A map is at most %d tiles a side", zone::kMaxMapTiles);
+    if (!input.clicked)
+        return;
+    const km::TileKey t = *input.hover;
+    if (!info.has_tile(t)) {
+        if (zone::within_cap(info, t))
+            z.edit([&](zone::ZoneState& s) { zone::add_tile(info, s, t); });
     }
-    ImGui::PopStyleVar();
+    else if (zone::declared_tiles(info).size() > 1)
+        removeTile_ = t;
 }
 
 void ZonePanel::drawProblems(const ZoneSession& zone)
@@ -630,8 +652,6 @@ void ZonePanel::drawNewMapDialog(Document& doc, ZoneSession& zone)
     ImGui::InputInt("Tiles X", &newWidth_);
     ImGui::InputInt("Tiles Z", &newDepth_);
     newId_ = std::clamp(newId_, 0, 0xFFFF);
-    newWidth_ = std::clamp(newWidth_, 1, 8);
-    newDepth_ = std::clamp(newDepth_, 1, 8);
     const bool used = std::ranges::any_of(zone.project().maps, [&](const zone::ProjectMap& m) { return m.info.id == newId_; });
     if (used)
         ImGui::TextColored(kErrorColor, "Id %d is already used", newId_);

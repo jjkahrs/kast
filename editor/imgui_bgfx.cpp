@@ -79,6 +79,7 @@ void init(bgfx::ViewId view)
     ImGuiIO& io = ImGui::GetIO();
     io.BackendRendererName = "imgui_bgfx";
     io.BackendFlags |= ImGuiBackendFlags_RendererHasTextures;
+    io.BackendFlags |= ImGuiBackendFlags_RendererHasVtxOffset; // a list past 64k vertices (16-bit indices) splits
 }
 
 void render(ImDrawData* drawData)
@@ -139,7 +140,7 @@ void render(ImDrawData* drawData)
                              static_cast<uint16_t>(x1 - x0), static_cast<uint16_t>(y1 - y0));
             bgfx::setState(state);
             bgfx::setTexture(0, g_sampler, toHandle(cmd.GetTexID()));
-            bgfx::setVertexBuffer(0, &tvb, 0, numVertices); // VtxOffset is always 0: RendererHasVtxOffset not set
+            bgfx::setVertexBuffer(0, &tvb, cmd.VtxOffset, numVertices - cmd.VtxOffset);
             bgfx::setIndexBuffer(&tib, cmd.IdxOffset, cmd.ElemCount);
             bgfx::submit(g_view, g_program);
         }
@@ -156,7 +157,7 @@ void shutdown()
 
     ImGuiIO& io = ImGui::GetIO();
     io.BackendRendererName = nullptr;
-    io.BackendFlags &= ~ImGuiBackendFlags_RendererHasTextures;
+    io.BackendFlags &= ~(ImGuiBackendFlags_RendererHasTextures | ImGuiBackendFlags_RendererHasVtxOffset);
 }
 
 } // namespace imgui_bgfx

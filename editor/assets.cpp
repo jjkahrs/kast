@@ -117,6 +117,32 @@ fs::path fromUtf8(std::string_view text)
     return fs::path(std::u8string(reinterpret_cast<const char8_t*>(text.data()), text.size()));
 }
 
+bool FolderChanges::changed(const fs::path& folder)
+{
+    if (folder != folder_ || !handle_) {
+        close();
+        folder_ = folder;
+        const HANDLE handle = folder.empty() ? INVALID_HANDLE_VALUE
+                                             : FindFirstChangeNotificationW(folder.c_str(), TRUE,
+                                                                            FILE_NOTIFY_CHANGE_FILE_NAME | FILE_NOTIFY_CHANGE_DIR_NAME |
+                                                                                FILE_NOTIFY_CHANGE_SIZE | FILE_NOTIFY_CHANGE_LAST_WRITE);
+        handle_ = handle == INVALID_HANDLE_VALUE ? nullptr : handle;
+        return true;
+    }
+    if (WaitForSingleObject(handle_, 0) != WAIT_OBJECT_0)
+        return false;
+    if (!FindNextChangeNotification(handle_)) // re-armed before the caller rescans: a change meanwhile signals again
+        close();
+    return true;
+}
+
+void FolderChanges::close()
+{
+    if (handle_)
+        FindCloseChangeNotification(handle_);
+    handle_ = nullptr;
+}
+
 bool isMetaFile(const fs::path& name)
 {
     const std::wstring& text = name.native();

@@ -81,7 +81,8 @@
   shapes' own y range in the bake and dynamic obstacles (Detour tile cache).</li>
 <li><strong>No interactable state:</strong> the server keeps no cooldown, enabled flag or per-object state, and sends nothing for a
   rejected <code>Interact</code>; the game's Lua does both if it needs them.</li>
-<li><strong>32-bit poly refs:</strong> about 4096 polygons per tile at 1024 tiles a map; <code>DT_POLYREF64</code> past that.</li>
+<li><strong>32-bit poly refs:</strong> 1,024 polygons per tile on a 64 x 64 map (4,096 at 32 x 32); <code>kast_mapbake</code> refuses a tile over it. <code>DT_POLYREF64</code> past that.</li>
+<li><strong>Short nav paths:</strong> <code>kMaxNodes</code> 4096, <code>kMaxPathPolys</code> 1024, <code>kMaxPathPoints</code> 256 cap how far one path search reaches on a big map.</li>
 <li><strong>One process owns every tile:</strong> <code>Maps::owns</code> is always true for a loaded tile. Several processes need a refused
   transfer to save and send <code>Redirect{host, port, ticket}</code> to the owner.</li>
 </ul>

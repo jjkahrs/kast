@@ -324,9 +324,14 @@ player can use. The editor's Zone tab authors them (<a href="../../editor/zone-b
   when the map has no navmesh, either end is more than 2 m across (or 4 m up or down) from it, or <code>to</code> cannot be
   reached. The sample <code>systems/npcs.lua</code> walks these corners between a patrol's points, so the hills' Sentry goes
   round the mesa its route crosses.</li>
-<li><strong>Limits:</strong> Detour's poly refs are 32-bit here: tile bits + polygon bits &lt;= 22, so a map of 1024 tiles allows 4096
-  polygons per tile (more tiles, fewer polygons). A navtile over the limit refuses the start; <code>DT_POLYREF64</code> (Detour
-  rebuilt) lifts it. No dynamic obstacles (an object that stops blocking, such as an opened door) or off-mesh links
+<li><strong>Limits:</strong> Detour's poly refs are 32-bit here: tile bits + polygon bits &lt;= 22, so the polygons a tile may have
+  shrink as the map grows (<code>map::max_navtile_polys</code>): 65,536 at 8 x 8, 16,384 at 16 x 16, 4,096 at 32 x 32 and 1,024 at 64 x 64,
+  the editor's largest map. Generated relief at 0.5 m cells peaks at 358-419 polygons a tile (2.9x headroom at 64 x 64).
+  <code>kast_mapbake</code> fails on a tile over the limit, naming its polygons, the limit and the map's tile count, before the rest
+  bakes; a navtile over it (baked for a smaller map) refuses the start. <code>DT_POLYREF64</code> (Detour rebuilt, not needed so far)
+  lifts it. Paths are capped by <code>kMaxNodes</code> 4096, <code>kMaxPathPolys</code> 1024 and <code>kMaxPathPoints</code> 256
+  (<code>nav.cpp</code>): a path across much of a big map can come back <code>nil</code>
+  (<a href="../../editor/zone-builder.html#map-size-limits">Map size limits</a>). No dynamic obstacles (an object that stops blocking, such as an opened door) or off-mesh links
   (jumps, ladders) in the bake, and the client does no pathing.</li>
 <li><strong>Sample:</strong> <code>tests/project/maps/hills</code> has a mesa (x 170-200, z 316-346, 25 m flat top, 81 degree walls) and the
   Sentry (<code>.server/spawns/0_1.json</code>) patrolling from (150, 331) to (215, 331), straight through it and through a 3 m obstacle

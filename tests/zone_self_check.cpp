@@ -16,6 +16,7 @@
 #include <terrain.h>
 #include <tile_scenes.h>
 
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 
@@ -137,6 +138,13 @@ void check_new_map() {
     std::string err;
     CHECK(!new_map(p, "meadow", "Meadow", id, 2, 2, err)); // folder taken
     CHECK(!new_map(p, "../x", "X", id, 2, 2, err));
+    // The size cap: kMaxMapTiles a side is made, one more (or none) refused with the range in the message.
+    const std::string range = "1 to " + std::to_string(kMaxMapTiles) + " each way";
+    CHECK(new_map(p, "big", "Big", id, kMaxMapTiles, kMaxMapTiles, err));
+    for (const auto [w, d] : {std::pair{kMaxMapTiles + 1, 1}, {1, kMaxMapTiles + 1}, {0, 2}, {2, 0}}) {
+        err.clear();
+        CHECK(!new_map(p, "big", "Big", id, w, d, err) && err.find(range) != std::string::npos);
+    }
     auto doc = new_map(p, "plains", "Plains", id, 2, 2, err);
     CHECK(doc && doc->dirty());
     if (!doc) return;
@@ -825,6 +833,17 @@ void check_tiles() {
     // Adding 2_0 takes the hill's edge, so the map has no seam.
     doc.edit([&](ZoneState& s) { CHECK(add_tile(info, s, {2, 0})); });
     CHECK(!add_tile(info_of(doc), doc.state, {2, 0})); // already declared
+    {   // One cap for both axes: a tile that would grow the bounding box past kMaxMapTiles a side is refused.
+        km::MapInfo wide = info_of(doc);
+        wide.tiles = {{0, 0, kMaxMapTiles - 1, 0}};
+        ZoneState s = doc.state;
+        CHECK(within_cap(wide, {kMaxMapTiles - 1, kMaxMapTiles - 1}) && within_cap(wide, {3, 1}));
+        CHECK(!within_cap(wide, {kMaxMapTiles, 0}) && !within_cap(wide, {-1, 1}));
+        CHECK(!within_cap(wide, {0, kMaxMapTiles}) && !within_cap(wide, {0, -kMaxMapTiles}));
+        const Json before = s.manifest;
+        CHECK(!add_tile(wide, s, {kMaxMapTiles, 0}) && !add_tile(wide, s, {5, -kMaxMapTiles}) && s.manifest == before);
+        CHECK(add_tile(wide, s, {5, kMaxMapTiles - 1}));
+    }
     info = info_of(doc);
     CHECK(info.has_tile({2, 0}) && doc.state.heights.contains({2, 0}) && seams_equal(doc));
     CHECK(height_at(doc, {2, 0}, 0, 200) == height_at(doc, {1, 0}, 256, 200) && height_at(doc, {2, 0}, 0, 200) > 10);
@@ -1191,6 +1210,55 @@ void check_terrain_gen() {
 
 // Tile scenes (engine/tile_scenes.h, the Map tab and Play's streaming): paths, cell states, out-of-bounds roots, the
 // streaming diff, event payloads, the thumbnail colors, and a tile removed in the Zone tab keeping its scene (an orphan).
+// The editor's Scene view: meshes for the tiles around the camera's pivot, and a manifest edit rebuilds them only when
+// what the renderer reads from the map changed.
+void check_edit_view() {
+    km::MapInfo big;
+    big.tiles = {{0, 0, kMaxMapTiles - 1, kMaxMapTiles - 1}};
+    const float mid = kMaxMapTiles / 2 * km::kTileSize + 10;
+    const auto here = kast::tiles_around(big, {mid, mid}, kEditRadius);
+    const int side = 2 * kEditRadius + 1;
+    CHECK(here.size() == size_t(side * side));
+    // One tile east: a column goes, a column comes, the rest stay.
+    const auto east = kast::tiles_around(big, {mid + km::kTileSize, mid}, kEditRadius);
+    const auto kept = std::ranges::count_if(east, [&](km::TileKey t) { return std::ranges::find(here, t) != here.end(); });
+    CHECK(east.size() == here.size() && kept == side * (side - 1));
+    CHECK(kast::tiles_around(big, {10, 10}, kEditRadius).size() == size_t((kEditRadius + 1) * (kEditRadius + 1)));
+    CHECK(kast::tiles_around(big, {-5000, -5000}, kEditRadius).empty());
+    km::MapInfo eight;
+    eight.tiles = {{0, 0, 7, 7}};
+    CHECK(kast::tiles_around(eight, {1024, 1024}, kEditRadius).size() == 64); // framed: all of an 8 x 8 map
+    // The overlays draw on the same square: every meshed tile's centre and outer edge, nothing a tile beyond.
+    for (const km::TileKey t : here)
+        CHECK(in_edit_view({mid, mid}, (t.x + 0.5f) * km::kTileSize, (t.z + 0.5f) * km::kTileSize));
+    const float edge = (km::tile_of(mid, mid).x + kEditRadius + 1) * km::kTileSize;
+    CHECK(in_edit_view({mid, mid}, edge, mid) && !in_edit_view({mid, mid}, edge + 1, mid));
+    CHECK(!in_edit_view({mid, mid}, mid, mid - (kEditRadius + 1) * km::kTileSize));
+
+    km::MapInfo moved = big;
+    moved.spawn = {500, 0, 500};
+    moved.name = "renamed";
+    moved.tiles.push_back({kMaxMapTiles, 0, kMaxMapTiles, 0}); // a tile added at the edge, Tiled UVs
+    CHECK(same_terrain_mesh(big, moved));
+    for (const auto change : std::initializer_list<void (*)(km::MapInfo&)>{
+             [](km::MapInfo& m) { m.heightRange = std::array<float, 2>{0, 500}; },
+             [](km::MapInfo& m) { m.material = "materials/rock.mat"; },
+             [](km::MapInfo& m) { m.terrainUv = km::TerrainUv::Map; },
+             [](km::MapInfo& m) { m.id = 99; }}) {
+        km::MapInfo other = big;
+        change(other);
+        CHECK(!same_terrain_mesh(big, other));
+    }
+    km::MapInfo mapUv = big, grown;
+    mapUv.terrainUv = km::TerrainUv::Map;
+    grown = mapUv;
+    grown.tiles.push_back({kMaxMapTiles, 0, kMaxMapTiles, 0}); // Map UVs: a bigger bounding box moves every UV
+    CHECK(!same_terrain_mesh(mapUv, grown));
+    grown = mapUv;
+    grown.spawn = {1, 0, 1};
+    CHECK(same_terrain_mesh(mapUv, grown));
+}
+
 void check_tile_scenes() {
     using kast::TileCell;
     CHECK(kast::tileScenePath("tilegrid", {1, 2}) == "maps/tilegrid/scenes/1_2.scene");
@@ -1293,6 +1361,51 @@ void check_tile_scenes() {
     CHECK(info && kast::tileCell(info->has_tile({1, 1}), true, false, false) == TileCell::Orphan);
 }
 
+// The Map tab's and Zone tab's tile grid: the default view fits the map (an 8 x 8 cell area at least, as before zoom),
+// the wheel zooms about the mouse, a drag pans but never loses the map, and only the cells on the area are visited.
+void check_grid_view() {
+    const km::TileRect three{2, 3, 4, 5}; // 3 x 3 in the Map tab's 8 x 8 area, 400 px wide: 48 px cells, gap 2
+    const GridView fit = fit_grid(three, 8, 8, 400, 2, 4, 96);
+    CHECK(fit.cell == 48 && fit.left == 2 && fit.top == 11);
+    const auto size = grid_size(fit, 8, 8);
+    CHECK(size[0] == 398 && size[1] == 398);
+    // Bottom-left cell 2_3 in the bottom-left corner, +z up: 2_5 two rows above it.
+    CHECK((cell_corner(fit, {2, 3})[0] == 0 && cell_corner(fit, {2, 3})[1] == 350));
+    CHECK((cell_corner(fit, {2, 5})[1] == 250 && cell_corner(fit, {3, 5})[0] == 50));
+    CHECK((cell_at(fit, {1, 351}) == TileKey{2, 3} && cell_at(fit, {397, 1}) == TileKey{9, 10}));
+    CHECK((!cell_at(fit, {49, 351}))); // a gap
+    const km::TileRect shown = visible_cells(fit, three, size);
+    CHECK(shown.x0 == 2 && shown.z0 == 3 && shown.x1 == 4 && shown.z1 == 5);
+
+    const km::TileRect cap{0, 0, kMaxMapTiles - 1, kMaxMapTiles - 1};
+    const GridView whole = fit_grid(cap, kMaxMapTiles, kMaxMapTiles, 400, 2, 4, 96);
+    const auto area = grid_size(whole, kMaxMapTiles, kMaxMapTiles);
+    const km::TileRect all = visible_cells(whole, cap, area);
+    CHECK(all.x0 == 0 && all.z0 == 0 && all.x1 == kMaxMapTiles - 1 && all.z1 == kMaxMapTiles - 1);
+    // Zoom about a point: the ground under it stays; cells clamp to the range.
+    const std::array<float, 2> at{100, 50};
+    const GridView in = zoom_grid(whole, 8, at, 4, 96);
+    CHECK(in.cell == whole.cell * 8 && cell_at(in, at) == cell_at(whole, at));
+    CHECK(zoom_grid(in, 100, at, 4, 96).cell == 96 && zoom_grid(in, 0.001f, at, 4, 96).cell == 4);
+    const km::TileRect part = visible_cells(in, cap, area);
+    const int cols = part.x1 - part.x0 + 1, rows = part.z1 - part.z0 + 1;
+    CHECK(cols * rows < kMaxMapTiles * kMaxMapTiles / 16 && cols >= int(area[0] / in.pitch()));
+    // Centred on a distant tile, zoomed: it is under the area's centre; the visible cells hold it.
+    const GridView centred = centre_grid(whole, {60, 60}, 8, area, 4, 96);
+    CHECK((cell_at(centred, {area[0] / 2, area[1] / 2}) == TileKey{60, 60}));
+    const GridView distant = pan_grid(centred, {0, 0}, cap, area); // kept on the map: its top-right corner
+    const km::TileRect around = visible_cells(distant, cap, area);
+    CHECK(around.x0 <= 60 && around.x1 >= 60 && around.z0 <= 60 && around.z1 >= 60 && around.x1 == kMaxMapTiles - 1);
+    const int across = int(std::ceil(area[0] / in.pitch())); // cells on an area that starts or ends on a cell's edge
+    CHECK(around.x1 - around.x0 + 1 == across && around.z1 - around.z0 + 1 == across); // no empty cells past the edge
+    // A pan moves the ground with the mouse; a huge one stops at the map's corner.
+    const GridView left = pan_grid(distant, {in.pitch() * 3, 0}, cap, area);
+    CHECK(std::abs(left.left - (distant.left - 3)) < 1e-3f && left.top == distant.top);
+    const GridView lost = pan_grid(distant, {1e6f, -1e6f}, cap, area);
+    const km::TileRect corner = visible_cells(lost, cap, area);
+    CHECK(corner.x0 == 0 && corner.x1 == across - 1 && corner.z0 == 0 && corner.z1 == across - 1);
+}
+
 int main(int argc, char** argv) {
     kast::disableCrashDialogsIfRequested();
     if (argc == 3 && std::string(argv[1]) == "--child") { // check_process_runner's child: stdout, stderr, exit code
@@ -1324,6 +1437,8 @@ int main(int argc, char** argv) {
     check_terrain_gen();
     check_round_trip(kSource / "tests" / "project", "rt_tilegrid", "tilegrid");
     check_tile_scenes();
+    check_edit_view();
+    check_grid_view();
     if (failures) std::fprintf(stderr, "%d check(s) failed\n", failures);
     else std::printf("zone builder self-check: all passed\n");
     return failures ? 1 : 0;

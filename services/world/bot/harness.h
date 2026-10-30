@@ -3,10 +3,15 @@
 #include "auth_client.h"
 #include "world_client.h"
 
+#include <heights.h>
+
+#include <cmath>
 #include <cstdio>
+#include <filesystem>
 #include <functional>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 
 namespace kast::bot {
@@ -50,6 +55,15 @@ asio::awaitable<bool> enter_world(WorldClient& c, const std::string& name, proto
 // final position.
 asio::awaitable<proto::Vec3> walk(WorldClient& c, proto::Vec3 from, float dx, float dz, float speed = 9.0f,
                                   const std::function<float(float x, float z)>& groundY = nullptr);
+// A map's manifest and heights, read the way the server reads them (the terrain scenarios, and load --terrain).
+struct Terrain {
+    map::MapInfo info;
+    map::TileHeights heights;
+    float ground(float x, float z) const { return map::ground_at(info, heights, x, z).value_or(NAN); }
+};
+// The map in folder (<maps>/<name>); nullopt with err set if map.json or a heights file doesn't load.
+std::optional<Terrain> load_terrain(const std::filesystem::path& folder, std::string& err);
+
 // Collects every message that arrives within `window`.
 asio::awaitable<std::vector<proto::Message>> drain(WorldClient& c, Millis window);
 asio::awaitable<void> sleep_for(Millis d);
