@@ -17,6 +17,7 @@
 #include <scene_gui.h>
 #include <scene_io.h>
 #include <sdfgi.h>
+#include <sim_gamepad.h>
 #include <stats_overlay.h>
 #include <window_display.h>
 
@@ -46,7 +47,7 @@ constexpr int kScreenshotTimeoutFrames = 30;
 constexpr const char* kPakFileName = "game.pak";
 constexpr int kGuiClickFrame = 10; // --gui-click: once the GUIs have loaded and laid out
 constexpr const char* kUsage =
-    "Usage: <game>.exe [--frames N] [--screenshot out.png] [--gui-click id] [--sim-key frame,key]... [--sim-click frame,x,y]... [--sim-move frame,x,y]... [--size WxH] [--window-pos X,Y] [--user-settings file] [--fixed-dt S] [--gpu-stats] [--log-sdfgi] [--no-instancing] [--no-culling] [--no-lod] [--lod-bias F] [--force-lod N] [--no-occlusion] [--no-audio-device] [--no-vsync]";
+    "Usage: <game>.exe [--frames N] [--screenshot out.png] [--gui-click id] [--sim-key frame,key]... [--sim-click frame,x,y]... [--sim-move frame,x,y]... [--sim-gamepad frame,frames,control=value[+...]]... [--size WxH] [--window-pos X,Y] [--user-settings file] [--fixed-dt S] [--gpu-stats] [--log-sdfgi] [--no-instancing] [--no-culling] [--no-lod] [--lod-bias F] [--force-lod N] [--no-occlusion] [--no-audio-device] [--no-vsync]";
 constexpr int kGpuStatsWarmupFrames = 10; // --gpu-stats: skip startup frames (shader and target creation)
 
 struct Options {
@@ -56,6 +57,7 @@ struct Options {
     std::vector<std::pair<int, SDL_Scancode>> simKeys; // tests: these keys pressed on these frames (pushed SDL events)
     std::vector<std::pair<int, SDL_FPoint>> simClicks; // tests: a left click at this window position on this frame
     std::vector<std::pair<int, SDL_FPoint>> simMoves;  // tests: the mouse moved to this window position on this frame
+    kast::SimGamepad simGamepad; // tests: a virtual gamepad driven by these values (sim_gamepad.h)
     std::optional<std::pair<int, int>> size; // --size: a window of this size, over the project's and user's mode
     std::filesystem::path userSettings; // --user-settings: this file instead of the per-user one (tests)
     std::optional<std::pair<int, int>> windowPos; // --window-pos: window top-left
@@ -122,6 +124,11 @@ std::optional<Options> parseArgs(int argc, char** argv)
             }
             (arg == "--sim-click" ? options.simClicks : options.simMoves)
                 .emplace_back(frame, SDL_FPoint{static_cast<float>(x), static_cast<float>(y)});
+        } else if (arg == "--sim-gamepad" && hasValue) {
+            if (std::string error; !options.simGamepad.add(argv[++i], error)) {
+                kast::log::error(std::format("{}. {}", error, kUsage));
+                return std::nullopt;
+            }
         } else if (arg == "--size" && hasValue) {
             const std::string_view text = argv[++i];
             const size_t x = text.find('x');
@@ -299,6 +306,7 @@ int main(int argc, char** argv)
     bool screenshotRequested = false;
     bool screenshotSaved = false;
     bool failed = false;
+    kast::SimGamepad simGamepad = options->simGamepad; // attached at init
 
     kast::AppHooks hooks;
     hooks.init = [&](SDL_Window* created) {
@@ -338,6 +346,9 @@ int main(int argc, char** argv)
         });
         lua.setGui(&gui); // kast.gui.*
         lua.setDisplay(&display); // kast.display.*
+        lua.setInputMap(project.input);
+        if (!simGamepad.empty())
+            simGamepad.attach();
         if (options->gpuStats)
             bgfx::setDebug(BGFX_DEBUG_PROFILER);
         if (kast::activeCamera(scene) == entt::null)
@@ -452,6 +463,7 @@ int main(int argc, char** argv)
             event.button.down = false;
             SDL_PushEvent(&event);
         }
+        simGamepad.apply(frame);
         if (!options->guiClick.empty() && frame == kGuiClickFrame && !gui.click(options->guiClick))
             kast::log::error(std::format("--gui-click {}: no such element in a visible GUI", options->guiClick));
         if (options->frames == 0 || frame < options->frames)

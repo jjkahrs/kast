@@ -1,7 +1,8 @@
 -- The character window (ui/character.rml), client side: a World of Warcraft-style paper doll. The server
 -- (systems/inventory.lua) owns the gear; this shows the local player's replicated Equipment (components/equipment.lua)
 -- and turns drags into requests:
---   C (or the "character.toggle" event) opens and closes it; not while typing in a GUI text field.
+--   C or the pad's Start (the "character" action), or the "character.toggle" event, opens and closes it; not while
+--   typing in a GUI text field.
 --   A bag slot dropped on an equipment slot (bag.slot.drop): kast.world.send("equipment.equip", {from, slot, item}).
 --   Gear that doesn't fit that slot is refused here ("* Can't equip that there"), so the drop doesn't look accepted.
 --   An equipment slot dropped on a bag slot (equip.slot.drop): "equipment.unequip" {slot, to, item}; on the bag's frame,
@@ -20,7 +21,6 @@ local equipped = {}   -- equipment slot -> item id ("" = empty), as last replica
 local bagItems = {}   -- the bag's ids, as last replicated (the item a drop claims to move)
 local gear = {gear = {}, names = {}, slots = {}} -- the server's "equipment.gear"
 local open = false
-local held = false    -- C down last frame
 local hovered         -- equipment slot whose tooltip shows
 local maxHealth = 0   -- Health.max, as last replicated
 
@@ -139,9 +139,7 @@ return {
 
     update = function(dt)
         local inWorld = kast.world and kast.world.state() == "inWorld"
-        local down = inWorld and not kast.gui.focusedField() and kast.input.keyDown("C")
-        if down and not held then setOpen(not open) end
-        held = down
+        if inWorld and not kast.gui.focusedField() and kast.input.actionPressed("character") then setOpen(not open) end
         if open then
             local slot = equipOf(kast.gui.hovered())
             if slot ~= hovered then showTooltip(slot) end

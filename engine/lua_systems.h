@@ -7,6 +7,7 @@
 #include "display_access.h"
 #include "gui_access.h"
 #include "input.h"
+#include "input_actions.h"
 #include "network.h"
 #include "physics.h"
 #include "scene.h"
@@ -128,6 +129,9 @@ public:
     // The game's window for kast.display.* (kast_player's; the editor's Game view simulates one); null (the default)
     // leaves kast.display nil. Takes effect like setGui.
     void setDisplay(DisplayAccess* display) { display_ = display; }
+    // The project's input actions and axes (project.kast "input") for kast.input.action / axis; empty (the default):
+    // none. Takes effect at the next start(); kast.input.bind's overrides last until then.
+    void setInputMap(InputMap map) { inputMap_ = std::move(map); }
 
 private:
     struct State;
@@ -152,6 +156,8 @@ private:
     Replication replication_; // subscribes on bus_, sends through world_
     GuiAccess* gui_ = nullptr;
     DisplayAccess* display_ = nullptr;
+    InputMap inputMap_;
+    InputActions actions_; // the session's: updated by tick() before the systems
     std::unique_ptr<State> state_;
     uint32_t sceneChanges_ = 0;
     StateMachines fsm_{bus_}; // declared after state_, so its Lua callbacks are released while the Lua state lives

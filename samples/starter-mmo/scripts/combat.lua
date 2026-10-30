@@ -1,9 +1,9 @@
 -- Tab-target combat, client side. The server (systems/combat.lua) decides every hit; this only picks a target and shows
 -- what the server sends back (scripts/powers.lua asks for the powers).
--- Targeting: Tab cycles the NPCs in view, nearest first, within TAB_RANGE; a left click (press and release without
--- dragging, not on the GUI) on an NPC selects it (kast.input.mouseRay against each NPC's PICK sphere, unless the
--- terrain is closer); Escape clears. The target clears when its NPC despawns or dies (or the map changes). A gold disc
--- (MARKER_*) under the target shows it. "target.selected" {entityId, name, kind = "npc", health} / "target.cleared" go
+-- Targeting: Tab (the "targetNext" action; the pad's RB) cycles the NPCs in view, nearest first, within TAB_RANGE; a
+-- left click (press and release without dragging, not on the GUI) on an NPC selects it (kast.input.mouseRay against
+-- each NPC's PICK sphere, unless the terrain is closer); Escape ("targetClear"; the pad's LB) clears. The target clears
+-- when its NPC despawns or dies (or the map changes). A gold disc (MARKER_*) under the target shows it. "target.selected" {entityId, name, kind = "npc", health} / "target.cleared" go
 -- on the bus for the HUD's target frame (scripts/hud.lua).
 -- Dead NPCs (replicated Health 0) are corpses: never targeted, tipped onto their side. NPCs without Health are friendly
 -- (the server's npcs/elder.lua; it refuses powers on them too): never targeted either. A right click (press and release
@@ -52,7 +52,7 @@ local dead = false      -- the local player is dead: no targeting keys
 local player            -- the local player's scene entity
 local clones = {}       -- server id -> {entity = clone, name =, template = (NPCs)}
 local target, marker    -- the target's server id, the marker entity under its clone
-local held = {}         -- key or button name -> down last frame
+local held = {}         -- mouse button name -> down last frame
 local clicks = {}       -- button -> the press being watched: {origin, dir, travel}
 local oneShots = {}     -- remote player clone -> true while an attack or hit clip plays
 local sparks = {}       -- spark burst entities still flying
@@ -280,9 +280,8 @@ return {
         local inWorld = kast.world and kast.world.state() == "inWorld"
         if not inWorld or not player then return end
         local keys = not dead and not (kast.gui and kast.gui.focusedField())
-        local function key(name) return keys and kast.input.keyDown(name) end
-        if pressed("Tab", key("Tab")) then tabTarget() end
-        if pressed("Escape", key("Escape")) then clearTarget() end
+        if keys and kast.input.actionPressed("targetNext") then tabTarget() end
+        if keys and kast.input.actionPressed("targetClear") then clearTarget() end
         local left = watchClick(inWorld, "left")
         if left then
             local id = pick(left.origin, left.dir, false)

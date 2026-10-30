@@ -1,9 +1,9 @@
 -- Class powers, client side: the HUD's action bar (ui/hud.rml), keys 1-3, the power requests and their effects. The
 -- server (systems/combat.lua) decides everything. On entering it sends "class.powers" {class, gcd, powers = {{id, name,
 -- key, cooldown, effect}, ...}}: the bar shows exactly those, one button per key, "<key> <name>".
--- Key 1-3, or a click on a bar button (its data-event, "combat.power" {id = "power_<key>"}, which tests publish too),
--- asks kast.world.request("combat.power", {power = <id>, target = <the target of scripts/combat.lua's
--- "target.selected">}), predicted: the power's cooldown and the global cooldown start at once, and "power.predicted"
+-- Key 1-3 (the "power1".."power3" actions; the pad's X, Y and B), or a click on a bar button (its data-event,
+-- "combat.power" {id = "power_<key>"}, which tests publish too), asks kast.world.request("combat.power", {power = <id>,
+-- target = <the target of scripts/combat.lua's "target.selected">}), predicted: the power's cooldown and the global cooldown start at once, and "power.predicted"
 -- {power, cooldown = seconds left} goes on the bus (scripts/player.lua plays the attack clip). The server refusing it (or not answering in 2 s:
 -- "timeout") rolls the cooldowns back (those this press started and nothing since replaced) and publishes
 -- "power.rejected" {power, reason, predicted, cooldown} (scripts/player.lua stops the clip, scripts/combat.lua logs the
@@ -44,15 +44,8 @@ local entities = {}   -- server id -> {entity = clone, name =}
 local bolts = {}      -- {entity, from = server id, to = server id, t = seconds}
 local flashes = {}    -- effect entity -> seconds left
 local auras = {}      -- caster server id -> {[power id] = effect entity}
-local held = {}       -- key -> down last frame
 
 local function log(text) kast.publish("chat.local", {text = text}) end
-
-local function pressed(name, down)
-    local was = held[name]
-    held[name] = down
-    return down and not was
-end
 
 -- Seconds until power may be used again: its own cooldown or the global one, whichever ends last.
 local function cooldownLeft(power) return math.max((readyAt[power.id] or 0) - now, gcdUntil - now, 0) end
@@ -264,7 +257,7 @@ return {
         refreshBar()
         local keys = not dead and not (kast.gui and kast.gui.focusedField())
         for key = 1, 3 do
-            if pressed(key, keys and kast.input.keyDown(tostring(key))) then use(key) end
+            if keys and kast.input.actionPressed("power" .. key) then use(key) end
         end
     end,
 }

@@ -1,7 +1,7 @@
 -- The quest log (ui/quest_log.rml), client side. The server (systems/quests.lua) owns the quests:
---   L (or the "quest_log.toggle" event) opens and closes it; not while typing in a GUI text field. Opening it asks
---   kast.world.send("quest.log", {}) once; the server's "quest.log" {quests} gives each active quest's title, text,
---   objectives and rewards. The rows (model "quest_log", key "rows" in ui/quest_log.rml, one per quest) show each active
+--   L or the pad's View / Back (the "questLog" action), or the "quest_log.toggle" event, opens and closes it; not
+--   while typing in a GUI text field. Opening it asks kast.world.send("quest.log", {}) once; the server's "quest.log"
+--   {quests} gives each active quest's title, text, objectives and rewards. The rows (model "quest_log", key "rows" in ui/quest_log.rml, one per quest) show each active
 --   quest of the replicated Quests (components/quests.lua) with its objectives' progress ("Bats slain: 2/3"), updated as
 --   Quests changes; a change of which quests are active asks again, once. Clicking a row (qlog_row_<0-based index>)
 --   shows its text and rewards; Abandon sends "quest.abandon" {quest}.
@@ -14,7 +14,6 @@ local LOG_SIZE, MAX_OBJECTIVES, MAX_REWARDS = 20, 4, 3
 
 local me
 local open = false
-local held = false     -- L down last frame
 local mine = {active = {}, progress = {}} -- the replicated Quests
 local info = {}        -- quest id -> the server's description (quest.log)
 local askedFor         -- the active quests (joined) when quest.log was last asked for
@@ -120,8 +119,6 @@ return {
 
     update = function(dt)
         local inWorld = kast.world and kast.world.state() == "inWorld"
-        local down = inWorld and not kast.gui.focusedField() and kast.input.keyDown("L")
-        if down and not held then setOpen(not open) end
-        held = down
+        if inWorld and not kast.gui.focusedField() and kast.input.actionPressed("questLog") then setOpen(not open) end
     end,
 }

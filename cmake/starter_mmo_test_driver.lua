@@ -10,6 +10,9 @@
 -- "travel" enters in the Meadow, takes the portal into the Cavern, waits for the Bat's clone and walks back, then logs
 -- the Meadow's clones (the Guard and the idle bot) a moment later.
 -- "camera" enters as CHARACTER and stands still, for screenshots of scripts/player.lua's camera (with --sim-mouse).
+-- "pad" (a gamepad, --sim-gamepad) stands where "combat_target" does and, once the Bat lives, logs PAD: the pad then
+-- presses RB (the target), X (power 1) and A (a jump) and pushes the left stick forward; the driver logs the jump's
+-- height and how far the stick walked the character.
 -- Combat stages (scripts/combat.lua, the server's systems/combat.lua) face north on entering (the camera looks north)
 -- and get to their map through the portals first. "combat_target" stands 2.5 m north of the Cavern's Bat, so the
 -- Bat is on the view's centre line for --sim-mouse's click. "combat" stands there too, targets with the Tab key's event,
@@ -64,7 +67,7 @@ local REALM = "Starter Realm"
 local SPEED = 5 -- m/s, under the world server's 10 m/s limit
 local MEADOW, CAVERN = 10, 11
 local GATES = {[MEADOW] = {x = 153, z = 128}, [CAVERN] = {x = 103, z = 128}} -- inside each map's portal area
-local FIGHT_MAP = {combat_target = CAVERN, combat = CAVERN, combat_guard = MEADOW, nameplates = MEADOW, death = MEADOW,
+local FIGHT_MAP = {combat_target = CAVERN, pad = CAVERN, combat = CAVERN, combat_guard = MEADOW, nameplates = MEADOW, death = MEADOW,
                    revive = MEADOW,
                    loot_window = CAVERN, loot_rejects = CAVERN, loot = CAVERN, bag_full = CAVERN,
                    warrior = MEADOW, mage = MEADOW, mage_bolt = MEADOW, priest = MEADOW, rogue = MEADOW,
@@ -175,6 +178,7 @@ local gold, goldBefore
 local step, waitUntil = 0, 0
 local toggles = 0         -- bag.visibility events
 local retargetAt = 0      -- combat: when to press Tab again if nothing got selected
+local padFrom, padTop     -- pad: where the character stood at PAD, and the highest it got since
 local stepIndex, stepAt = 1, 0 -- class stages: the CLASS_STEPS step and when it began
 local logged = {}         -- combat log lines seen (class stages wait for some)
 local charReplies = 0     -- world.charCreated / charError answers (class_pick)
@@ -477,9 +481,29 @@ local function zoneStage()
     end
 end
 
+-- The pad stage: see the header.
+local function padStage(p)
+    if phase == "arrive" then
+        target = (math.abs(p.x - BAT_SPOT.x) > 0.2 or math.abs(p.z - BAT_SPOT.z) > 0.2) and BAT_SPOT or nil
+        if target or not batAlive() then return end
+        phase, padFrom, padTop = "pad", p, p.y
+        log("PAD")
+    elseif phase == "pad" then
+        local moved = math.sqrt((p.x - padFrom.x) ^ 2 + (p.z - padFrom.z) ^ 2)
+        if moved < 0.3 and p.y > padTop then padTop = p.y end -- the jump, in place: not a slope walked up
+        if moved > 2 then
+            phase = "done"
+            log("jumped %.1f m", padTop - padFrom.y)
+            log("moved %.1f m by the left stick", moved)
+            shoot("pad")
+        end
+    end
+end
+
 -- The combat stages' moves and key presses for this frame.
 local function fight()
     local p = kast.get(player, "Transform").position
+    if STAGE == "pad" then return padStage(p) end
     if STAGE == "combat_target" or STAGE == "combat" then
         target = (math.abs(p.x - BAT_SPOT.x) > 0.2 or math.abs(p.z - BAT_SPOT.z) > 0.2) and BAT_SPOT or nil
         if target or STAGE ~= "combat" then return end

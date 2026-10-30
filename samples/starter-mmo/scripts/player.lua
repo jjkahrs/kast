@@ -2,6 +2,8 @@
 -- W runs forward, S backpedals, A/D turn (strafe while the right mouse button is held), Space jumps. Left drag orbits
 -- the camera around the character; right drag turns the camera and the character with it; the wheel zooms. Running
 -- forward swings the camera back behind. The cursor hides while dragging and comes back where the drag began.
+-- Keys go through project.kast's "input" actions and axes, so a gamepad plays too: the left stick runs and turns as
+-- W/S and A/D do (partly pushed: slower), the right stick orbits the camera, A jumps.
 -- A press that starts on the GUI (chat box, HUD) turns nothing, and keys typed into a GUI text field don't move.
 -- Zone obstacles (the meadow's rocks, trees and shrine: static colliders, maps/meadow/objects) stop the character; it
 -- slides along them when it can. The world server cuts the same shapes from its navmesh.
@@ -19,6 +21,7 @@ local ZOOM_MIN, ZOOM_MAX, ZOOM_START = 2, 30, 10 -- m from the pivot
 local ZOOM_STEP = 1.15 -- distance factor per wheel notch
 local PITCH_MIN, PITCH_MAX, PITCH_START = math.rad(-85), math.rad(85), math.rad(-20) -- negative looks down
 local MOUSE_SENSITIVITY = math.rad(0.25) -- per pixel dragged
+local PAD_LOOK_RATE = math.rad(150) -- per second, the right stick fully pushed
 local FOLLOW_RATE = 4 -- 1/s: how fast the camera swings back behind while running forward
 local PIVOT_HEIGHT = 1.5 -- m above the feet: head and shoulders
 local CAMERA_CLEARANCE = 0.3 -- m kept above the terrain
@@ -161,15 +164,21 @@ return {
             yaw = yaw - mx * MOUSE_SENSITIVITY
             pitch = clamp(pitch - my * MOUSE_SENSITIVITY, PITCH_MIN, PITCH_MAX)
         end
+        local lookX, lookY = 0, 0
+        if inWorld then lookX, lookY = kast.input.axis("lookX"), kast.input.axis("lookY") end
+        if lookX ~= 0 or lookY ~= 0 then -- the right stick orbits, as a left drag does
+            yaw = yaw - lookX * PAD_LOOK_RATE * dt
+            pitch = clamp(pitch - lookY * PAD_LOOK_RATE * dt, PITCH_MIN, PITCH_MAX)
+            orbit = true
+        end
         local wheel = kast.input.wheelDelta()
         if inWorld and wheel ~= 0 and not (kast.gui and kast.gui.mouseOver()) then
             distance = clamp(distance * ZOOM_STEP ^ -wheel, ZOOM_MIN, ZOOM_MAX)
         end
 
         local keys = inWorld and not dead and not (kast.gui and kast.gui.focusedField())
-        local function key(name) return keys and kast.input.keyDown(name) end
-        local forward = (key("W") and 1 or 0) - (key("S") and 1 or 0)
-        local side = (key("D") and 1 or 0) - (key("A") and 1 or 0)
+        local forward = keys and kast.input.axis("move") or 0 -- W / S, the left stick up / down
+        local side = keys and kast.input.axis("turn") or 0    -- D / A, the left stick right / left
         local strafe = 0
         if steer then
             heading = yaw - math.pi -- face where the camera looks
@@ -188,7 +197,8 @@ return {
         local len = math.sqrt(dx * dx + dz * dz)
         local x, z = p.x, p.z
         if len > 0 then
-            local speed = forward < 0 and BACK_SPEED or RUN_SPEED
+            local push = math.min(1, math.max(math.abs(forward), math.abs(strafe))) -- keys: 1; a stick: how far
+            local speed = (forward < 0 and BACK_SPEED or RUN_SPEED) * push
             x, z = x + dx / len * speed * dt, z + dz / len * speed * dt
             if blocked(x, z, p.y) then
                 -- Up to the obstacle (the step's longest free part, to 1/64 of it), so where the character stops
@@ -210,7 +220,7 @@ return {
             if y <= ground then
                 y, airborne, landed = ground, false, true
             end
-        elseif key("Space") then
+        elseif keys and kast.input.action("jump") then
             airborne, jumped, vy, y = true, true, math.sqrt(2 * GRAVITY * JUMP_HEIGHT), ground
         end
         animate(forward, strafe, jumped, landed)

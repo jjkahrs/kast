@@ -91,9 +91,9 @@ struct SceneRequest {
 struct LuaSystems::State {
     State(Scene& scene, const std::optional<std::filesystem::path>& projectRoot, const std::string& scenePath, Input* input,
           EventBus& bus, StateMachines& fsm, Physics& physics, Audio& audio, Network& network, AuthClient& auth,
-          WorldClient& world, ChatClient& chat, GuiAccess* gui, DisplayAccess* display)
+          WorldClient& world, ChatClient& chat, GuiAccess* gui, DisplayAccess* display, InputActions& actions)
         : scene(scene), projectRoot(projectRoot), input(input), bus(bus), fsm(fsm), physics(physics), audio(audio),
-          network(network), auth(auth), world(world), chat(chat), gui(gui), display(display)
+          network(network), auth(auth), world(world), chat(chat), gui(gui), display(display), actions(actions)
     {
         for (const LoadedScene& loaded : scene.loadedScenes())
             scenePaths[loaded.slot] = loaded.slot == scene.activeSlot() ? scenePath : projectPath(loaded.path);
@@ -113,6 +113,7 @@ struct LuaSystems::State {
     ChatClient& chat;
     GuiAccess* gui; // null: no game GUIs here, kast.gui is nil
     DisplayAccess* display; // null: no window here, kast.display is nil
+    InputActions& actions;  // kast.input.action / axis / bind
     std::unordered_map<entt::entity, AudioHandle> sources; // the last voice each AudioSource started (kast.audio.stopSource)
     MaterialLibrary materials; // shared .mat files, for kast.get/setMaterialProperty
     std::vector<SceneRequest> sceneRequests; // this frame's, in call order (a switch drops the ones before it)
@@ -185,6 +186,7 @@ struct LuaSystems::State {
     const Material& material(lua_State* L, entt::entity entity); // its instance, else its MeshRenderer's material
     std::string eventName(lua_State* L, const char* function, const sol::object& name);
     void bindApi();
+    void bindGamepadApi();
     void bindFsmApi();
     void bindPhysicsApi();
     void bindAudioApi();
@@ -1072,6 +1074,7 @@ void LuaSystems::State::bindApi()
         if (input)
             input->cursorLocked = locked.as<bool>();
     });
+    bindGamepadApi();
     bindFsmApi();
     bindPhysicsApi();
     bindAudioApi();
@@ -1089,6 +1092,86 @@ void LuaSystems::State::bindApi()
     chatApi = makeChatApi(lua, chat); // kast.chat.*: see lua_chat_api.h
     bindGuiApi();
     bindDisplayApi();
+}
+
+// kast.input's gamepad (Input's active pad) and action-mapping functions (input_actions.h, project.kast "input").
+void LuaSystems::State::bindGamepadApi()
+{
+    inputApi.set_function("gamepadConnected", [this] { return input && input->gamepad; });
+    inputApi.set_function("gamepadButton", [this](sol::this_state L, const sol::object& name) {
+        const int button = name.get_type() == sol::type::string ? padButtonFromName(name.as<std::string_view>()) : -1;
+        if (button < 0)
+            raise(L, std::format("kast.input.gamepadButton: unknown button {} ({})", toString(L, name), padButtonNames()));
+        return input && input->padButtons[button];
+    });
+    inputApi.set_function("gamepadAxis", [this](sol::this_state L, const sol::object& name) {
+        const int axis = name.get_type() == sol::type::string ? padAxisFromName(name.as<std::string_view>()) : -1;
+        if (axis < 0)
+            raise(L, std::format("kast.input.gamepadAxis: unknown axis {} ({})", toString(L, name), padAxisNames()));
+        return input ? input->padAxis(axis) : 0.0f;
+    });
+    // The name of a defined action (axis: of an axis), else raises listing them.
+    const auto known = [this](lua_State* L, const char* function, const sol::object& name, bool axis) {
+        if (name.get_type() == sol::type::string &&
+            (axis ? actions.hasAxis(name.as<std::string>()) : actions.hasAction(name.as<std::string>())))
+            return name.as<std::string>();
+        std::string list;
+        if (axis)
+            for (const auto& [defined, binding] : actions.map().axes)
+                list += (list.empty() ? "" : ", ") + defined;
+        else
+            for (const auto& [defined, bindings] : actions.map().actions)
+                list += (list.empty() ? "" : ", ") + defined;
+        raise(L, std::format("kast.input.{}: unknown {} {} ({})", function, axis ? "axis" : "action", toString(L, name),
+                             list.empty() ? "none in project.kast \"input\"" : list));
+    };
+    inputApi.set_function("action", [this, known](sol::this_state L, const sol::object& name) {
+        return actions.held(known(L, "action", name, false));
+    });
+    inputApi.set_function("actionPressed", [this, known](sol::this_state L, const sol::object& name) {
+        return actions.pressed(known(L, "actionPressed", name, false));
+    });
+    inputApi.set_function("actionReleased", [this, known](sol::this_state L, const sol::object& name) {
+        return actions.released(known(L, "actionReleased", name, false));
+    });
+    inputApi.set_function("axis", [this, known](sol::this_state L, const sol::object& name) {
+        return actions.axis(known(L, "axis", name, true));
+    });
+    // kast.input.bind(action, "pad:a" | {"key:Space", "pad:a"}): replaces the action's bindings for this Play session.
+    inputApi.set_function("bind", [this, known](sol::this_state L, const sol::object& name, const sol::object& binding) {
+        const std::string action = known(L, "bind", name, false);
+        std::vector<sol::object> texts;
+        if (binding.get_type() == sol::type::table)
+            for (const auto& [key, value] : binding.as<sol::table>())
+                texts.push_back(value);
+        else
+            texts.push_back(binding);
+        std::vector<InputBinding> bindings;
+        for (const sol::object& text : texts) {
+            std::string error = std::format("expected a binding string or a list of them, got {}", toString(L, text));
+            std::optional<InputBinding> parsed;
+            if (text.get_type() == sol::type::string)
+                parsed = parseInputBinding(text.as<std::string_view>(), error);
+            if (!parsed)
+                raise(L, std::format("kast.input.bind: {}", error));
+            bindings.push_back(*parsed);
+        }
+        actions.bind(action, std::move(bindings));
+    });
+    // kast.input.bindAxis(axis, {pad = "-lefty", negative = "S", positive = "W", deadzone = 0.2}): the same for an axis.
+    inputApi.set_function("bindAxis", [this, known](sol::this_state L, const sol::object& name, const sol::object& binding) {
+        const std::string axis = known(L, "bindAxis", name, true);
+        nlohmann::json json;
+        std::string error;
+        std::optional<InputAxis> parsed;
+        if (binding.get_type() != sol::type::table)
+            error = std::format("expected a table, got {}", toString(L, binding));
+        else if (luaToJson(binding, json, error, "binding"))
+            parsed = parseInputAxis(nlohmann::ordered_json(json), error);
+        if (!parsed)
+            raise(L, std::format("kast.input.bindAxis: {}", error));
+        actions.bindAxis(axis, *parsed);
+    });
 }
 
 // kast.fsm.*: thin wrappers over StateMachines, whose std::invalid_argument (a bad target) becomes a Lua error at the
@@ -2202,6 +2285,7 @@ void LuaSystems::start(Scene& scene, const std::optional<std::filesystem::path>&
     terrain_.start(projectRoot);
     tileSceneFiles_.clear();
     failedTileScenes_.clear();
+    actions_.reset(inputMap_);
     launch(scene, projectRoot, scenePath, input);
 }
 
@@ -2216,7 +2300,7 @@ void LuaSystems::launch(Scene& scene, const std::optional<std::filesystem::path>
     if (gui_)
         gui_->reset(); // the old scene's documents and writes; the inits' writes apply as the new documents load
     state_ = std::make_unique<State>(scene, projectRoot, scenePath, input, bus_, fsm_, physics_, audio_, network_, auth_,
-                                     world_, chat_, gui_, display_);
+                                     world_, chat_, gui_, display_, actions_);
     state_->playOnStart(); // before the inits, which may stop them
     std::vector<std::string> systems; // every loaded scene's, in load order, each once
     for (const LoadedScene& loaded : scene.loadedScenes())
@@ -2249,6 +2333,7 @@ bool LuaSystems::tick(float dt)
         bus_.publish(std::move(event.name), std::move(event.payload), "kast.chat");
     if (state_->gui)
         state_->gui->advance(dt); // floating world texts age (kast.gui.worldText)
+    actions_.update(state_->input); // pressed / released: since the last tick
     state_->tick(dt);
     replication_.update(dt); // sends what this frame's systems did to the local player
     std::vector<SceneRequest> requests = std::move(state_->sceneRequests);
