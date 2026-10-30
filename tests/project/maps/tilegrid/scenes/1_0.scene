@@ -1,0 +1,15 @@
+{
+  "version": 5,
+  "entities": [
+    {
+      "id": 1,
+      "name": "Well",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [384, 25, 120], "rotation": [0, 0, 0, 1], "scale": [6, 6, 6] },
+        "MeshRenderer": { "primitive": "sphere", "material": "" }
+      }
+    }
+  ],
+  "systems": []
+}

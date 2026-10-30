@@ -106,6 +106,9 @@ constexpr int kMaxTerrainImage = 4096;
 TerrainImage bake_terrain(const kast::map::MapInfo& info, const ZoneState& state, const Gradient& gradient);
 // An 8-bit RGB PNG (deflated).
 std::string encode_png_rgb(const TerrainImage& image);
+// The Map tab's thumbnail of tile t: size x size pixels, row 0 at the tile's max z (north up, as the tab draws it),
+// each the gradient's color at its nearest sample's height (grayscale, black low to white high, without one).
+TerrainImage tile_thumbnail(const ZoneState& state, TileKey t, const std::optional<Gradient>& gradient, int size);
 // The generated .mat: white base color times texturePath, metallic 0, roughness 0.9.
 kast::Material terrain_material(const std::string& texturePath);
 

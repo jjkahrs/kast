@@ -94,6 +94,12 @@ sub.unsubscribe();                          // or let the handle go out of scope
 <code>history()</code> returns the last 500 delivered events (<code>frame</code> = drains since Play start, <code>name</code>, compact one-line JSON
 <code>payload</code>, <code>publisher</code>). A <code>Subscription</code> must not outlive its bus; after <code>reset()</code> it is a harmless no-op. Physics
 publishes the <a href="physics.html#physics">collision and trigger events</a>.</p>
+<p id="engine-events"><strong>Engine events</strong> (publisher <code>kast.terrain</code>, from <a href="terrain.html">terrain
+streaming</a>): <code>area.left</code> / <code>area.entered</code> <code>{map, id, name}</code> when the centre changes area, and
+<code>map.tileScene.loaded</code> / <code>map.tileScene.unloaded</code> <code>{map, tx, tz, path}</code> when a <a href="terrain.html#tile-scenes">tile
+scene</a> streams in or out (<code>map</code>: the map id, <code>tx</code>, <code>tz</code>: the tile, <code>path</code>: the project-relative scene file, e.g.
+<code>maps/tilegrid/scenes/1_0.scene</code>). Each is published at the end of the frame that changed it and delivered at the next
+frame's drain.</p>
 <p><strong>Events panel</strong> (editor, tabbed with Console): the last 500 delivered events, oldest first, following new ones while
 scrolled to the bottom. Columns: frame, event name, compact payload, publisher (script path or <code>C++</code>). <strong>Clear</strong>
 empties it; the filter shows events whose name contains the text (case-sensitive). Play start clears it; it stays

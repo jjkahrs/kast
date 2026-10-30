@@ -14,6 +14,7 @@
 #include <scene.h>
 #include <renderer.h> // decodeImage
 #include <terrain.h>
+#include <tile_scenes.h>
 
 #include <chrono>
 #include <cmath>
@@ -29,6 +30,7 @@
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include <stb_image_write.h>
 #include <filesystem>
+#include <fstream>
 #include <functional>
 #include <tuple>
 #include <map>
@@ -1187,6 +1189,110 @@ void check_terrain_gen() {
           !fs::exists(root / "maps" / "gen2"));
 }
 
+// Tile scenes (engine/tile_scenes.h, the Map tab and Play's streaming): paths, cell states, out-of-bounds roots, the
+// streaming diff, event payloads, the thumbnail colors, and a tile removed in the Zone tab keeping its scene (an orphan).
+void check_tile_scenes() {
+    using kast::TileCell;
+    CHECK(kast::tileScenePath("tilegrid", {1, 2}) == "maps/tilegrid/scenes/1_2.scene");
+    CHECK(kast::tileSceneTile("3_-1.scene") == km::TileKey(3, -1) && kast::tileSceneTile("-2_0.scene") == km::TileKey(-2, 0));
+    for (const char* bad : {"1_2.scen", "1-2.scene", "a_2.scene", "1_2_3.scene", "_2.scene", "1_.scene", "+1_2.scene",
+                            "1_2.scene.meta", "notes.txt", "1 _2.scene"})
+        CHECK(!kast::tileSceneTile(bad));
+    const auto ref = kast::parseTileScenePath("maps/tilegrid/scenes/2_0.scene");
+    CHECK(ref && ref->folder == "tilegrid" && ref->tile == km::TileKey(2, 0));
+    CHECK(kast::parseTileScenePath("maps\\tilegrid\\scenes\\2_0.scene").has_value());
+    for (const char* bad : {"scenes/tilegrid.scene", "maps/tilegrid/2_0.scene", "maps//scenes/2_0.scene",
+                            "maps/tilegrid/scenes/x/2_0.scene", "x/maps/tilegrid/scenes/2_0.scene"})
+        CHECK(!kast::parseTileScenePath(bad));
+
+    CHECK(kast::tileCell(false, false, false, false) == TileCell::Undeclared);
+    CHECK(kast::tileCell(false, true, false, false) == TileCell::Orphan);
+    CHECK(kast::tileCell(false, true, true, true) == TileCell::Orphan); // undeclared wins
+    CHECK(kast::tileCell(true, false, false, false) == TileCell::Declared);
+    CHECK(kast::tileCell(true, true, false, false) == TileCell::HasScene);
+    CHECK(kast::tileCell(true, true, true, false) == TileCell::Open);
+    CHECK(kast::tileCell(true, true, true, true) == TileCell::Unsaved);
+    CHECK(kast::tileCell(true, false, true, false) == TileCell::Unsaved); // created, not saved yet
+
+    CHECK(!kast::outsideTile({1, 0}, 256, 0) && !kast::outsideTile({1, 0}, 511.9f, 255.9f));
+    CHECK(kast::outsideTile({1, 0}, 512, 10) == km::TileKey(2, 0) && kast::outsideTile({0, 0}, -0.5f, 3) == km::TileKey(-1, 0));
+
+    // Streaming: tile 1_1 wanted (radius 0 at its centre); 0_0 and 1_0 are loaded, so are another map's tile scene, a
+    // plain scene and the active root.
+    const std::vector<km::TileKey> withScene{{0, 0}, {1, 0}, {1, 1}, {0, 1}};
+    const std::vector<std::string> loaded{"scenes/tilegrid.scene", "maps/tilegrid/scenes/0_0.scene",
+                                          "maps/tilegrid/scenes/1_0.scene", "maps/other/scenes/1_1.scene", "levels/x.scene"};
+    auto plan = kast::planTileScenes("tilegrid", {{1, 1}}, withScene, loaded, "scenes/tilegrid.scene", {});
+    CHECK((plan.unload == std::vector<std::string>{"maps/tilegrid/scenes/0_0.scene", "maps/tilegrid/scenes/1_0.scene",
+                                                   "maps/other/scenes/1_1.scene"}));
+    CHECK(plan.load == "maps/tilegrid/scenes/1_1.scene");
+    plan = kast::planTileScenes("tilegrid", {{1, 1}}, withScene, loaded, "scenes/tilegrid.scene",
+                                {"maps/tilegrid/scenes/1_1.scene"});
+    CHECK(!plan.load); // a failed load is not retried
+    // Radius 1 around 0_0: 0_0 and 1_0 stay; one load a frame, in wanted order (z then x), none twice.
+    km::MapInfo grid;
+    grid.tiles = {{0, 0, 2, 2}};
+    const std::vector<km::TileKey> around = kast::tiles_around(grid, {10, 10}, 1);
+    CHECK((around == std::vector<km::TileKey>{{0, 0}, {1, 0}, {0, 1}, {1, 1}}));
+    plan = kast::planTileScenes("tilegrid", around, withScene, loaded, "scenes/tilegrid.scene", {});
+    CHECK((plan.unload == std::vector<std::string>{"maps/other/scenes/1_1.scene"}));
+    CHECK(plan.load == "maps/tilegrid/scenes/0_1.scene");
+    // The active scene is never unloaded, even a tile scene.
+    plan = kast::planTileScenes("tilegrid", {}, withScene, {"maps/tilegrid/scenes/0_0.scene"},
+                                "maps/tilegrid/scenes/0_0.scene", {});
+    CHECK(plan.unload.empty() && !plan.load);
+
+    const nlohmann::json event = kast::tileSceneEvent(7, {"tilegrid", {2, 1}});
+    CHECK(event == nlohmann::json({{"map", 7}, {"tx", 2}, {"tz", 1}, {"path", "maps/tilegrid/scenes/2_1.scene"}}));
+
+    std::string err;
+    auto summary = kast::summarizeTileScene(R"({"entities": [
+        {"id": 1, "name": "A", "parent": null, "components": {"Transform": {"position": [600, 1, 400]}}},
+        {"id": 2, "name": "B", "parent": 1, "components": {}},
+        {"id": 3, "name": "C", "parent": null, "components": 5}]})", err);
+    CHECK(summary && summary->entities == 3 && summary->roots.size() == 2 && summary->roots[0].name == "A" &&
+          summary->roots[0].xz == (std::array<float, 2>{600, 400}) && summary->roots[1].xz == (std::array<float, 2>{0, 0}));
+    CHECK(!kast::summarizeTileScene("{", err) && !err.empty());
+    CHECK(!kast::summarizeTileScene(R"({"entities": 1})", err));
+
+    // Thumbnails: grayscale without terrainColors, the gradient's colors with; row 0 is the tile's max z.
+    ZoneState state;
+    auto heights = std::make_shared<km::Heights>(km::flat_heights());
+    (*heights)[size_t(km::kTileSamples - 1) * km::kTileSamples] = 65535; // u 0, v 256: the north-west corner
+    state.heights[{0, 0}] = heights;
+    TerrainImage gray = tile_thumbnail(state, {0, 0}, std::nullopt, 8);
+    CHECK(gray.width == 8 && gray.height == 8 && gray.rgb.size() == 8 * 8 * 3);
+    CHECK(gray.rgb[0] == 255 && gray.rgb[1] == 255 && gray.rgb[2] == 255); // top-left: high
+    CHECK(gray.rgb[(7 * 8 + 7) * 3] == 0 && gray.rgb[(7 * 8) * 3] == 0);  // the south row: flat, low
+    const Gradient two{{0, {1, 0, 0}}, {1, {0, 0, 1}}};
+    TerrainImage tinted = tile_thumbnail(state, {0, 0}, two, 8);
+    CHECK(tinted.rgb[0] == 0 && tinted.rgb[2] == 255 && tinted.rgb[(7 * 8) * 3] == 255 && tinted.rgb[(7 * 8) * 3 + 2] == 0);
+    CHECK(tile_thumbnail(state, {5, 5}, std::nullopt, 4).rgb == std::vector<uint8_t>(4 * 4 * 3, 0)); // no heights: flat
+
+    // The test map: 9 tiles, scenes on 4 of them plus the orphan 3_1. Removing 1_1 in the zone keeps its scene.
+    const fs::path root = copy_project(kSource / "tests" / "project", "tile_scenes");
+    const fs::path scenes = root / "maps" / "tilegrid" / "scenes";
+    fs::create_directories(scenes / "sub");
+    std::ofstream(scenes / "notes.txt") << "x";
+    std::ofstream(scenes / "sub" / "0_0.scene") << "{}";
+    const kast::TileSceneFiles files = kast::listTileScenes(root / "maps" / "tilegrid");
+    CHECK((files.tiles == std::vector<km::TileKey>{{0, 0}, {1, 0}, {0, 1}, {1, 1}, {3, 1}}));
+    CHECK((files.badNames == std::vector<std::string>{"notes.txt"})); // .meta files and subfolders are left out
+    Project p = scan_project(root);
+    auto doc = load_map(p, "tilegrid", err);
+    CHECK(doc.has_value() && validate(p, *doc).empty());
+    if (!doc) return;
+    auto info = doc->info(err);
+    CHECK(info && declared_tiles(*info).size() == 9 && !info->has_tile({3, 1}));
+    if (!info) return;
+    doc->edit([&](ZoneState& s) { remove_tile(*info, s, {1, 1}); });
+    CHECK(save_map(p, *doc, false).empty());
+    CHECK(fs::exists(scenes / "1_1.scene") && !fs::exists(root / "maps" / "tilegrid" / "heights" / "1_1.png") &&
+          !fs::exists(root / "maps" / "tilegrid" / "heights" / "1_1.r16"));
+    info = doc->info(err);
+    CHECK(info && kast::tileCell(info->has_tile({1, 1}), true, false, false) == TileCell::Orphan);
+}
+
 int main(int argc, char** argv) {
     kast::disableCrashDialogsIfRequested();
     if (argc == 3 && std::string(argv[1]) == "--child") { // check_process_runner's child: stdout, stderr, exit code
@@ -1216,6 +1322,8 @@ int main(int argc, char** argv) {
     check_tiles();
     check_process_runner();
     check_terrain_gen();
+    check_round_trip(kSource / "tests" / "project", "rt_tilegrid", "tilegrid");
+    check_tile_scenes();
     if (failures) std::fprintf(stderr, "%d check(s) failed\n", failures);
     else std::printf("zone builder self-check: all passed\n");
     return failures ? 1 : 0;

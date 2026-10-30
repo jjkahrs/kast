@@ -2719,6 +2719,80 @@ end })");
           "restoreOpenScenes reopens the set and the active scene, skipping a missing file with a warning");
 }
 
+// Tile scenes in Play (docs/engine/terrain.html#tile-scenes): a copy of tests/project's scenes/tilegrid.scene (Terrain
+// radius 0 on map 7, no systems) and maps/tilegrid, with a broken 2_0.scene. The camera moving across tiles streams
+// their scenes in and out through the additive load (one a frame) with map.tileScene.* events; an open tile scene out
+// of range unloads; a broken file logs one error and streaming goes on; Stop restores the editor's open set.
+void checkTileSceneStreaming()
+{
+    const std::filesystem::path source = KAST_TEST_PROJECT_DIR;
+    const std::filesystem::path dir = projectTestDir("kast_tile_scenes", "Tiles");
+    std::filesystem::create_directories(dir / "maps");
+    std::filesystem::create_directories(dir / "scenes");
+    std::filesystem::copy(source / "maps" / "tilegrid", dir / "maps" / "tilegrid", std::filesystem::copy_options::recursive);
+    nlohmann::ordered_json root = nlohmann::ordered_json::parse(readText(source / "scenes" / "tilegrid.scene"));
+    root["systems"] = nlohmann::ordered_json::array();
+    writeFile(dir / "scenes" / "tilegrid.scene", root.dump(2));
+    writeFile(dir / "maps" / "tilegrid" / "scenes" / "2_0.scene", "{ not a scene");
+
+    Document doc;
+    std::string error;
+    check(openFile(doc, (dir / "scenes" / "tilegrid.scene").string(), error) &&
+              openSceneAdditive(doc, (dir / "maps" / "tilegrid" / "scenes" / "1_1.scene").string(), error),
+          "open the tile grid's root scene and tile 1_1's scene");
+    selectById(doc, 3);
+    const nlohmann::ordered_json before = kast::scenesToJson(doc.scene);
+    const kast::SceneSlot rootSlot = doc.scene.activeSlot();
+    const auto open = [&] {
+        std::string names;
+        for (const kast::LoadedScene& loaded : doc.scene.loadedScenes())
+            names += (names.empty() ? "" : ",") + std::filesystem::path(loaded.path).filename().string();
+        return names;
+    };
+    const auto moveCamera = [&](float x, float z) {
+        doc.scene.registry().get<kast::Transform>(named(doc.scene, "Main Camera")).position = {x, 90.0f, z};
+    };
+    const auto delivered = [&](const std::string& name, const std::string& payload) {
+        return std::ranges::count_if(doc.lua.bus().history(), [&](const kast::EventBus::Delivered& d) {
+            return d.name == name && d.payload == payload;
+        });
+    };
+
+    startPlay(doc); // the camera is over tile 0_0
+    updatePlay(doc, 0.1f);
+    check(open() == "tilegrid.scene,0_0.scene" && doc.scene.activeSlot() == rootSlot,
+          "Play: the open 1_1 is out of range and unloads, 0_0's scene streams in; the root stays active");
+    check(named(doc.scene, "Tower") != entt::null && named(doc.scene, "Flag") != entt::null && named(doc.scene, "Statue") == entt::null,
+          "the streamed scene's entities are in the scene, the unloaded one's are gone");
+    moveCamera(384.0f, 128.0f); // tile 1_0
+    updatePlay(doc, 0.1f);
+    check(open() == "tilegrid.scene,1_0.scene", "crossing into 1_0: 0_0 unloads, 1_0 loads");
+    updatePlay(doc, 0.1f); // the events published at the end of a frame are delivered in the next
+    check(delivered("map.tileScene.unloaded", R"({"map":7,"path":"maps/tilegrid/scenes/1_1.scene","tx":1,"tz":1})") == 1 &&
+              delivered("map.tileScene.loaded", R"({"map":7,"path":"maps/tilegrid/scenes/0_0.scene","tx":0,"tz":0})") == 1 &&
+              delivered("map.tileScene.unloaded", R"({"map":7,"path":"maps/tilegrid/scenes/0_0.scene","tx":0,"tz":0})") == 1 &&
+              delivered("map.tileScene.loaded", R"({"map":7,"path":"maps/tilegrid/scenes/1_0.scene","tx":1,"tz":0})") == 1,
+          "map.tileScene.loaded / unloaded once each, with {map, tx, tz, path}");
+
+    // Radius 1 around 1_0: 0_0, 0_1 and 1_1 have scenes (1_0's is loaded), 2_0's is broken; one load a frame.
+    doc.scene.registry().get<kast::Terrain>(named(doc.scene, "Terrain")).radius = 1;
+    std::vector<size_t> counts;
+    for (int i = 0; i < 6; ++i) {
+        updatePlay(doc, 0.1f);
+        counts.push_back(doc.scene.loadedScenes().size());
+    }
+    check((counts == std::vector<size_t>{3, 3, 4, 5, 5, 5}),
+          std::format("one tile scene load a frame, the broken one skipped: {}", nlohmann::json(counts).dump()).c_str());
+    check(open() == "tilegrid.scene,1_0.scene,0_0.scene,0_1.scene,1_1.scene", "every in-range tile scene, each once");
+    check(countLogged("Map: tile scene 'maps/tilegrid/scenes/2_0.scene' did not load") == 1,
+          "a broken tile scene logs one error, not one a frame");
+
+    stopPlay(doc);
+    check(kast::scenesToJson(doc.scene) == before && doc.scene.activeSlot() == rootSlot && !doc.dirty &&
+              doc.selected == named(doc.scene, "Main Camera"),
+          "Stop restores the open set exactly: the root and 1_1, the active scene, no unsaved changes, the selection");
+}
+
 } // namespace
 
 // --- Lua components ---
@@ -3633,7 +3707,7 @@ void checkBuild()
 void checkBuildSettings()
 {
     check(projectScenes(KAST_TEST_PROJECT_DIR) ==
-              std::vector<std::string>{"additive_a.scene", "additive_b.scene", "additive_player.scene", "area_lights.scene", "audio.scene", "custom_shaders.scene", "dof.scene", "events.scene", "fsm.scene", "gpu_textures.scene", "gpu_textures_bad.scene", "health.scene", "ibl_shader.scene", "ibl_sky.scene", "ibl_sky_cubemap.scene", "lightmap_room.scene", "material_features.scene",
+              std::vector<std::string>{"additive_a.scene", "additive_b.scene", "additive_player.scene", "area_lights.scene", "audio.scene", "custom_shaders.scene", "dof.scene", "events.scene", "fsm.scene", "gpu_textures.scene", "gpu_textures_bad.scene", "health.scene", "ibl_shader.scene", "ibl_sky.scene", "ibl_sky_cubemap.scene", "lightmap_room.scene", "maps/tilegrid/scenes/0_0.scene", "maps/tilegrid/scenes/0_1.scene", "maps/tilegrid/scenes/1_0.scene", "maps/tilegrid/scenes/1_1.scene", "maps/tilegrid/scenes/3_1.scene", "material_features.scene",
                                        "materials.scene", "missing_component.scene", "models.scene",
                                        "models_anim.scene", "models_lua.scene", "models_material.scene",
                                        "models_missing.scene", "net_a.scene", "net_b.scene", "online_auth.scene", "online_npcs.scene", "online_replication.scene", "online_session.scene", "online_world.scene", "orm_split.scene",
@@ -3641,7 +3715,7 @@ void checkBuildSettings()
                                        "particles_shapes.scene", "particles_space.scene", "particles_texture.scene",
                                        "physics.scene",
                                        "point_lights.scene",
-                                       "point_shadows.scene", "post_processing.scene", "prefabs.scene", "reflection_probe.scene", "reflection_probe_missing.scene", "reflection_probe_priority.scene", "scene_a.scene", "scene_b.scene", "sdfgi_outdoor.scene",
+                                       "point_shadows.scene", "post_processing.scene", "prefabs.scene", "reflection_probe.scene", "reflection_probe_missing.scene", "reflection_probe_priority.scene", "scene_a.scene", "scene_b.scene", "scenes/tilegrid.scene", "sdfgi_outdoor.scene",
                                        "shader_errors.scene", "shader_graph_demo.scene", "shader_graphs.scene", "shader_light.scene", "shader_light_local.scene", "shader_screen.scene", "shader_screen_identity.scene", "shader_showcase.scene", "shader_vertex.scene", "shader_vertex_offset.scene", "shader_vertex_offset_reference.scene", "shadows.scene", "sky_cubemap.scene", "sky_cubemap_back.scene", "sky_mismatched.scene",
                                        "sky_missing_face.scene", "sky_procedural.scene", "spot_area_shadows.scene", "spot_lights.scene", "ssao.scene", "ssr.scene", "terrain.scene", "ui.scene", "ui_bind.scene", "ui_drag.scene", "ui_effects.scene", "ui_lists.scene", "ui_masks.scene", "ui_prefab.scene", "ui_richtext.scene", "ui_scale.scene", "ui_scale_api.scene", "ui_scale_display.scene", "ui_scale_editor.scene", "ui_widgets.scene", "volumetric_fog.scene", "voxelgi_room.scene", "world_ui.scene", "world_ui_input.scene", "world_ui_overflow.scene", "world_ui_scene_view.scene", "world_ui_world.scene",
                                        "zone_objects.scene"},
@@ -3656,7 +3730,7 @@ void checkBuildSettings()
     std::filesystem::copy_file(root / "scene_b.scene", root / "levels/c.scene");
     writeFile(root / "broken.scene", "{oops");
     check(projectScenes(root) == std::vector<std::string>{"additive_a.scene", "additive_b.scene", "additive_player.scene", "area_lights.scene", "audio.scene", "broken.scene", "custom_shaders.scene", "dof.scene", "events.scene", "fsm.scene",
-                                                          "gpu_textures.scene", "gpu_textures_bad.scene", "health.scene", "ibl_shader.scene", "ibl_sky.scene", "ibl_sky_cubemap.scene", "levels/c.scene", "lightmap_room.scene", "material_features.scene", "materials.scene",
+                                                          "gpu_textures.scene", "gpu_textures_bad.scene", "health.scene", "ibl_shader.scene", "ibl_sky.scene", "ibl_sky_cubemap.scene", "levels/c.scene", "lightmap_room.scene", "maps/tilegrid/scenes/0_0.scene", "maps/tilegrid/scenes/0_1.scene", "maps/tilegrid/scenes/1_0.scene", "maps/tilegrid/scenes/1_1.scene", "maps/tilegrid/scenes/3_1.scene", "material_features.scene", "materials.scene",
                                                           "missing_component.scene", "models.scene",
                                                           "models_anim.scene", "models_lua.scene",
                                                           "models_material.scene", "models_missing.scene", "net_a.scene",
@@ -3665,7 +3739,7 @@ void checkBuildSettings()
                                                           "particles_shapes.scene", "particles_space.scene",
                                                           "particles_texture.scene", "physics.scene",
                                                           "point_lights.scene", "point_shadows.scene",
-                                                          "post_processing.scene", "prefabs.scene", "reflection_probe.scene", "reflection_probe_missing.scene", "reflection_probe_priority.scene", "scene_a.scene", "scene_b.scene", "sdfgi_outdoor.scene",
+                                                          "post_processing.scene", "prefabs.scene", "reflection_probe.scene", "reflection_probe_missing.scene", "reflection_probe_priority.scene", "scene_a.scene", "scene_b.scene", "scenes/tilegrid.scene", "sdfgi_outdoor.scene",
                                                           "shader_errors.scene", "shader_graph_demo.scene", "shader_graphs.scene", "shader_light.scene", "shader_light_local.scene", "shader_screen.scene", "shader_screen_identity.scene", "shader_showcase.scene", "shader_vertex.scene", "shader_vertex_offset.scene", "shader_vertex_offset_reference.scene", "shadows.scene", "sky_cubemap.scene", "sky_cubemap_back.scene", "sky_mismatched.scene",
                                                           "sky_missing_face.scene", "sky_procedural.scene", "spot_area_shadows.scene", "spot_lights.scene", "ssao.scene", "ssr.scene", "terrain.scene", "ui.scene", "ui_bind.scene", "ui_drag.scene", "ui_effects.scene", "ui_lists.scene", "ui_masks.scene", "ui_prefab.scene", "ui_richtext.scene", "ui_scale.scene", "ui_scale_api.scene", "ui_scale_display.scene", "ui_scale_editor.scene", "ui_widgets.scene", "volumetric_fog.scene", "voxelgi_room.scene", "world_ui.scene", "world_ui_input.scene", "world_ui_overflow.scene", "world_ui_scene_view.scene", "world_ui_world.scene",
                                                           "zone_objects.scene"},
@@ -17414,6 +17488,7 @@ int main(int argc, char** argv)
         checkAdditiveSceneModel();
         checkAdditiveLua();
         checkAdditiveEditor();
+        checkTileSceneStreaming();
         removeTree(testRoot());
         kast::log::info(g_failures == 0 ? "All additive scene checks passed" : std::format("{} additive scene check(s) failed", g_failures));
         return g_failures == 0 ? 0 : 1;
@@ -17608,6 +17683,7 @@ int main(int argc, char** argv)
     checkAdditiveSceneModel();
     checkAdditiveLua();
     checkAdditiveEditor();
+    checkTileSceneStreaming();
     checkEventBus();
     checkLuaEvents();
     checkLuaEventsFromCpp();

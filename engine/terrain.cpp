@@ -130,6 +130,7 @@ void TerrainStreamer::start(const std::optional<std::filesystem::path>& projectR
     areaMap_ = 0;
     area_ = -1;
     warnedMap_ = -1;
+    streamed_.reset();
     if (!projectRoot)
         return;
     const std::filesystem::path root = *projectRoot / "maps";
@@ -173,6 +174,14 @@ const std::filesystem::path* TerrainStreamer::folder(uint16_t id) const
 {
     const auto it = maps_.find(id);
     return it == maps_.end() ? nullptr : &it->second.folder;
+}
+
+std::optional<uint16_t> TerrainStreamer::mapNamed(const std::string& name) const
+{
+    for (const auto& [id, loaded] : maps_)
+        if (loaded.folder.filename() == name)
+            return id;
+    return std::nullopt;
 }
 
 std::shared_ptr<const TerrainTileData> TerrainStreamer::loadTile(uint16_t id, map::TileKey tile, bool lightmap) const
@@ -276,6 +285,7 @@ void TerrainStreamer::update(Scene& scene, EventBus& bus)
     std::vector<map::TileKey> wanted;
     if (loaded != maps_.end())
         wanted = tiles_around(*loaded->second.info, {at.x, at.z}, terrain->radius);
+    streamed_ = loaded == maps_.end() ? std::nullopt : std::optional(Streamed{loaded->first, wanted});
     const auto isWanted = [&](const TerrainTile& t) {
         return loaded != maps_.end() && t.map == terrain->map &&
                std::ranges::find(wanted, map::TileKey{t.tx, t.tz}) != wanted.end();

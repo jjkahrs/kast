@@ -1,0 +1,15 @@
+{
+  "version": 5,
+  "entities": [
+    {
+      "id": 1,
+      "name": "Lost Shrine",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [900, 20, 400], "rotation": [0, 0, 0, 1], "scale": [4, 8, 4] },
+        "MeshRenderer": { "primitive": "cube", "material": "" }
+      }
+    }
+  ],
+  "systems": []
+}

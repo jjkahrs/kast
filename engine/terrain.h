@@ -80,6 +80,16 @@ public:
     const std::filesystem::path* folder(uint16_t id) const;
     // A tile of a loaded map as update() loads it (with its lightmap if lightmap), or null if the map isn't loaded.
     std::shared_ptr<const TerrainTileData> loadTile(uint16_t id, map::TileKey tile, bool lightmap) const;
+    // The id of the loaded map in maps/<name>, or nullopt.
+    std::optional<uint16_t> mapNamed(const std::string& name) const;
+
+    // What the last update() streamed: the Terrain's map (when loaded) and its tiles around the centre. Tile scenes
+    // (tile_scenes.h) follow it.
+    struct Streamed {
+        uint16_t map = 0;
+        std::vector<map::TileKey> tiles;
+    };
+    const std::optional<Streamed>& streamed() const { return streamed_; }
 
 private:
     struct LoadedMap {
@@ -95,6 +105,7 @@ private:
     uint16_t areaMap_ = 0;
     int16_t area_ = -1; // index into maps_[areaMap_].info->areas.list
     int warnedMap_ = -1; // the unknown Terrain.map last warned about
+    std::optional<Streamed> streamed_;
 };
 
 } // namespace kast

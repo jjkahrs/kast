@@ -88,6 +88,10 @@ return {
 is the active scene's), the game GUIs load and unload their <code>UIDocument</code>s and <code>WorldUI</code>s, the unloaded entities'
 audio stops. A switch still resets everything as before. Replication keeps working on the combined entities.</p>
 
+<p id="tile-scenes"><strong>Tile scenes</strong> use this same path: in Play the engine loads and unloads a map's per-tile scenes
+(<code>maps/&lt;folder&gt;/scenes/&lt;tx&gt;_&lt;tz&gt;.scene</code>) around the player as terrain tiles stream, one load a frame, each
+listed by <code>kast.loadedScenes()</code> (<a href="terrain.html#tile-scenes">Terrain, tile scenes</a>). A tile scene Lua already
+loaded is not loaded twice; one out of range is unloaded even if Lua loaded it.</p>
 <h2 id="cpp">From C++</h2>
 <ul>
 <li><code>kast::loadSceneAdditive(path, scene, slot, error)</code> loads a file as one more scene; <code>appendScene(into, std::move(from), path)</code>

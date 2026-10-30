@@ -9,7 +9,7 @@
 <body>
 <header class="top"><a class="brand" href="../index.html">Kast Docs</a><nav><a href="index.html">Editor</a><a href="../engine/index.html">Engine</a><a href="../services/auth/index.html">Auth Server</a><a href="../services/world/index.html">World Server</a><a href="../services/chat/index.html">Chat Server</a><a href="../services/admin/index.html">Admin App</a><a href="../development/tests.html">Development</a></nav></header>
 <div class="layout">
-<nav class="side"><h2>Editor</h2><ul><li><a href="index.html">Overview</a></li><li><a href="command-line.html">Command line</a></li><li><a href="controls.html">Editor controls</a></li><li><a href="undo-redo.html">Undo and redo</a></li><li><a href="multi-scene.html">Multi-scene editing</a></li><li><a href="project-manager.html">Project Manager</a></li><li><a href="projects.html">Projects</a></li><li><a href="build.html">Build</a></li><li><a href="online-tooling.html">Online Services tooling</a></li><li><a href="gui-builder.html">GUI Builder</a></li><li><a href="prefabs.html">Prefabs</a></li><li><a href="shaders.html">Shaders</a></li><li><a href="shader-graph.html">Shader Graph</a></li><li><a href="zone-builder.html" class="active">Zone Builder</a></li><li><a href="model-preview.html">Model Preview</a></li><li><a href="assets.html">Assets and asset ids</a></li></ul></nav>
+<nav class="side"><h2>Editor</h2><ul><li><a href="index.html">Overview</a></li><li><a href="command-line.html">Command line</a></li><li><a href="controls.html">Editor controls</a></li><li><a href="undo-redo.html">Undo and redo</a></li><li><a href="multi-scene.html">Multi-scene editing</a></li><li><a href="project-manager.html">Project Manager</a></li><li><a href="projects.html">Projects</a></li><li><a href="build.html">Build</a></li><li><a href="online-tooling.html">Online Services tooling</a></li><li><a href="gui-builder.html">GUI Builder</a></li><li><a href="prefabs.html">Prefabs</a></li><li><a href="shaders.html">Shaders</a></li><li><a href="shader-graph.html">Shader Graph</a></li><li><a href="zone-builder.html" class="active">Zone Builder</a></li><li><a href="map-builder.html">Map Builder</a></li><li><a href="model-preview.html">Model Preview</a></li><li><a href="assets.html">Assets and asset ids</a></li></ul></nav>
 <main>
 <h1 id="zone-builder">Zone Builder</h1>
 <p>The editor's <strong>Zone</strong> tab and the Scene view create and edit a project's zone maps (<code>maps/&lt;folder&gt;/</code>, see
@@ -30,6 +30,7 @@ zone is open at a time.</p>
 <li><strong>Map not found or broken</strong>: a <code>Terrain.map</code> id no project map has, or a map that fails to load, shows the error
   in the tab (and once in the Console); nothing of the zone is drawn.</li>
 </ul>
+<p id="tile-scenes"><strong>Tile scenes.</strong> A large zone can also be split into one scene per 256 m tile (<code>maps/&lt;folder&gt;/scenes/&lt;tx&gt;_&lt;tz&gt;.scene</code>) next to its root scene: the <a href="map-builder.html">Map tab</a> shows them top-down and opens, closes and creates them, and Play streams them around the player like the terrain.</p>
 <p id="one-scene-per-zone"><strong>One scene per zone.</strong> A zone's scene is the one whose <code>Terrain</code> entity names that
 map: open it to edit the zone in the Zone tab. It holds that zone's own client content (props such as its portal arch)
 and instances of the prefabs every zone shares (player, camera, replication, NPC templates, in-world GUI), so a change
@@ -84,7 +85,7 @@ click), own <code>nav</code> settings, and the <strong>tile grid</strong> (+z up
 neighbours' heights, so no seam), a tile to remove it (a dialog lists the files that go and the spawns lost). Changing the id
 changes the Terrain entity's <code>map</code> too.</td>
 <td><code>map.json</code>; on save, a removed tile's <code>heights/</code>, <code>.server/spawns/</code>, <code>objects/</code>,
-<code>.server/interactables/</code> and <code>.server/nav/</code> files are deleted (to the Recycle Bin)</td>
+<code>.server/interactables/</code> and <code>.server/nav/</code> files are deleted (to the Recycle Bin); its tile scene (<code>scenes/&lt;tx&gt;_&lt;tz&gt;.scene</code>) is <strong>not</strong>: it stays on disk as an <a href="map-builder.html#validation">orphan</a> the Map tab warns about</td>
 </tr>
 <tr id="terrain">
 <td><strong>Terrain</strong></td>

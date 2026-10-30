@@ -6,13 +6,14 @@
 #              [-DPROJECTS_FROM=<json>] [-DLIST_MUST_CONTAIN=<text>] [-DFOCUS_PANEL=<window>]
 #              [-DEXPECT_OUTPUT=<regex> [-DEXPECT_COUNT=<n>]] [-DFORBID_OUTPUT=<regex>] [-DFRAMES=<n>]
 #              [-DWRAPPER=<exe;args>] [-DSETTINGS_FROM=<json>] [-DSETTINGS_MUST_NOT_CONTAIN=<text;...>]
-#              [-DOUTPUT_FILE=<log>] [-DLAYOUT_FROM=<imgui.ini>] [-DLAYOUT_SAME_DOCK=<window;window...>] -P smoke_test.cmake
+#              [-DOUTPUT_FILE=<log>] [-DLAYOUT_FROM=<imgui.ini>] [-DLAYOUT_SAME_DOCK=<window;window...>]
+#              [-DEXPECT_ONCE=<regex;regex...>] -P smoke_test.cmake
 # NEW_PROJECT_* pass --new-project as separate arguments, so the name may contain spaces; FOCUS_PANEL passes
 # --focus-panel the same way (e.g. "State Machines"). MUST_NOT_EXIST fails the test if that path exists after the run
 # (e.g. a folder the New Project modal must not have created); MUST_EXIST if it doesn't. PROJECTS_FROM is copied to
 # the list before the run; LIST_MUST_CONTAIN is looked for in it after. EXPECT_OUTPUT must match the editor's log
 # (exactly EXPECT_COUNT times if given; for that count the log's ";" read as ","); FORBID_OUTPUT must not match it;
-# OUTPUT_FILE gets it as it is written (e.g. for a later secrets check). FRAMES is how many frames run
+# EXPECT_ONCE (a list) must each match it exactly once; OUTPUT_FILE gets it as it is written (e.g. for a later secrets check). FRAMES is how many frames run
 # before the screenshot (default 120). WRAPPER (a list) runs the editor through another program, e.g.
 # kast_net_test_server <args> -- (its servers are up while the editor runs).
 # The editor settings are <work dir>/editor_settings.json (--settings-file), never the user's: SETTINGS_FROM is copied
@@ -79,6 +80,14 @@ if(DEFINED EXPECT_COUNT)
     message(FATAL_ERROR "'${EXPECT_OUTPUT}' matched ${count} times, expected ${EXPECT_COUNT}")
   endif()
 endif()
+string(REPLACE ";" "," once_listable "${output}")
+foreach(once IN LISTS EXPECT_ONCE)
+  string(REGEX MATCHALL "${once}" matches "${once_listable}")
+  list(LENGTH matches count)
+  if(NOT count EQUAL 1)
+    message(FATAL_ERROR "'${once}' matched ${count} times, expected once")
+  endif()
+endforeach()
 if(DEFINED MUST_NOT_EXIST AND EXISTS "${MUST_NOT_EXIST}")
   message(FATAL_ERROR "Must not exist after the run: ${MUST_NOT_EXIST}")
 endif()

@@ -472,6 +472,22 @@ std::array<float, 3> gradient_color(const Gradient& gradient, float t) {
 std::string terrain_material_path(const std::string& folder) { return "materials/" + folder + "_terrain.mat"; }
 std::string terrain_texture_path(const std::string& folder) { return "textures/" + folder + "_terrain.png"; }
 
+TerrainImage tile_thumbnail(const ZoneState& state, TileKey t, const std::optional<Gradient>& gradient, int size) {
+    TerrainImage image{size, size, std::vector<uint8_t>(size_t(size) * size * 3)};
+    const km::Heights& heights = tile_heights(state, t);
+    const int last = km::kTileSamples - 1;
+    for (int j = 0; j < size; ++j)
+        for (int i = 0; i < size; ++i) {
+            const int u = size > 1 ? int(std::lround(float(i) * last / float(size - 1))) : 0;
+            const int v = size > 1 ? last - int(std::lround(float(j) * last / float(size - 1))) : 0;
+            const float h = heights[size_t(v) * km::kTileSamples + size_t(u)] / 65535.0f;
+            const std::array<float, 3> c = gradient ? gradient_color(*gradient, h) : std::array<float, 3>{h, h, h};
+            uint8_t* out = &image.rgb[(size_t(j) * size + size_t(i)) * 3];
+            for (int k = 0; k < 3; ++k) out[k] = uint8_t(std::lround(std::clamp(c[k], 0.0f, 1.0f) * 255.0f));
+        }
+    return image;
+}
+
 // ponytail: ground_y per pixel (a rect scan each); ~16 M lookups at the 4096 cap take seconds, fine for a save.
 TerrainImage bake_terrain(const km::MapInfo& info, const ZoneState& state, const Gradient& gradient) {
     TerrainImage image;
