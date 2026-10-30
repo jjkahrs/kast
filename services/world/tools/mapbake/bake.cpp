@@ -149,6 +149,12 @@ std::optional<TileBake> bake_tile(const map::MapInfo& info, const map::TileHeigh
     if (!dmesh || !rcBuildPolyMeshDetail(&ctx, *pmesh, *chf, cfg.detailSampleDist, cfg.detailSampleMaxError, *dmesh))
         return fail("detail mesh");
     if (pmesh->npolys == 0) return TileBake{};
+    // The server refuses such a tile at load; say so now, before the rest of the map bakes.
+    if (const int limit = map::max_navtile_polys(info.tile_count()); pmesh->npolys > limit) {
+        err = std::to_string(pmesh->npolys) + " polygons, more than the " + std::to_string(limit) +
+              " per tile 32-bit poly refs allow on a map of " + std::to_string(info.tile_count()) + " tiles";
+        return std::nullopt;
+    }
     for (int i = 0; i < pmesh->npolys; ++i) pmesh->flags[i] = pmesh->areas[i] == RC_WALKABLE_AREA ? 1 : 0;
 
     dtNavMeshCreateParams p{};

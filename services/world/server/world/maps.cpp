@@ -82,9 +82,7 @@ void Maps::load_nav(uint16_t id, const std::filesystem::path& folder, std::vecto
 }
 
 bool Maps::add_navtile(uint16_t map, map::TileKey tile, std::string_view bytes, std::string& err) {
-    int tiles = 0;
-    for (const map::TileRect& r : info(map).tiles) tiles += (r.x1 - r.x0 + 1) * (r.z1 - r.z0 + 1);
-    return nav_.add_tile(map, tiles, tile, bytes, err);
+    return nav_.add_tile(map, info(map).tile_count(), tile, bytes, err);
 }
 
 void Maps::load_spawns(uint16_t id, const std::filesystem::path& folder, std::vector<std::string>& errors) {

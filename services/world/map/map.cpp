@@ -236,6 +236,12 @@ bool MapInfo::has_tile(TileKey t) const {
                        [t](const TileRect& r) { return t.x >= r.x0 && t.x <= r.x1 && t.z >= r.z0 && t.z <= r.z1; });
 }
 
+int MapInfo::tile_count() const {
+    int n = 0;
+    for (const TileRect& r : tiles) n += (r.x1 - r.x0 + 1) * (r.z1 - r.z0 + 1);
+    return n;
+}
+
 std::array<float, 2> MapInfo::clamp(float x, float z) const {
     std::array<float, 2> best{x, z};
     float bestDist = std::numeric_limits<float>::infinity();

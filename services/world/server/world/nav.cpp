@@ -79,10 +79,7 @@ bool Nav::add_tile(uint16_t map, int tileCount, map::TileKey tile, std::string_v
     if (!m) {
         fresh = std::make_unique<Mesh>();
         m = fresh.get();
-        // 32-bit poly refs: tile bits + poly bits <= 22 (Detour keeps >= 10 salt bits), so many tiles leave few polys.
-        // ponytail: ~4096 polys/tile at 1024 tiles; DT_POLYREF64 (Detour rebuilt) if maps outgrow that.
-        const int tileBits = int(dtIlog2(dtNextPow2(unsigned(std::max(tileCount, 1)))));
-        m->maxPolys = 1 << std::max(22 - tileBits, 0);
+        m->maxPolys = map::max_navtile_polys(tileCount); // 32-bit poly refs: many tiles leave few polys
         dtNavMeshParams p{};
         p.tileWidth = p.tileHeight = map::kTileSize; // orig (0, 0, 0): Detour's tile (x, y) is our tile (x, z)
         p.maxTiles = std::max(tileCount, 1);

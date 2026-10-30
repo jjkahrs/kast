@@ -114,6 +114,8 @@ struct MapInfo {
     // ponytail: linear scan of the rects; a tile set if maps grow many rects.
     bool has_tile(TileKey t) const;
     bool contains(float x, float z) const { return has_tile(tile_of(x, z)); }
+    // Tiles declared: the rects' areas summed (what the navmesh is sized for).
+    int tile_count() const;
     // The nearest point to (x, z) on a declared tile (itself if already on one).
     std::array<float, 2> clamp(float x, float z) const;
 };
