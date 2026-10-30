@@ -1217,6 +1217,12 @@ void check_edit_view() {
     km::MapInfo eight;
     eight.tiles = {{0, 0, 7, 7}};
     CHECK(kast::tiles_around(eight, {1024, 1024}, kEditRadius).size() == 64); // framed: all of an 8 x 8 map
+    // The overlays draw on the same square: every meshed tile's centre and outer edge, nothing a tile beyond.
+    for (const km::TileKey t : here)
+        CHECK(in_edit_view({mid, mid}, (t.x + 0.5f) * km::kTileSize, (t.z + 0.5f) * km::kTileSize));
+    const float edge = (km::tile_of(mid, mid).x + kEditRadius + 1) * km::kTileSize;
+    CHECK(in_edit_view({mid, mid}, edge, mid) && !in_edit_view({mid, mid}, edge + 1, mid));
+    CHECK(!in_edit_view({mid, mid}, mid, mid - (kEditRadius + 1) * km::kTileSize));
 
     km::MapInfo moved = big;
     moved.spawn = {500, 0, 500};

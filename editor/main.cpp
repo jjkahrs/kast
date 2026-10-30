@@ -1733,7 +1733,8 @@ int main(int argc, char** argv)
     viewport.overlay = [&](const float* viewProj, float x, float y, float width, float height) {
         zoneRender.drawOverlays(ImGui::GetWindowDrawList(), viewProj, x, y, width, height);
         if (showZone())
-            zonePanel.drawSceneOverlay(zone, ImGui::GetWindowDrawList(), viewProj, x, y, width, height);
+            zonePanel.drawSceneOverlay(zone, ImGui::GetWindowDrawList(), viewProj, x, y, width, height,
+                                       {doc.camera.pivot.x, doc.camera.pivot.z});
     };
     // An active Zone tab tool gets the Scene view's left mouse instead of picking and the gizmo.
     viewport.input = [&](const SceneViewport::Input& input) { return showZone() && zonePanel.sceneInput(zone, input); };

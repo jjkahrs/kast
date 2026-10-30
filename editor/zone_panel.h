@@ -75,9 +75,9 @@ public:
     // it too.
     bool sceneInput(ZoneSession& zone, const SceneViewport::Input& input);
     // SceneViewport::overlay, after ZoneRender's: areas, spawns, paths and objects, and the active tool's overlay (the
-    // brush ring, the area being drawn).
+    // brush ring, the area being drawn), on the tiles the Scene view meshes around centre (the camera's pivot).
     void drawSceneOverlay(const ZoneSession& zone, ImDrawList* draw, const float* viewProj, float x, float y, float width,
-                          float height) const;
+                          float height, std::array<float, 2> centre) const;
 
 private:
     // A zone handle being dragged in the Scene view (no tool).

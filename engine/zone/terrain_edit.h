@@ -123,6 +123,9 @@ constexpr int kEditRadius = 4;
 // height range, material, UV mode and, for Map UVs, the declared tiles' bounding box) is the same. A spawn, an area or a
 // tile added elsewhere (Tiled UVs) keeps every mesh.
 bool same_terrain_mesh(const kast::map::MapInfo& a, const kast::map::MapInfo& b);
+// Whether ground point (x, z) is on the square of tiles the Scene view meshes around centre (kEditRadius tiles of the
+// tile holding it, its outer edges included), declared or not: the zone overlays draw only there.
+bool in_edit_view(std::array<float, 2> centre, float x, float z);
 // The fewest-ish rects covering tiles: runs along x per row, merged with the next rows that have the same run.
 Json tile_rects(const TileSet& tiles);
 // Declares tile t (false if it already is). Its heights start flat at heightMin, then take the shared edges of the

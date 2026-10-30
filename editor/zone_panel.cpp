@@ -225,7 +225,7 @@ bool ZonePanel::sceneInput(ZoneSession& zone, const SceneViewport::Input& input)
 }
 
 void ZonePanel::drawSceneOverlay(const ZoneSession& zone, ImDrawList* draw, const float* viewProj, float x, float y,
-                                 float width, float height) const
+                                 float width, float height, std::array<float, 2> centre) const
 {
     const zone::ZoneDoc* z = zone.zone();
     std::string err;
@@ -233,7 +233,7 @@ void ZonePanel::drawSceneOverlay(const ZoneSession& zone, ImDrawList* draw, cons
     if (!info)
         return;
     draw->PushClipRect(ImVec2(x, y), ImVec2(x + width, y + height), true);
-    const GroundDraw g{draw, viewProj, x, y, width, height, *info, z->state};
+    const GroundDraw g{draw, viewProj, x, y, width, height, *info, z->state, centre};
     drawObjectOverlays(g);
     if (hover_ && (tool_ == Tool::Raise || tool_ == Tool::Lower || tool_ == Tool::Flatten))
         g.circle((*hover_)[0], (*hover_)[2], brush_.radius, kBrushColor);

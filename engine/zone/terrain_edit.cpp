@@ -337,6 +337,14 @@ bool same_terrain_mesh(const km::MapInfo& a, const km::MapInfo& b) {
            (a.terrainUv != km::TerrainUv::Map || box(a) == box(b));
 }
 
+bool in_edit_view(std::array<float, 2> centre, float x, float z) {
+    const TileKey c = km::tile_of(centre[0], centre[1]);
+    const auto within = [](int32_t tile, float at) {
+        return at >= float(tile - kEditRadius) * km::kTileSize && at <= float(tile + kEditRadius + 1) * km::kTileSize;
+    };
+    return within(c.x, x) && within(c.z, z);
+}
+
 Json tile_rects(const TileSet& tiles) {
     // Runs per row: z -> [x0, x1] pairs, in order.
     std::map<int32_t, std::vector<std::array<int32_t, 2>>> rows;

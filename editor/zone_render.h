@@ -18,15 +18,16 @@
 
 // Draws on a zone's ground over the Scene view image at (x, y), width x height (ImGui points), seen through viewProj:
 // the zone overlays (ZoneRender) and the Zone tab's tool overlays (ZonePanel). Lines follow the ground (in-memory
-// heights) a little above it, so it does not hide them.
+// heights) a little above it, so it does not hide them; only on the meshed tiles around centre (zone::in_edit_view).
 struct GroundDraw {
     ImDrawList* draw;
     const float* viewProj;
     float x, y, width, height;
     const kast::map::MapInfo& info;
     const zone::ZoneState& state;
+    std::array<float, 2> centre; // the camera's pivot, x and z
 
-    // The image point of world point p; nullopt behind the camera.
+    // The image point of world point p; nullopt behind the camera or off the meshed tiles.
     std::optional<ImVec2> project(zone::Vec3 p) const;
     // The ground at map (gx, gz), lifted; a point past the map's edge takes the nearest point on the map's height.
     zone::Vec3 ground(float gx, float gz) const;
@@ -69,6 +70,7 @@ private:
     const zone::ZoneDoc* zone_ = nullptr; // the last synced, for the overlays
     zone::Json manifest_;                 // what tiles_ were built from
     std::shared_ptr<const kast::map::MapInfo> info_;
+    std::array<float, 2> centre_{}; // what tiles_ are around
     zone::TileMap<Tile> tiles_; // the meshed tiles, around the camera
     size_t loggedTiles_ = 0;    // tiles_.size() last logged
     zone::TileMap<ObjectTile> objects_;

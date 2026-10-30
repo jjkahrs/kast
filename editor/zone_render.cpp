@@ -42,6 +42,7 @@ void ZoneRender::sync(const zone::ZoneDoc* zone, std::array<float, 2> centre, co
     zone_ = zone;
     if (!zone)
         return;
+    centre_ = centre;
     syncTiles(*zone, centre);
     syncPreview(*zone, renderer);
     syncObjects(*zone, projectRoot);
@@ -161,7 +162,7 @@ std::optional<ImVec2> GroundDraw::project(zone::Vec3 p) const
     float clip[4];
     const float v[4] = {p[0], p[1], p[2], 1.0f};
     bx::vec4MulMtx(clip, v, viewProj);
-    if (clip[3] <= 1e-4f) // behind the camera
+    if (clip[3] <= 1e-4f || !zone::in_edit_view(centre, p[0], p[2])) // behind the camera, or off the meshed tiles
         return std::nullopt;
     return ImVec2(x + (clip[0] / clip[3] * 0.5f + 0.5f) * width, y + (0.5f - clip[1] / clip[3] * 0.5f) * height);
 }
@@ -200,7 +201,7 @@ void ZoneRender::drawOverlays(ImDrawList* draw, const float* viewProj, float x, 
 {
     if (!zone_ || !info_)
         return;
-    const GroundDraw g{draw, viewProj, x, y, width, height, *info_, zone_->state};
+    const GroundDraw g{draw, viewProj, x, y, width, height, *info_, zone_->state, centre_};
     draw->PushClipRect(ImVec2(x, y), ImVec2(x + width, y + height), true);
     for (const auto& [key, tile] : tiles_) {
         const float x0 = key.x * km::kTileSize, z0 = key.z * km::kTileSize, x1 = x0 + km::kTileSize, z1 = z0 + km::kTileSize;
