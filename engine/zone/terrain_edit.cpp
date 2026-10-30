@@ -345,6 +345,66 @@ bool in_edit_view(std::array<float, 2> centre, float x, float z) {
     return within(c.x, x) && within(c.z, z);
 }
 
+km::TileRect tile_bounds(const km::MapInfo& info) {
+    km::TileRect r{INT32_MAX, INT32_MAX, INT32_MIN, INT32_MIN};
+    for (const km::TileRect& t : info.tiles)
+        r = {std::min(r.x0, t.x0), std::min(r.z0, t.z0), std::max(r.x1, t.x1), std::max(r.z1, t.z1)};
+    return r;
+}
+
+GridView fit_grid(const km::TileRect& bounds, int cols, int rows, float width, float gap, float minCell, float maxCell) {
+    const int n = std::max(cols, rows);
+    const float fits = (width - gap * float(n - 1)) / float(n);
+    const float cell = std::clamp(fits >= 8 ? std::floor(fits) : fits, minCell, maxCell); // tiny ones fill the width
+    return {cell, gap, float(bounds.x0), float(bounds.z0 + rows)};
+}
+
+std::array<float, 2> grid_size(const GridView& view, int cols, int rows) {
+    return {view.pitch() * float(cols) - view.gap, view.pitch() * float(rows) - view.gap};
+}
+
+GridView zoom_grid(GridView view, float factor, std::array<float, 2> at, float minCell, float maxCell) {
+    const float x = view.left + at[0] / view.pitch(), z = view.top - at[1] / view.pitch();
+    view.cell = std::clamp(view.cell * factor, minCell, maxCell);
+    view.left = x - at[0] / view.pitch();
+    view.top = z + at[1] / view.pitch();
+    return view;
+}
+
+GridView pan_grid(GridView view, std::array<float, 2> pixels, const km::TileRect& bounds, std::array<float, 2> size) {
+    const float cols = size[0] / view.pitch(), rows = size[1] / view.pitch();
+    view.left = std::clamp(view.left - pixels[0] / view.pitch(), float(bounds.x0), std::max(float(bounds.x0), float(bounds.x1 + 1) - cols));
+    view.top = std::clamp(view.top + pixels[1] / view.pitch(), std::min(float(bounds.z1 + 1), float(bounds.z0) + rows), float(bounds.z1 + 1));
+    return view;
+}
+
+GridView centre_grid(const GridView& fit, TileKey t, float zoom, std::array<float, 2> size, float minCell, float maxCell) {
+    GridView view = fit;
+    view.cell = std::clamp(fit.cell * zoom, minCell, maxCell);
+    view.left = float(t.x) + 0.5f - size[0] * 0.5f / view.pitch();
+    view.top = float(t.z) + 0.5f + size[1] * 0.5f / view.pitch();
+    return view;
+}
+
+km::TileRect visible_cells(const GridView& view, const km::TileRect& bounds, std::array<float, 2> size) {
+    return {std::max(bounds.x0, int32_t(std::floor(view.left))),
+            std::max(bounds.z0, int32_t(std::floor(view.top - size[1] / view.pitch()))),
+            std::min(bounds.x1, int32_t(std::ceil(view.left + size[0] / view.pitch())) - 1),
+            std::min(bounds.z1, int32_t(std::ceil(view.top)) - 1)};
+}
+
+std::array<float, 2> cell_corner(const GridView& view, TileKey t) {
+    return {(float(t.x) - view.left) * view.pitch(), (view.top - float(t.z + 1)) * view.pitch()};
+}
+
+std::optional<TileKey> cell_at(const GridView& view, std::array<float, 2> p) {
+    const float x = view.left + p[0] / view.pitch(), z = view.top - p[1] / view.pitch();
+    const TileKey t{int32_t(std::floor(x)), int32_t(std::floor(z))};
+    if ((x - float(t.x)) * view.pitch() >= view.cell || (float(t.z + 1) - z) * view.pitch() >= view.cell)
+        return std::nullopt;
+    return t;
+}
+
 Json tile_rects(const TileSet& tiles) {
     // Runs per row: z -> [x0, x1] pairs, in order.
     std::map<int32_t, std::vector<std::array<int32_t, 2>>> rows;

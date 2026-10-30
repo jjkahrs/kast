@@ -148,3 +148,26 @@ foreach(case "centre||81" "corner|--focus 10,10,500|25")
             "-DEXPECT_OUTPUT=Zone view: ${meshes} terrain meshes" -DEXPECT_COUNT=1 "-DFORBID_OUTPUT=\\[error\\]"
             -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
 endforeach()
+
+# The Map tab's and Zone tab's tile grids on a new cap-size map (in memory, not saved): fitted whole by default (cells too
+# small for thumbnails: none), --grid-view zoomed on its centre, and on its far corner, where --map-click 60,60 creates
+# that tile's scene. Only the visible cells get thumbnails.
+math(EXPR cap_last "${cap} - 1")
+foreach(case "default||Map: view 0_0\\.\\.${cap_last}_${cap_last} \\([0-9]+ px cells, 0 thumbnails\\)|Zone: new map maps/big \\(id [0-9]+, ${cap}x${cap} tiles\\)"
+             "zoomed|--grid-view 32,32,16|Map: view [23][0-9]_[23][0-9]\\.\\.3[2-9]_3[2-9] \\([0-9]+ px cells, [1-9][0-9] thumbnails\\)|Zone: tile grid view [23][0-9]_[23][0-9]\\.\\.3[2-9]_3[2-9] "
+             "panned|--grid-view 60,60,16 --map-click 60,60|Map: view 5[0-9]_5[0-9]\\.\\.${cap_last}_${cap_last} \\([0-9]+ px cells, [1-9][0-9] thumbnails\\).*Map: created maps/big/scenes/60_60.scene for tile 60_60|Zone: tile grid view 5[0-9]_5[0-9]\\.\\.${cap}_${cap} ")
+  string(REPLACE "|" ";" case "${case}")
+  list(GET case 0 name)
+  list(GET case 1 view)
+  list(GET case 2 map_expect)
+  list(GET case 3 zone_expect)
+  add_test(NAME editor_map_tab_big_${name}
+    COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${KAST_ZONE_OUT}/map_tab_big_${name}.png"
+            "-DEXTRA_ARGS=--project ${starter} --new-map big,${cap},${cap} ${view} --size 1600x1000" -DFOCUS_PANEL=Map
+            -DFRAMES=60 "-DEXPECT_OUTPUT=${map_expect}" "-DFORBID_OUTPUT=\\[error\\]" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+  add_test(NAME editor_zone_tab_big_${name}
+    COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${KAST_ZONE_OUT}/zone_tab_big_${name}.png"
+            "-DEXTRA_ARGS=--project ${starter} --new-map big,${cap},${cap} --zone-section Map ${view} --size 1600x1000"
+            -DFOCUS_PANEL=Zone -DFRAMES=60 "-DEXPECT_OUTPUT=${zone_expect}" "-DFORBID_OUTPUT=\\[error\\]"
+            -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+endforeach()

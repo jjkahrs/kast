@@ -126,6 +126,37 @@ bool same_terrain_mesh(const kast::map::MapInfo& a, const kast::map::MapInfo& b)
 // Whether ground point (x, z) is on the square of tiles the Scene view meshes around centre (kEditRadius tiles of the
 // tile holding it, its outer edges included), declared or not: the zone overlays draw only there.
 bool in_edit_view(std::array<float, 2> centre, float x, float z);
+// The declared tiles' bounding box (inclusive; x0 > x1 with none).
+kast::map::TileRect tile_bounds(const kast::map::MapInfo& info);
+
+// --- tile grids (the Map tab's and the Zone tab's, zoomed and panned) ---
+
+// A tile grid's view: cells `cell` pixels wide with `gap` pixels between them, (left, top) the point (in tiles: x, z)
+// at the grid area's top-left corner. +z up, as seen from above.
+struct GridView {
+    float cell = 0, gap = 0;
+    float left = 0, top = 0;
+    float pitch() const { return cell + gap; }
+};
+// The view that shows bounds whole on an area cols x rows cells (at least bounds' size): cells as wide as fit `width`
+// pixels on the longer side (minCell..maxCell; whole pixels from 8), bounds' bottom-left cell at the area's bottom-left corner.
+GridView fit_grid(const kast::map::TileRect& bounds, int cols, int rows, float width, float gap, float minCell, float maxCell);
+// The area cols x rows cells take in view's fitted cells: {width, height} pixels.
+std::array<float, 2> grid_size(const GridView& view, int cols, int rows);
+// view zoomed by factor (cells minCell..maxCell) about the area point `at` (pixels from its top-left): the ground under
+// it stays there.
+GridView zoom_grid(GridView view, float factor, std::array<float, 2> at, float minCell, float maxCell);
+// view with the ground dragged by `pixels`, kept on bounds: an area of `size` pixels shows no cell past bounds' edges
+// (its bottom-left corner when it is larger).
+GridView pan_grid(GridView view, std::array<float, 2> pixels, const kast::map::TileRect& bounds, std::array<float, 2> size);
+// view of `size` pixels centred on tile t at zoom times fit's cells (minCell..maxCell), for --grid-view.
+GridView centre_grid(const GridView& fit, TileKey t, float zoom, std::array<float, 2> size, float minCell, float maxCell);
+// The cells of bounds an area of `size` pixels shows (any part of them; x0 > x1 or z0 > z1 when none).
+kast::map::TileRect visible_cells(const GridView& view, const kast::map::TileRect& bounds, std::array<float, 2> size);
+// Tile t's cell's top-left corner, in pixels from the area's.
+std::array<float, 2> cell_corner(const GridView& view, TileKey t);
+// The cell under area point p (pixels from its top-left); nullopt in the gaps between cells.
+std::optional<TileKey> cell_at(const GridView& view, std::array<float, 2> p);
 // The fewest-ish rects covering tiles: runs along x per row, merged with the next rows that have the same run.
 Json tile_rects(const TileSet& tiles);
 // Declares tile t (false if it already is). Its heights start flat at heightMin, then take the shared edges of the

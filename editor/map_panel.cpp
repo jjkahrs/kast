@@ -22,8 +22,10 @@ namespace km = kast::map;
 
 constexpr double kRefreshSeconds = 0.5; // the scene files and counts are read again this often (file changes)
 constexpr int kThumbnailSize = 64;
-constexpr size_t kMaxThumbnails = 1024; // tiles: a 32 x 32 map's
-constexpr float kGap = 2.0f; // pixels between cells
+constexpr size_t kMaxThumbnails = 1024; // visible tiles at most (a texture each), well under bgfx's 4096 handles
+constexpr float kMinThumbnailCell = 8.0f; // pixels: smaller cells show their state color only
+constexpr int kThumbnailsPerFrame = 64; // built a frame at most: a zoom that shows hundreds stays smooth
+constexpr float kMaxCell = 96.0f; // pixels: the widest a cell fits or zooms to
 constexpr ImU32 kButton = IM_COL32(255, 170, 0, 255);    // #ffaa00: an open tile scene
 constexpr ImU32 kHighlight = IM_COL32(255, 204, 0, 255); // #ffcc00: unsaved, the hovered cell, portals
 constexpr ImU32 kDarken = IM_COL32(255, 153, 0, 255);    // #ff9900: a tile scene on disk
@@ -125,6 +127,7 @@ void MapPanel::refresh(const Document& doc, const zone::ZoneDoc& z, const km::Ma
     if (z.folder != folder_)
         kast::log::info(std::format("Map: maps/{} ({} tiles, {} tile scenes)", z.folder,
                                     zone::declared_tiles(info).size(), sceneFiles_.size()));
+    logView_ = logView_ || z.folder != folder_; // a new map: its first view too
     folder_ = z.folder;
     generation_ = doc.sceneGeneration;
     nextRefresh_ = ImGui::GetTime() + kRefreshSeconds;
@@ -203,23 +206,36 @@ void MapPanel::syncThumbnails(const zone::ZoneDoc& z, const km::MapInfo& info)
     std::string err;
     const std::optional<zone::Gradient> gradient =
         z.state.manifest.contains("terrainColors") ? zone::parse_gradient(z.state.manifest, err) : std::nullopt;
-    zone::TileSet declared = zone::declared_tiles(info);
-    // ponytail: one texture per tile, and bgfx has 4096 texture handles in all: a map past kMaxThumbnails tiles gets
-    // none (plain cells) rather than running out; build only the visible cells' when the grid zooms and pans.
-    if (declared.size() > kMaxThumbnails)
-        declared.clear();
+    // Only the visible cells', and none while they are too small or too many to show one (bgfx has 4096 texture
+    // handles in all): plain cells.
+    const km::TileRect shown = grid_.visible();
+    zone::TileSet visible;
+    if (grid_.view().cell >= kMinThumbnailCell)
+        for (int32_t tz = shown.z0; tz <= shown.z1; ++tz)
+            for (int32_t tx = shown.x0; tx <= shown.x1; ++tx)
+                if (info.has_tile({tx, tz}))
+                    visible.insert({tx, tz});
+    if (visible.size() > kMaxThumbnails)
+        visible.clear();
     std::erase_if(thumbnails_, [&](auto& entry) {
-        if (declared.contains(entry.first))
+        if (visible.contains(entry.first))
             return false;
         bgfx::destroy(entry.second.texture);
         return true;
     });
-    for (const km::TileKey t : declared) {
+    thumbnailsPending_ = 0;
+    int built = 0;
+    for (const km::TileKey t : visible) {
         const auto it = z.state.heights.find(t);
         const zone::HeightsPtr heights = it == z.state.heights.end() ? nullptr : it->second;
-        Thumbnail& thumbnail = thumbnails_[t];
-        if (bgfx::isValid(thumbnail.texture) && thumbnail.heights == heights)
+        const auto have = thumbnails_.find(t);
+        if (have != thumbnails_.end() && have->second.heights == heights)
             continue; // a Zone tab edit makes a new buffer (copy on write)
+        if (++built > kThumbnailsPerFrame) {
+            ++thumbnailsPending_;
+            continue;
+        }
+        Thumbnail& thumbnail = thumbnails_[t];
         if (bgfx::isValid(thumbnail.texture))
             bgfx::destroy(thumbnail.texture);
         const zone::TerrainImage image = zone::tile_thumbnail(z.state, t, gradient, kThumbnailSize);
@@ -245,44 +261,42 @@ void MapPanel::shutdown()
 void MapPanel::drawGrid(Document& doc, const ZoneSession& zone, FileActions& files, const km::MapInfo& info, bool locked)
 {
     const zone::ZoneDoc& z = *zone.zone();
-    const zone::TileSet declared = zone::declared_tiles(info);
-    km::TileKey first = *declared.begin(), last = first; // the bounds' bottom-left and top-right corners
-    for (const km::TileKey t : declared) {
-        first = {std::min(first.x, t.x), std::min(first.z, t.z)};
-        last = {std::max(last.x, t.x), std::max(last.z, t.z)};
-    }
-    // ponytail: the whole bounds at once, cells shrink to fit (no labels below 24 px); zoom and pan
-    // when big maps need it.
-    const int grid = std::max({kMinGrid, last.x - first.x + 1, last.z - first.z + 1});
+    // The bounds' cells, at least kMinGrid a side from the bottom-left one: a small map shows the cells around it.
+    const km::TileRect box = zone::tile_bounds(info);
+    const int grid = std::max({kMinGrid, box.x1 - box.x0 + 1, box.z1 - box.z0 + 1});
+    const km::TileRect bounds{box.x0, box.z0, box.x0 + grid - 1, box.z0 + grid - 1};
     ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-    ImGui::TextWrapped("maps/%s: click a tile to open, close or create its scene. +z is up.", z.folder.c_str());
+    ImGui::TextWrapped("maps/%s: click a tile to open, close or create its scene; the wheel zooms, a drag pans. +z is up.",
+                       z.folder.c_str());
     ImGui::PopStyleColor();
-    const float cell = std::clamp(std::floor((ImGui::GetContentRegionAvail().x - kGap * float(grid - 1)) / float(grid)), 4.0f, 96.0f);
-    const float pitch = cell + kGap;
-    const ImVec2 origin = ImGui::GetCursorScreenPos();
-    ImGui::InvisibleButton("##tiles", {pitch * grid - kGap, pitch * grid - kGap});
-    const bool hovered = ImGui::IsItemHovered();
-    const bool clicked = ImGui::IsItemClicked(ImGuiMouseButton_Left);
-    const auto cellMin = [&](km::TileKey t) {
-        return ImVec2(origin.x + float(t.x - first.x) * pitch, origin.y + float(grid - 1 - (t.z - first.z)) * pitch);
-    };
+    grid_.fit(z.folder, bounds, grid, grid, ImGui::GetContentRegionAvail().x, kMaxCell);
+    const TileGrid::Input input = grid_.area("##tiles");
+    syncThumbnails(z, info);
+    if (logView_ && thumbnailsPending_ == 0) {
+        logView_ = false;
+        const km::TileRect v = grid_.visible();
+        kast::log::info(std::format("Map: view {}..{} ({:.0f} px cells, {} thumbnails)", zone::tile_name({v.x0, v.z0}),
+                                    zone::tile_name({v.x1, v.z1}), grid_.view().cell, thumbnails_.size()));
+    }
+    const float cell = grid_.view().cell;
     // A map position on screen: inside its tile's cell (the gaps between cells are not ground).
     const auto toScreen = [&](float x, float zz) {
         const km::TileKey t = km::tile_of(x, zz);
-        const ImVec2 min = cellMin(t);
+        const ImVec2 min = grid_.corner(t);
         return ImVec2(min.x + (x / km::kTileSize - float(t.x)) * cell, min.y + (float(t.z + 1) - zz / km::kTileSize) * cell);
     };
 
     ImDrawList* draw = ImGui::GetWindowDrawList();
+    draw->PushClipRect(grid_.min(), grid_.max(), true);
     const std::filesystem::path& root = doc.project->root;
-    std::optional<km::TileKey> hover;
-    for (int row = 0; row < grid; ++row)
-        for (int col = 0; col < grid; ++col) {
-            const km::TileKey t{first.x + col, first.z + grid - 1 - row};
+    const km::TileRect shown = grid_.visible();
+    for (int32_t tz = shown.z1; tz >= shown.z0; --tz)
+        for (int32_t tx = shown.x0; tx <= shown.x1; ++tx) {
+            const km::TileKey t{tx, tz};
             const std::optional<kast::SceneSlot> slot = findOpenScene(doc, utf8(tileFile(root, z.folder, t)));
-            const kast::TileCell state = kast::tileCell(declared.contains(t), sceneFiles_.contains(t), slot.has_value(),
+            const kast::TileCell state = kast::tileCell(info.has_tile(t), sceneFiles_.contains(t), slot.has_value(),
                                                         slot && sceneDirty(doc, *slot));
-            const ImVec2 min = cellMin(t), max{min.x + cell, min.y + cell};
+            const ImVec2 min = grid_.corner(t), max{min.x + cell, min.y + cell};
             const auto thumbnail = thumbnails_.find(t);
             if (thumbnail != thumbnails_.end() && bgfx::isValid(thumbnail->second.texture))
                 draw->AddImage(static_cast<ImTextureID>(thumbnail->second.texture.idx), min, max);
@@ -290,16 +304,17 @@ void MapPanel::drawGrid(Document& doc, const ZoneSession& zone, FileActions& fil
                 draw->AddRectFilled(min, max, state == kast::TileCell::Declared ? kField : kCard);
             if (state == kast::TileCell::Open || state == kast::TileCell::Unsaved) // open in the editor: tinted
                 draw->AddRectFilled(min, max, (borderColor(state) & ~IM_COL32_A_MASK) | IM_COL32(0, 0, 0, 120));
+            const bool fits = cell >= 24.0f; // the smallest cell labels and counts were laid out for
             const std::string label = zone::tile_name(t) + (state == kast::TileCell::Unsaved ? "*" : "");
             const ImVec2 text = ImGui::CalcTextSize(label.c_str());
-            const bool fits = cell >= 24.0f; // the smallest cell labels and counts were laid out for
-            if (fits && state != kast::TileCell::Undeclared)
-                draw->AddRectFilled(min, {min.x + text.x + 4.0f, min.y + text.y}, IM_COL32(0, 0, 0, 160));
-            if (fits)
+            if (fits && text.x + 4.0f <= cell) { // long names (two-digit tiles) need a wider cell
+                if (state != kast::TileCell::Undeclared)
+                    draw->AddRectFilled(min, {min.x + text.x + 4.0f, min.y + text.y}, IM_COL32(0, 0, 0, 160));
                 draw->AddText({min.x + 2.0f, min.y}, state == kast::TileCell::Undeclared ? kFieldHighlight
-                                                 : state == kast::TileCell::Orphan  ? kWarning
-                                                                                     : kWhite,
-                          label.c_str());
+                                                     : state == kast::TileCell::Orphan  ? kWarning
+                                                                                         : kWhite,
+                              label.c_str());
+            }
             if (const auto count = entities_.find(t); fits && count != entities_.end()) {
                 const std::string n = std::to_string(count->second);
                 const ImVec2 size = ImGui::CalcTextSize(n.c_str());
@@ -308,9 +323,7 @@ void MapPanel::drawGrid(Document& doc, const ZoneSession& zone, FileActions& fil
                 draw->AddText(at, kWhite, n.c_str());
             }
             draw->AddRect(min, max, borderColor(state), 0.0f, 0, borderWidth(state));
-            const ImVec2 mouse = ImGui::GetMousePos();
-            if (hovered && mouse.x >= min.x && mouse.x < max.x && mouse.y >= min.y && mouse.y < max.y) {
-                hover = t;
+            if (input.hover == t) {
                 ImGui::SetTooltip("%s\n%s%s", kast::tileScenePath(z.folder, t).c_str(), kast::tileCellName(state),
                                   entities_.contains(t) ? std::format("\n{} entities", entities_.at(t)).c_str() : "");
                 if (state != kast::TileCell::Undeclared && state != kast::TileCell::Orphan)
@@ -318,20 +331,18 @@ void MapPanel::drawGrid(Document& doc, const ZoneSession& zone, FileActions& fil
             }
         }
 
-    // The portal areas (clipped to each cell they cross) and the player spawn with its heading.
-    const ImVec2 gridMax{origin.x + pitch * grid - kGap, origin.y + pitch * grid - kGap};
-    draw->PushClipRect(origin, gridMax, true);
+    // The portal areas (clipped to each visible cell they cross) and the player spawn with its heading.
     std::string err;
     std::optional<km::Areas> areas = z.state.areas.is_null() ? std::nullopt : km::parse_areas(nlohmann::json(z.state.areas), err);
     for (const km::Area& area : areas ? areas->list : std::vector<km::Area>()) {
         if (!area.portal)
             continue;
         const auto [x0, z0, x1, z1] = area.bounds;
-        for (int32_t tz = km::tile_of(x0, z0).z; tz <= km::tile_of(x1, z1).z; ++tz)
-            for (int32_t tx = km::tile_of(x0, z0).x; tx <= km::tile_of(x1, z1).x; ++tx) {
+        for (int32_t tz = std::max(shown.z0, km::tile_of(x0, z0).z); tz <= std::min(shown.z1, km::tile_of(x1, z1).z); ++tz)
+            for (int32_t tx = std::max(shown.x0, km::tile_of(x0, z0).x); tx <= std::min(shown.x1, km::tile_of(x1, z1).x); ++tx) {
                 const float cx0 = std::max(x0, float(tx) * km::kTileSize), cx1 = std::min(x1, float(tx + 1) * km::kTileSize);
                 const float cz0 = std::max(z0, float(tz) * km::kTileSize), cz1 = std::min(z1, float(tz + 1) * km::kTileSize);
-                const ImVec2 min = cellMin({tx, tz});
+                const ImVec2 min = grid_.corner({tx, tz});
                 const ImVec2 a{min.x + (cx0 / km::kTileSize - float(tx)) * cell, min.y + (float(tz + 1) - cz1 / km::kTileSize) * cell};
                 const ImVec2 b{min.x + (cx1 / km::kTileSize - float(tx)) * cell, min.y + (float(tz + 1) - cz0 / km::kTileSize) * cell};
                 draw->AddRectFilled(a, {std::max(b.x, a.x + 2.0f), std::max(b.y, a.y + 2.0f)}, IM_COL32(255, 204, 0, 110));
@@ -348,8 +359,8 @@ void MapPanel::drawGrid(Document& doc, const ZoneSession& zone, FileActions& fil
     draw->AddCircle(spawn, r, kBlack, 0, 1.5f);
     draw->PopClipRect();
 
-    if (clicked && hover && !locked)
-        click(doc, zone, files, *hover);
+    if (input.clicked && !locked)
+        click(doc, zone, files, *input.hover);
 
     for (const auto& [color, label] : {std::pair{kField, "No scene"}, {kDarken, "Scene"}, {kButton, "Open"},
                                        {kHighlight, "Unsaved *"}, {kWarning, "Orphan"}, {kCard, "Not a tile"}})

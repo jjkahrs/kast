@@ -1350,6 +1350,51 @@ void check_tile_scenes() {
     CHECK(info && kast::tileCell(info->has_tile({1, 1}), true, false, false) == TileCell::Orphan);
 }
 
+// The Map tab's and Zone tab's tile grid: the default view fits the map (an 8 x 8 cell area at least, as before zoom),
+// the wheel zooms about the mouse, a drag pans but never loses the map, and only the cells on the area are visited.
+void check_grid_view() {
+    const km::TileRect three{2, 3, 4, 5}; // 3 x 3 in the Map tab's 8 x 8 area, 400 px wide: 48 px cells, gap 2
+    const GridView fit = fit_grid(three, 8, 8, 400, 2, 4, 96);
+    CHECK(fit.cell == 48 && fit.left == 2 && fit.top == 11);
+    const auto size = grid_size(fit, 8, 8);
+    CHECK(size[0] == 398 && size[1] == 398);
+    // Bottom-left cell 2_3 in the bottom-left corner, +z up: 2_5 two rows above it.
+    CHECK((cell_corner(fit, {2, 3})[0] == 0 && cell_corner(fit, {2, 3})[1] == 350));
+    CHECK((cell_corner(fit, {2, 5})[1] == 250 && cell_corner(fit, {3, 5})[0] == 50));
+    CHECK((cell_at(fit, {1, 351}) == TileKey{2, 3} && cell_at(fit, {397, 1}) == TileKey{9, 10}));
+    CHECK((!cell_at(fit, {49, 351}))); // a gap
+    const km::TileRect shown = visible_cells(fit, three, size);
+    CHECK(shown.x0 == 2 && shown.z0 == 3 && shown.x1 == 4 && shown.z1 == 5);
+
+    const km::TileRect cap{0, 0, kMaxMapTiles - 1, kMaxMapTiles - 1};
+    const GridView whole = fit_grid(cap, kMaxMapTiles, kMaxMapTiles, 400, 2, 4, 96);
+    const auto area = grid_size(whole, kMaxMapTiles, kMaxMapTiles);
+    const km::TileRect all = visible_cells(whole, cap, area);
+    CHECK(all.x0 == 0 && all.z0 == 0 && all.x1 == kMaxMapTiles - 1 && all.z1 == kMaxMapTiles - 1);
+    // Zoom about a point: the ground under it stays; cells clamp to the range.
+    const std::array<float, 2> at{100, 50};
+    const GridView in = zoom_grid(whole, 8, at, 4, 96);
+    CHECK(in.cell == whole.cell * 8 && cell_at(in, at) == cell_at(whole, at));
+    CHECK(zoom_grid(in, 100, at, 4, 96).cell == 96 && zoom_grid(in, 0.001f, at, 4, 96).cell == 4);
+    const km::TileRect part = visible_cells(in, cap, area);
+    const int cols = part.x1 - part.x0 + 1, rows = part.z1 - part.z0 + 1;
+    CHECK(cols * rows < kMaxMapTiles * kMaxMapTiles / 16 && cols >= int(area[0] / in.pitch()));
+    // Centred on a distant tile, zoomed: it is under the area's centre; the visible cells hold it.
+    const GridView centred = centre_grid(whole, {60, 60}, 8, area, 4, 96);
+    CHECK((cell_at(centred, {area[0] / 2, area[1] / 2}) == TileKey{60, 60}));
+    const GridView distant = pan_grid(centred, {0, 0}, cap, area); // kept on the map: its top-right corner
+    const km::TileRect around = visible_cells(distant, cap, area);
+    CHECK(around.x0 <= 60 && around.x1 >= 60 && around.z0 <= 60 && around.z1 >= 60 && around.x1 == kMaxMapTiles - 1);
+    const int across = int(std::ceil(area[0] / in.pitch())); // cells on an area that starts or ends on a cell's edge
+    CHECK(around.x1 - around.x0 + 1 == across && around.z1 - around.z0 + 1 == across); // no empty cells past the edge
+    // A pan moves the ground with the mouse; a huge one stops at the map's corner.
+    const GridView left = pan_grid(distant, {in.pitch() * 3, 0}, cap, area);
+    CHECK(std::abs(left.left - (distant.left - 3)) < 1e-3f && left.top == distant.top);
+    const GridView lost = pan_grid(distant, {1e6f, -1e6f}, cap, area);
+    const km::TileRect corner = visible_cells(lost, cap, area);
+    CHECK(corner.x0 == 0 && corner.x1 == across - 1 && corner.z0 == 0 && corner.z1 == across - 1);
+}
+
 int main(int argc, char** argv) {
     kast::disableCrashDialogsIfRequested();
     if (argc == 3 && std::string(argv[1]) == "--child") { // check_process_runner's child: stdout, stderr, exit code
@@ -1382,6 +1427,7 @@ int main(int argc, char** argv) {
     check_round_trip(kSource / "tests" / "project", "rt_tilegrid", "tilegrid");
     check_tile_scenes();
     check_edit_view();
+    check_grid_view();
     if (failures) std::fprintf(stderr, "%d check(s) failed\n", failures);
     else std::printf("zone builder self-check: all passed\n");
     return failures ? 1 : 0;

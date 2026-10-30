@@ -86,7 +86,7 @@ constexpr const char* kUsage =
     "[--scene in.scene] [--project dir] [--save-scene out.scene] [--select ID] [--play] [--select-network-entity] [--no-scene-post] [--no-scene-world-ui] [--add-component-popup] "
     "[--new-component-prompt Name] [--new-component Name] [--new-state-machine-prompt Name] [--build dir] "
     "[--open-menu Name] [--open-build-settings] [--open-online-settings] [--open-gui-settings] [--gui-settings-set json] [--game-resolution WxH] [--game-display-scale S] [--gui-preview-scale PERCENT] [--assets-menu path|/] [--assets-create system|fsm|gui|material|shader|shadergraph:folder] [--assets-rename path=name] [--assets-select path] [--material-set field=json] [--material-undo N] [--material-redo N] "
-    "[--focus-panel Window] [--map-click tx,tz]... [--zone-section Map[,Problems...]] [--zone-tool Raise|Lower|Flatten|SetSpawn|...] [--zone-select id|object:tx,tz,index] [--bake] [--mapbake exe] [--open-gui file.rml|file.guiprefab] [--gui-select id] [--gui-preview-size WxH] [--gui-pick X,Y] "
+    "[--focus-panel Window] [--map-click tx,tz]... [--grid-view tx,tz,zoom] [--zone-section Map[,Problems...]] [--zone-tool Raise|Lower|Flatten|SetSpawn|...] [--zone-select id|object:tx,tz,index] [--bake] [--mapbake exe] [--open-gui file.rml|file.guiprefab] [--gui-select id] [--gui-preview-size WxH] [--gui-pick X,Y] "
     "[--gui-add Panel|Text|RichText|Button|Toggle|Slider|Dropdown|Spinbox|Progress|ListBox|VirtualList] [--gui-set-attr name=value] [--gui-set-prop name=value] [--gui-rich-wrap tag[=value],start,end] [--gui-undo N] [--gui-redo N] [--gui-save] [--gui-create-prefab folder|/] [--gui-place-prefab path]... [--gui-revert name|*] [--gui-apply name|*] [--gui-unpack] [--gui-delete] [--gui-move up|down] [--gui-reparent id|/] [--gui-click id] "
     "[--open-graph file.kshadergraph] [--graph-add type[,x,y]] [--graph-link N.pin,M.pin] [--graph-unlink N.pin] [--graph-select N[,M...]] "
     "[--graph-delete N[,M...]] [--graph-set N.setting=json] [--graph-comment title,x,y,w,h] [--graph-paste x,y] [--graph-undo N] [--graph-redo N] "
@@ -175,6 +175,7 @@ struct Options {
     std::optional<std::array<float, 3>> focus; // --focus x,z,distance: the Scene camera's pivot on the zone ground
     std::optional<std::array<int, 2>> promptRemoveTile; // --prompt-remove-tile: open the Zone tab's remove-tile dialog
     std::vector<std::array<int, 2>> mapClicks; // --map-click: Map tab cell clicks, one a frame (tests, screenshots)
+    std::optional<std::array<float, 3>> gridView; // --grid-view tx,tz,zoom: the Map and Zone tab tile grids centred there
     bool fileSave = false;  // --file-save: File > Save (as Ctrl+S) at frame kAddComponentPopupFrame, for tests
     int undo = 0, redo = 0; // --scene-undo N / --scene-redo N: scene Undo N times, then Redo N times, after the startup edits
     // Additive scenes (docs/editor/multi-scene.html), after --scene / --project: --open-additive opens each scene as
@@ -742,11 +743,14 @@ std::optional<Options> parseArgs(int argc, char** argv)
             ++i;
         } else if (arg == "--scene-redo" && hasValue && parsePositive(argv[i + 1], options.redo)) {
             ++i;
-        } else if (arg == "--focus" && hasValue) {
-            if (!(options.focus = zone_cli::parseFocus(argv[++i]))) {
-                kast::log::error(std::format("Invalid --focus '{}', expected x,z,distance", argv[i]));
+        } else if ((arg == "--focus" || arg == "--grid-view") && hasValue) { // one branch: MSVC's nesting limit
+            const std::optional<std::array<float, 3>> v = zone_cli::parseFocus(argv[++i]); // three numbers each
+            const bool grid = arg == "--grid-view";
+            if (!v || (grid && (*v)[2] <= 0.0f)) {
+                kast::log::error(std::format("Invalid {} '{}', expected {}", arg, argv[i], grid ? "tx,tz,zoom (zoom > 0)" : "x,z,distance"));
                 return std::nullopt;
             }
+            (grid ? options.gridView : options.focus) = v;
         } else if ((arg == "--prompt-remove-tile" || arg == "--map-click") && hasValue) { // one branch: MSVC's nesting limit
             const std::optional<std::array<int, 2>> tile = zone_cli::parseTile(argv[++i]);
             if (!tile) {
@@ -929,7 +933,7 @@ std::optional<Options> parseArgs(int argc, char** argv)
                              options.occlusionUnsupported || options.showOccluded || options.showHiz >= 0 || options.showGData != 0 || options.sceneDebugMenu ||
                              options.terrainLodChecker || options.noTerrainSkirts || !options.worldAddress.empty() || options.onlineLoginEnv ||
                              options.onlineCompose || !options.zoneOps.empty() || options.headless || options.noRecycle ||
-                             options.sculptLoop || options.focus || options.promptRemoveTile || !options.mapClicks.empty() || options.fileSave ||
+                             options.sculptLoop || options.focus || options.promptRemoveTile || !options.mapClicks.empty() || options.gridView || options.fileSave ||
                              options.bakeProbes || options.bakeLightmaps || options.bakeLightmapsAsync ||
                              options.cancelLightmaps || options.bakeVoxelGi || options.undo || options.redo ||
                              !options.openAdditive.empty() || options.activeScene || !options.moveToScene.empty() ||
@@ -937,7 +941,7 @@ std::optional<Options> parseArgs(int argc, char** argv)
     if (!options.editor() && editorFlags) {
         kast::log::error("--select, --play, --select-network-entity, --add-component-popup, --new-component[-prompt], "
                          "--new-state-machine-prompt, --open-menu, --open-build-settings, --open-online-settings, --open-gui-settings, "
-                         "--gui-settings-set, --game-resolution, --game-display-scale, --gui-preview-scale, --focus-panel, --map-click, --zone-section, --zone-tool, --zone-select, --bake, --mapbake, "
+                         "--gui-settings-set, --game-resolution, --game-display-scale, --gui-preview-scale, --focus-panel, --map-click, --grid-view, --zone-section, --zone-tool, --zone-select, --bake, --mapbake, "
                          "--assets-menu, "
                          "--assets-create, --assets-rename, --assets-select, --open-gui, --gui-select, --gui-preview-size, --gui-pick, --gui-add, --gui-save, "
                          "--gui-click, --open-graph, --preview-model, --open-preferences, --open-external, --world-address, --online-login-env, --online-compose, the prefab "
@@ -1944,6 +1948,11 @@ int main(int argc, char** argv)
             zonePanel.startBake(zone);
         if (options->promptRemoveTile && frames.frame() == kAddComponentPopupFrame + 2) // after --focus-panel
             zonePanel.askRemoveTile({(*options->promptRemoveTile)[0], (*options->promptRemoveTile)[1]});
+        if (options->gridView && frames.frame() == kAddComponentPopupFrame) {
+            const kast::map::TileKey t{int32_t(std::floor((*options->gridView)[0])), int32_t(std::floor((*options->gridView)[1]))};
+            mapPanel.look(t, (*options->gridView)[2]);
+            zonePanel.lookGrid(t, (*options->gridView)[2]);
+        }
         for (size_t i = 0; i < options->mapClicks.size(); ++i) // one a frame, after --focus-panel
             if (frames.frame() == kAddComponentPopupFrame + 2 + static_cast<int>(i))
                 mapPanel.click(doc, zone, files, {options->mapClicks[i][0], options->mapClicks[i][1]});

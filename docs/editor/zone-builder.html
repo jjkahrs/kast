@@ -81,7 +81,8 @@ it, collapsing sections:</p>
 <td>the map picker (every <code>maps/*/map.json</code> of the project) and <strong>New Map...</strong> (folder: letters, digits, <code>_</code>,
 <code>-</code>; name; id, the lowest unused by default, a used one refused; 1-8 by 1-8 tiles; nothing is written until you save);
 id, name, material (a project <code>.mat</code>), <strong>Type</strong> (World or Instance, <a href="#instance">below</a>), player spawn (x, z on the ground, heading; <strong>Place on terrain</strong> then
-click), own <code>nav</code> settings, and the <strong>tile grid</strong> (+z up): click a free cell to add a tile (its edges take its
+click), own <code>nav</code> settings, and the <strong>tile grid</strong> (+z up; fitted whole to the tab's width, the mouse wheel
+zooms and a drag pans, as the <a href="map-builder.html#map-tab">Map tab</a>): click a free cell to add a tile (its edges take its
 neighbours' heights, so no seam), a tile to remove it (a dialog lists the files that go and the spawns lost). Changing the id
 changes the Terrain entity's <code>map</code> too.</td>
 <td><code>map.json</code>; on save, a removed tile's <code>heights/</code>, <code>.server/spawns/</code>, <code>objects/</code>,
