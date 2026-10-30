@@ -1,11 +1,13 @@
 # Runs a built game (a copy of GAME_DIR, in WORK_DIR) for 120 frames and checks its exit code is EXPECT (0 or 1).
 # PAK=missing deletes game.pak first, PAK=corrupt overwrites it. SCREENSHOT also writes a PNG (must be non-empty).
-# EXPECT_OUTPUT is a regex the game's log must match, FORBID_OUTPUT one it must not. The built game must not hold a
+# EXPECT_OUTPUT is a regex the game's log must match, FORBID_OUTPUT one it must not, EXPECT_ONCE (a list) regexes it must
+# match exactly once each. The built game must not hold a
 # shaderc.exe, a texturec.exe or an Assimp DLL: the player only loads precompiled shaders, cooked models and textures. EXTRA_ARGS are passed on to the game (e.g. --gui-click id). A hang
 # fails after 60 s instead of blocking the run. WRAPPER (a list) runs the game through another program, e.g.
 # kast_net_test_server <args> -- (its servers are up while the game runs).
 # Usage: cmake -DGAME_DIR=<dir> -DEXE=<name.exe> -DWORK_DIR=<dir> -DEXPECT=0|1 [-DSCREENSHOT=<png>]
-#              [-DPAK=missing|corrupt] [-DEXPECT_OUTPUT=<regex>] [-DFORBID_OUTPUT=<regex>] [-DEXTRA_ARGS=<args>] [-DWRAPPER=<exe;args>]
+#              [-DPAK=missing|corrupt] [-DEXPECT_OUTPUT=<regex>] [-DFORBID_OUTPUT=<regex>] [-DEXPECT_ONCE=<regex;...>]
+#              [-DEXTRA_ARGS=<args>] [-DWRAPPER=<exe;args>]
 #              -P player_test.cmake
 file(REMOVE_RECURSE "${WORK_DIR}")
 file(COPY "${GAME_DIR}/" DESTINATION "${WORK_DIR}")
@@ -46,6 +48,14 @@ endif()
 if(DEFINED FORBID_OUTPUT AND output MATCHES "${FORBID_OUTPUT}")
   message(FATAL_ERROR "Output matches '${FORBID_OUTPUT}'")
 endif()
+string(REPLACE ";" "," listable "${output}") # a ; in a match would split it into two list items
+foreach(once IN LISTS EXPECT_ONCE)
+  string(REGEX MATCHALL "${once}" matches "${listable}")
+  list(LENGTH matches count)
+  if(NOT count EQUAL 1)
+    message(FATAL_ERROR "'${once}' matched ${count} times, expected once")
+  endif()
+endforeach()
 if(DEFINED SCREENSHOT)
   if(NOT EXISTS "${SCREENSHOT}")
     message(FATAL_ERROR "Screenshot not written: ${SCREENSHOT}")

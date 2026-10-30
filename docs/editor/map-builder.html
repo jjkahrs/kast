@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Map Builder - Kast Editor</title>
+<link rel="stylesheet" href="../style.css">
+</head>
+<body>
+<header class="top"><a class="brand" href="../index.html">Kast Docs</a><nav><a href="index.html">Editor</a><a href="../engine/index.html">Engine</a><a href="../services/auth/index.html">Auth Server</a><a href="../services/world/index.html">World Server</a><a href="../services/chat/index.html">Chat Server</a><a href="../services/admin/index.html">Admin App</a><a href="../development/tests.html">Development</a></nav></header>
+<div class="layout">
+<nav class="side"><h2>Editor</h2><ul><li><a href="index.html">Overview</a></li><li><a href="command-line.html">Command line</a></li><li><a href="controls.html">Editor controls</a></li><li><a href="undo-redo.html">Undo and redo</a></li><li><a href="multi-scene.html">Multi-scene editing</a></li><li><a href="project-manager.html">Project Manager</a></li><li><a href="projects.html">Projects</a></li><li><a href="build.html">Build</a></li><li><a href="online-tooling.html">Online Services tooling</a></li><li><a href="gui-builder.html">GUI Builder</a></li><li><a href="prefabs.html">Prefabs</a></li><li><a href="shaders.html">Shaders</a></li><li><a href="shader-graph.html">Shader Graph</a></li><li><a href="zone-builder.html">Zone Builder</a></li><li><a href="map-builder.html" class="active">Map Builder</a></li><li><a href="model-preview.html">Model Preview</a></li><li><a href="assets.html">Assets and asset ids</a></li></ul></nav>
+<main>
+<h1 id="map-builder">Map Builder</h1>
+<p>A large map is easier to build as many scenes than as one: each 256 m tile of a <a href="zone-builder.html">zone</a> can have its
+own scene file. The editor's <strong>Map</strong> tab shows the open zone's tiles top-down and opens, closes and creates their
+scenes; in Play the engine streams them in and out around the player like the terrain
+(<a href="../engine/terrain.html#tile-scenes">Terrain, tile scenes</a>). The tab is <code>editor/map_panel.*</code>; the tile scene
+logic (paths, cell states, the streaming diff) is <code>engine/tile_scenes.h</code>.</p>
+
+<h2 id="conventions">Tile scenes</h2>
+<ul>
+<li>Tile <code>tx, tz</code>'s scene is <code>maps/&lt;folder&gt;/scenes/&lt;tx&gt;_&lt;tz&gt;.scene</code> (project-relative). The file exists exactly
+  when the tile has one: there is no manifest, and <code>map.json</code> does not change.</li>
+<li>Its entities use <strong>world coordinates</strong>: tile <code>tx, tz</code> spans x <code>[tx * 256, (tx + 1) * 256)</code> and z likewise,
+  so an entity at (300, y, 40) belongs in <code>1_0.scene</code>. There is no per-tile offset.</li>
+<li>The zone's <strong>root scene</strong> (the one with the <code>Terrain</code> entity: the sun, the camera, shared prefabs) stays the
+  active scene; tile scenes open beside it as <a href="multi-scene.html">additive scenes</a> and are never made active by the
+  tab.</li>
+<li>Tile scenes are ordinary scene files: File &gt; Open Scene Additive, Save Scene and Remove Scene work on them as on any
+  other.</li>
+</ul>
+
+<h2 id="map-tab">The Map tab</h2>
+<p>The tab sits beside <strong>Hierarchy</strong> and <strong>Zone</strong> in the left dock (also added there on the first run with an older
+<code>imgui.ini</code>). It shows the zone of the open scene by the <a href="zone-builder.html#scene-link">Zone tab's rule</a> (the
+first <code>Terrain</code> entity's map), with the same messages when there is no project, no <code>Terrain</code> entity, or the map does not
+load. Below the map's folder: the grid, a legend, and <strong>Problems</strong>.</p>
+<p><strong>The grid</strong> is the map's full 8 x 8 bounds from its lowest declared x and z, <strong>+z up</strong> (as the Zone tab's tile
+grid and the default camera). The cells fit the dock's width (24 to 96 px). Each cell shows:</p>
+<ul>
+<li>its <code>tx_tz</code> label (top left, <code>*</code> after it while the tile scene has unsaved changes);</li>
+<li>its tile scene's <strong>entity count</strong> (bottom right): from the open scene when it is open, else read from the file
+  (cached; read again when the file changes, every half second at most, and when the open scenes change);</li>
+<li>a <strong>terrain thumbnail</strong> made on the CPU from the zone's in-memory heights, colored by <code>map.json</code>
+  <code>terrainColors</code> (grayscale without them); a tile's thumbnail is made again when a Zone tab edit changes its heights or the
+  colors change;</li>
+<li>the map's <strong>player spawn</strong> (a white dot with a line for its heading) and its <strong>portal areas</strong> from
+  <code>areas.json</code> (filled outlines; an area crossing tiles is drawn across each of them).</li>
+</ul>
+<p>Hover a cell for its tooltip: the tile scene's path, its state and its entity count.</p>
+<table>
+<thead>
+<tr>
+<th>State</th>
+<th>Cell</th>
+<th>Click</th>
+</tr>
+</thead>
+<tbody>
+<tr id="state-undeclared">
+<td>Not a tile (undeclared)</td>
+<td>card grey <code>#313131</code>, grey label, no thumbnail</td>
+<td>nothing</td>
+</tr>
+<tr id="state-declared">
+<td>No scene</td>
+<td>thumbnail, thin <code>#454545</code> border</td>
+<td>creates the tile scene (<a href="#create">below</a>)</td>
+</tr>
+<tr id="state-scene">
+<td>Scene (on disk, not open)</td>
+<td>thumbnail, <code>#ff9900</code> border</td>
+<td>opens it additively (as File &gt; Open Scene Additive): a new Hierarchy header, not active</td>
+</tr>
+<tr id="state-open">
+<td>Open</td>
+<td>thumbnail tinted <code>#ffaa00</code>, thick border</td>
+<td>closes it (Remove Scene)</td>
+</tr>
+<tr id="state-unsaved">
+<td>Unsaved <code>*</code></td>
+<td>thumbnail tinted <code>#ffcc00</code>, thick border, <code>*</code> after the label</td>
+<td>closes it after the Save / Don't Save / Cancel prompt</td>
+</tr>
+<tr id="state-orphan">
+<td>Orphan</td>
+<td>card grey with the warning color's border and label</td>
+<td>nothing (a scene file on an undeclared tile: <a href="#validation">warned</a>)</td>
+</tr>
+</tbody>
+</table>
+<p id="create"><strong>Create.</strong> A click on a declared tile without a scene adds an empty scene (no entities, default
+settings) named for <code>maps/&lt;folder&gt;/scenes/&lt;tx&gt;_&lt;tz&gt;.scene</code>, open and unsaved: nothing is written until
+<strong>File &gt; Save</strong> / <strong>Ctrl+S</strong> (or its header's Save Scene) writes it there, making <code>scenes/</code> if needed. Closing it
+before then asks first; Don't Save leaves no file.</p>
+<p>Every action logs a <code>Map: ...</code> line to the Console (<code>Map: opened tile 1_0 (...)</code>, <code>Map: close tile ...</code>,
+<code>Map: created ...</code>), as do the zone it shows (<code>Map: maps/tilegrid (9 tiles, 5 tile scenes)</code>) and the warnings.</p>
+<p><strong>Read-only.</strong> During Play and in prefab edit mode clicks do nothing and a note says why. In Play the cells show the
+scenes that streamed in as open.</p>
+
+<h2 id="validation">Validation</h2>
+<p>The tab checks the zone's tile scenes and lists each problem under its <strong>Problems</strong> header; each is also logged once to
+the Console as a warning (<code>[warn] Map: ...</code>) when it appears. None of them blocks saving the scene or the zone.</p>
+<ul>
+<li><strong>Orphan tile scene</strong>: a scene file on a tile <code>map.json</code> does not declare. Removing a tile in the Zone tab does
+  <strong>not</strong> delete its scene, so it becomes an orphan: declare the tile again, or move its entities into another tile
+  scene and delete the file.</li>
+<li><strong>Entity out of bounds</strong>: a root entity of a tile scene whose world x/z is outside that tile's square, named with the
+  tile it actually stands in (<code>maps/tilegrid/scenes/0_1.scene: root entity 'Stray Rock' at (600, 400) is in tile 2_1,
+  outside tile 0_1</code>). It is allowed and saves fine; it streams with its own tile's scene.</li>
+<li><strong>Bad file name</strong>: a file in <code>scenes/</code> that is not <code>&lt;int&gt;_&lt;int&gt;.scene</code> (editor <code>.meta</code> files aside) is
+  ignored, with a warning.</li>
+<li>A tile scene file that cannot be read or is not a scene: its error.</li>
+</ul>
+
+<h2 id="play">Play</h2>
+<p>Play starts from the open scenes, then <a href="../engine/terrain.html#tile-scenes">streaming</a> takes over: tile scenes out of
+<code>Terrain.radius</code> of the player (or camera) unload, even ones you had open, and those in range load, one a frame. Stop
+restores the open set exactly as it was, unsaved changes included.</p>
+
+<h2 id="command-line">Command line</h2>
+<p><code>--map-click tx,tz</code> (repeatable) clicks that cell, one click a frame from frame 12, for tests and screenshots
+(<a href="command-line.html#map-click">Command line</a>):</p>
+<pre><code class="language-bat">build\debug\kast_editor.exe --scene tests\project\scenes\tilegrid.scene --focus-panel Map --map-click 1,0
+</code></pre>
+<p><strong>Sample</strong>: <code>tests/project/scenes/tilegrid.scene</code> with <code>tests/project/maps/tilegrid</code> (map 7, 3 x 3 tiles; scenes
+on 0_0, 1_0, 0_1 and 1_1, the out-of-bounds <code>Stray Rock</code> in 0_1, and an orphan on 3_1). The <code>editor_map_*</code> and
+<code>player_tilegrid_stream</code> tests use it (<code>cmake/map_tests.cmake</code>).</p>
+</main>
+</div>
+</body>
+</html>

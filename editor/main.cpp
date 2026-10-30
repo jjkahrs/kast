@@ -6,6 +6,7 @@
 #include "game_view.h"
 #include "imgui_bgfx.h"
 #include "launcher.h"
+#include "map_panel.h"
 #include "model_importer.h"
 #include "model_preview.h"
 #include "online.h"
@@ -84,7 +85,7 @@ constexpr const char* kUsage =
     "[--scene in.scene] [--project dir] [--save-scene out.scene] [--select ID] [--play] [--select-network-entity] [--no-scene-post] [--no-scene-world-ui] [--add-component-popup] "
     "[--new-component-prompt Name] [--new-component Name] [--new-state-machine-prompt Name] [--build dir] "
     "[--open-menu Name] [--open-build-settings] [--open-online-settings] [--open-gui-settings] [--gui-settings-set json] [--game-resolution WxH] [--game-display-scale S] [--gui-preview-scale PERCENT] [--assets-menu path|/] [--assets-create system|fsm|gui|material|shader|shadergraph:folder] [--assets-rename path=name] [--assets-select path] [--material-set field=json] [--material-undo N] [--material-redo N] "
-    "[--focus-panel Window] [--zone-section Map[,Problems...]] [--zone-tool Raise|Lower|Flatten|SetSpawn|...] [--zone-select id|object:tx,tz,index] [--bake] [--mapbake exe] [--open-gui file.rml|file.guiprefab] [--gui-select id] [--gui-preview-size WxH] [--gui-pick X,Y] "
+    "[--focus-panel Window] [--map-click tx,tz]... [--zone-section Map[,Problems...]] [--zone-tool Raise|Lower|Flatten|SetSpawn|...] [--zone-select id|object:tx,tz,index] [--bake] [--mapbake exe] [--open-gui file.rml|file.guiprefab] [--gui-select id] [--gui-preview-size WxH] [--gui-pick X,Y] "
     "[--gui-add Panel|Text|RichText|Button|Toggle|Slider|Dropdown|Spinbox|Progress|ListBox|VirtualList] [--gui-set-attr name=value] [--gui-set-prop name=value] [--gui-rich-wrap tag[=value],start,end] [--gui-undo N] [--gui-redo N] [--gui-save] [--gui-create-prefab folder|/] [--gui-place-prefab path]... [--gui-revert name|*] [--gui-apply name|*] [--gui-unpack] [--gui-delete] [--gui-move up|down] [--gui-reparent id|/] [--gui-click id] "
     "[--open-graph file.kshadergraph] [--graph-add type[,x,y]] [--graph-link N.pin,M.pin] [--graph-unlink N.pin] [--graph-select N[,M...]] "
     "[--graph-delete N[,M...]] [--graph-set N.setting=json] [--graph-comment title,x,y,w,h] [--graph-paste x,y] [--graph-undo N] [--graph-redo N] "
@@ -172,6 +173,7 @@ struct Options {
     bool sculptLoop = false; // --sculpt-loop: a moving brush sculpts the zone every frame (the --log-fps benchmark)
     std::optional<std::array<float, 3>> focus; // --focus x,z,distance: the Scene camera's pivot on the zone ground
     std::optional<std::array<int, 2>> promptRemoveTile; // --prompt-remove-tile: open the Zone tab's remove-tile dialog
+    std::vector<std::array<int, 2>> mapClicks; // --map-click: Map tab cell clicks, one a frame (tests, screenshots)
     bool fileSave = false;  // --file-save: File > Save (as Ctrl+S) at frame kAddComponentPopupFrame, for tests
     int undo = 0, redo = 0; // --scene-undo N / --scene-redo N: scene Undo N times, then Redo N times, after the startup edits
     // Additive scenes (docs/editor/multi-scene.html), after --scene / --project: --open-additive opens each scene as
@@ -730,11 +732,16 @@ std::optional<Options> parseArgs(int argc, char** argv)
                 kast::log::error(std::format("Invalid --focus '{}', expected x,z,distance", argv[i]));
                 return std::nullopt;
             }
-        } else if (arg == "--prompt-remove-tile" && hasValue) {
-            if (!(options.promptRemoveTile = zone_cli::parseTile(argv[++i]))) {
-                kast::log::error(std::format("Invalid --prompt-remove-tile '{}', expected tx,tz", argv[i]));
+        } else if ((arg == "--prompt-remove-tile" || arg == "--map-click") && hasValue) { // one branch: MSVC's nesting limit
+            const std::optional<std::array<int, 2>> tile = zone_cli::parseTile(argv[++i]);
+            if (!tile) {
+                kast::log::error(std::format("Invalid {} '{}', expected tx,tz", arg, argv[i]));
                 return std::nullopt;
             }
+            if (arg == "--map-click")
+                options.mapClicks.push_back(*tile);
+            else
+                options.promptRemoveTile = tile;
         } else if (arg == "--projects-file" && hasValue) {
             options.projectsFile = argv[++i];
         } else if (arg == "--settings-file" && hasValue) {
@@ -907,7 +914,7 @@ std::optional<Options> parseArgs(int argc, char** argv)
                              options.occlusionUnsupported || options.showOccluded || options.showHiz >= 0 || options.showGData != 0 || options.sceneDebugMenu ||
                              options.terrainLodChecker || options.noTerrainSkirts || !options.worldAddress.empty() || options.onlineLoginEnv ||
                              options.onlineCompose || !options.zoneOps.empty() || options.headless || options.noRecycle ||
-                             options.sculptLoop || options.focus || options.promptRemoveTile || options.fileSave ||
+                             options.sculptLoop || options.focus || options.promptRemoveTile || !options.mapClicks.empty() || options.fileSave ||
                              options.bakeProbes || options.bakeLightmaps || options.bakeLightmapsAsync ||
                              options.cancelLightmaps || options.bakeVoxelGi || options.undo || options.redo ||
                              !options.openAdditive.empty() || options.activeScene || !options.moveToScene.empty() ||
@@ -915,7 +922,7 @@ std::optional<Options> parseArgs(int argc, char** argv)
     if (!options.editor() && editorFlags) {
         kast::log::error("--select, --play, --select-network-entity, --add-component-popup, --new-component[-prompt], "
                          "--new-state-machine-prompt, --open-menu, --open-build-settings, --open-online-settings, --open-gui-settings, "
-                         "--gui-settings-set, --game-resolution, --game-display-scale, --gui-preview-scale, --focus-panel, --zone-section, --zone-tool, --zone-select, --bake, --mapbake, "
+                         "--gui-settings-set, --game-resolution, --game-display-scale, --gui-preview-scale, --focus-panel, --map-click, --zone-section, --zone-tool, --zone-select, --bake, --mapbake, "
                          "--assets-menu, "
                          "--assets-create, --assets-rename, --assets-select, --open-gui, --gui-select, --gui-preview-size, --gui-pick, --gui-add, --gui-save, "
                          "--gui-click, --open-graph, --preview-model, --open-preferences, --open-external, --world-address, --online-login-env, --online-compose, the prefab "
@@ -990,6 +997,7 @@ void buildDefaultLayout(ImGuiID dockspace)
     ImGuiID leftBottom = ImGui::DockBuilderSplitNode(left, ImGuiDir_Down, 0.35f, nullptr, &left);
     ImGui::DockBuilderDockWindow("Hierarchy", left);
     ImGui::DockBuilderDockWindow(ZonePanel::kWindow, left);
+    ImGui::DockBuilderDockWindow(MapPanel::kWindow, left);
     const ImGuiID leftLowest = ImGui::DockBuilderSplitNode(leftBottom, ImGuiDir_Down, 0.5f, nullptr, &leftBottom);
     ImGui::DockBuilderDockWindow("Systems", leftBottom);
     ImGui::DockBuilderDockWindow("Components", leftLowest);
@@ -1691,6 +1699,7 @@ int main(int argc, char** argv)
     SceneViewport viewport(kSceneView, kGameGuiView);
     ZoneRender zoneRender;
     ZonePanel zonePanel(settingsFile);
+    MapPanel mapPanel;
     if (!options->mapbake.empty())
         zonePanel.setMapbake(options->mapbake);
     bool bakeStarted = false; // --bake: once (the frame count holds while it runs)
@@ -1910,6 +1919,9 @@ int main(int argc, char** argv)
             zonePanel.startBake(zone);
         if (options->promptRemoveTile && frames.frame() == kAddComponentPopupFrame + 2) // after --focus-panel
             zonePanel.askRemoveTile({(*options->promptRemoveTile)[0], (*options->promptRemoveTile)[1]});
+        for (size_t i = 0; i < options->mapClicks.size(); ++i) // one a frame, after --focus-panel
+            if (frames.frame() == kAddComponentPopupFrame + 2 + static_cast<int>(i))
+                mapPanel.click(doc, zone, files, {options->mapClicks[i][0], options->mapClicks[i][1]});
         if (options->bakeProbes && frames.frame() == kAddComponentPopupFrame - 2) // baked next frame, saved after
             panels.requestBakeAll(doc);
         if ((options->bakeLightmaps || options->bakeLightmapsAsync) && frames.frame() == kAddComponentPopupFrame - 2) {
@@ -2069,6 +2081,11 @@ int main(int argc, char** argv)
         if (options->sculptLoop && showZone() && zone.zone())
             zone_cli::sculptLoop(*zone.zone(), frames.frame());
         zonePanel.draw(doc, zone); // before the zone is synced: its edits show this frame
+        // Layouts saved before the Map tab existed: dock it as a tab beside Hierarchy.
+        if (const ImGuiWindowSettings* hierarchy = ImGui::FindWindowSettingsByID(ImHashStr("Hierarchy"));
+            hierarchy && !ImGui::FindWindowSettingsByID(ImHashStr(MapPanel::kWindow)))
+            ImGui::SetNextWindowDockID(hierarchy->DockId, ImGuiCond_FirstUseEver);
+        mapPanel.draw(doc, zone, files);
         zoneRender.sync(showZone() ? zone.zone() : nullptr, doc.project ? doc.project->root : std::filesystem::path(),
                         viewport.renderer());
         viewport.setExtraScene(zoneRender.scene());
@@ -2171,6 +2188,7 @@ int main(int argc, char** argv)
         guiBuilder.shutdown();
         graphs.shutdown();
         modelPreview.shutdown();
+        mapPanel.shutdown();
         game.shutdown();
         viewport.shutdown(); // its WorldUI preview's documents, before RmlUi's
         kast::gui::shutdown();

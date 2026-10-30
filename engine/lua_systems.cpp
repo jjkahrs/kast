@@ -16,6 +16,7 @@
 #include "project.h"
 #include "scene_io.h"
 #include "shader.h"
+#include "tile_scenes.h"
 
 #include <SDL3/SDL.h>
 #include <sol/sol.hpp>
@@ -2199,6 +2200,8 @@ void LuaSystems::start(Scene& scene, const std::optional<std::filesystem::path>&
     auth_.reset(std::move(auth));
     audio_.start(projectRoot);
     terrain_.start(projectRoot);
+    tileSceneFiles_.clear();
+    failedTileScenes_.clear();
     launch(scene, projectRoot, scenePath, input);
 }
 
@@ -2248,8 +2251,6 @@ bool LuaSystems::tick(float dt)
         state_->gui->advance(dt); // floating world texts age (kast.gui.worldText)
     state_->tick(dt);
     replication_.update(dt); // sends what this frame's systems did to the local player
-    if (state_->sceneRequests.empty())
-        return false;
     std::vector<SceneRequest> requests = std::move(state_->sceneRequests);
     state_->sceneRequests.clear();
     bool switched = false;
@@ -2274,8 +2275,49 @@ bool LuaSystems::tick(float dt)
             log::info(std::format("Active scene '{}'", request.path));
         }
     }
-    ++sceneChanges_;
+    // After a switch, terrain_ streamed the old scene's tiles: the new one's stream from the next frame.
+    if (const bool streamed = !switched && streamTileScenes(); streamed || !requests.empty())
+        ++sceneChanges_;
     return switched;
+}
+
+bool LuaSystems::streamTileScenes()
+{
+    const std::optional<TerrainStreamer::Streamed>& streamed = terrain_.streamed();
+    if (!streamed || !state_->projectRoot)
+        return false;
+    const std::string folder = terrain_.folder(streamed->map)->filename().string();
+    auto files = tileSceneFiles_.find(streamed->map);
+    if (files == tileSceneFiles_.end())
+        files = tileSceneFiles_.emplace(streamed->map, listTileScenes(*terrain_.folder(streamed->map)).tiles).first;
+    Scene& scene = state_->scene;
+    std::vector<std::string> loaded;
+    for (const LoadedScene& each : scene.loadedScenes())
+        loaded.push_back(state_->scenePaths.at(each.slot));
+    const TileScenePlan plan = planTileScenes(folder, streamed->tiles, files->second, loaded,
+                                              state_->scenePaths.at(scene.activeSlot()), failedTileScenes_);
+    for (const std::string& path : plan.unload) {
+        state_->unloadScene(path);
+        const TileSceneRef ref = *parseTileScenePath(path);
+        bus_.publish("map.tileScene.unloaded", tileSceneEvent(terrain_.mapNamed(ref.folder).value_or(0), ref),
+                     "kast.terrain");
+    }
+    if (!plan.load)
+        return !plan.unload.empty();
+    // ponytail: at most one tile scene file read and applied per frame (a sync load on the main thread), so a tile
+    // crossing with many scenes in range spreads over frames; read on a worker thread if one big scene hitches.
+    std::string error;
+    Scene tile;
+    const std::optional<std::filesystem::path> file = resolveProjectPath(*state_->projectRoot, *plan.load, error);
+    if (!file || !loadScene(file->string(), tile, error, nullptr, *state_->projectRoot)) {
+        failedTileScenes_.insert(*plan.load);
+        log::error(std::format("Map: tile scene '{}' did not load: {}; streaming goes on without it", *plan.load, error));
+        return !plan.unload.empty();
+    }
+    SceneRequest request{SceneRequest::Kind::Add, *plan.load, std::move(tile)};
+    state_->addScene(request);
+    bus_.publish("map.tileScene.loaded", tileSceneEvent(streamed->map, *parseTileScenePath(*plan.load)), "kast.terrain");
+    return true;
 }
 
 void LuaSystems::endSession()

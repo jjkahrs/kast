@@ -1,0 +1,24 @@
+{
+  "version": 5,
+  "entities": [
+    {
+      "id": 1,
+      "name": "Hut",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [120, 28, 380], "rotation": [0, 0, 0, 1], "scale": [4, 8, 4] },
+        "MeshRenderer": { "primitive": "cube", "material": "" }
+      }
+    },
+    {
+      "id": 2,
+      "name": "Stray Rock",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [600, 30, 400], "rotation": [0, 0, 0, 1], "scale": [5, 5, 5] },
+        "MeshRenderer": { "primitive": "sphere", "material": "" }
+      }
+    }
+  ],
+  "systems": []
+}

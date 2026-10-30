@@ -13,7 +13,9 @@ manage accounts, bans, characters, realms and online players. `samples/starter-m
 Documentation is HTML under [`docs/`](docs/index.html): [Editor](docs/editor/index.html),
 [Engine](docs/engine/index.html), [Auth Server](docs/services/auth/index.html),
 [World Server](docs/services/world/index.html), [Chat Server](docs/services/chat/index.html), [Admin App](docs/services/admin/index.html), [Development](docs/development/tests.html) (tests, source layout).
-Zone maps are built in the editor's Zone tab ([Zone Builder](docs/editor/zone-builder.html)). Tools document
+Zone maps are built in the editor's Zone tab ([Zone Builder](docs/editor/zone-builder.html)); the Map tab
+([Map Builder](docs/editor/map-builder.html)) splits a large map into one scene per 256 m tile, streamed around the
+player in Play. Tools document
 themselves in their own folders: [Map Bake](services/world/tools/mapbake/README.md), [LTC fit](tools/ltc_fit/README.md) (the area light table).
 
 ## Prerequisites (Windows)

@@ -282,17 +282,23 @@ std::string sameFileKey(const std::string& path)
 
 } // namespace
 
+std::optional<kast::SceneSlot> findOpenScene(const Document& doc, const std::string& path)
+{
+    for (const kast::LoadedScene& loaded : doc.scene.loadedScenes())
+        if (const std::string open = scenePath(doc, loaded.slot); !open.empty() && sameFileKey(open) == sameFileKey(path))
+            return loaded.slot;
+    return std::nullopt;
+}
+
 bool openSceneAdditive(Document& doc, const std::string& path, std::string& error)
 {
     if (doc.play != PlayState::Stopped || doc.prefabEdit) {
         error = "Stop Play mode and leave prefab edit mode to open another scene";
         return false;
     }
-    for (const kast::LoadedScene& loaded : doc.scene.loadedScenes()) {
-        if (const std::string open = scenePath(doc, loaded.slot); !open.empty() && sameFileKey(open) == sameFileKey(path)) {
-            error = std::format("Scene '{}' is already open", path);
-            return false;
-        }
+    if (findOpenScene(doc, path)) {
+        error = std::format("Scene '{}' is already open", path);
+        return false;
     }
     const std::optional<kast::Project> project = projectOf(path);
     if ((project ? project->root : std::filesystem::path()) != (doc.project ? doc.project->root : std::filesystem::path())) {
@@ -362,6 +368,8 @@ bool saveOpenScene(Document& doc, kast::SceneSlot slot, const std::string& path,
     if (slot == doc.scene.activeSlot())
         return saveFile(doc, path, error);
     endSceneGesture(doc);
+    std::error_code ec;
+    std::filesystem::create_directories(fromUtf8(path).parent_path(), ec); // a new tile scene's maps/<map>/scenes/
     if (!kast::saveScene(doc.scene, slot, path, error))
         return false;
     doc.scene.findScene(slot)->path = path;

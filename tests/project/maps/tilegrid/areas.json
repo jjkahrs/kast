@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "areas": [
+    {"id": "hills_road", "name": "Hills Road", "priority": 0, "rect": [470, 300, 560, 340],
+     "portal": {"map": 3, "pos": [256, 30, 256], "heading": 0}}
+  ]
+}

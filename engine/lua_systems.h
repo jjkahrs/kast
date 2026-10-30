@@ -16,8 +16,10 @@
 #include "world_client.h"
 
 #include <filesystem>
+#include <map>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -60,9 +62,13 @@ public:
     // systems (C++ subscriptions, the bus history, the game state machines' states and the network connections are
     // kept). An additive load appends the scene (Scene::loadedScenes) and inits its systems not already running; an
     // unload shuts down the systems no other loaded scene lists and destroys its entities; see
-    // docs/engine/additive-scenes.html. Returns true if the scene was switched.
+    // docs/engine/additive-scenes.html. Then (unless switched) streams tile scenes (tile_scenes.h) around the tiles
+    // terrain() streamed this frame, through the same additive load and unload: out-of-range ones unload, at most one
+    // in-range one loads, each publishing map.tileScene.loaded / unloaded {map, tx, tz, path} on bus(). A tile scene
+    // that fails to load logs one error and is skipped for the session. Returns true if the scene was switched.
     bool tick(float dt);
-    // Bumped by every tick that applied scene requests (a switch, additive loads and unloads, active scene changes):
+    // Bumped by every tick that applied scene requests (a switch, additive loads and unloads, active scene changes) or
+    // streamed a tile scene in or out:
     // entity handles held across it may be stale.
     uint32_t sceneChanges() const { return sceneChanges_; }
     // Calls each enabled system's shutdown, ends the session, resets the state machines, drops queued events and
@@ -128,6 +134,12 @@ private:
     void launch(Scene& scene, const std::optional<std::filesystem::path>& projectRoot, const std::string& scenePath,
                 Input* input);
     void endSession(); // shutdowns, then the Lua state goes; the state machines keep their game states
+    bool streamTileScenes(); // true if it loaded or unloaded one
+
+    // Tile scene streaming, for the session (start() clears them).
+    // ponytail: each map's scenes/ listed once per session; a tile scene saved during Play streams from the next one.
+    std::map<uint16_t, std::vector<map::TileKey>> tileSceneFiles_;
+    std::set<std::string> failedTileScenes_; // logged once, never retried
 
     EventBus bus_; // declared before state_: the systems' subscriptions unsubscribe from it when state_ goes
     Physics physics_; // publishes on bus_

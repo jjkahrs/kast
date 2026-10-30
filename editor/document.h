@@ -103,6 +103,8 @@ void updateDirty(Document& doc);
 std::string scenePath(const Document& doc, kast::SceneSlot slot);
 // "Untitled" or the file's stem.
 std::string sceneName(const Document& doc, kast::SceneSlot slot);
+// The open scene whose file is path (compared as the file system does), or nullopt.
+std::optional<kast::SceneSlot> findOpenScene(const Document& doc, const std::string& path);
 // Opens path as one more open scene (last, not active, no unsaved changes). False + error (nothing changes) during Play
 // or prefab edit mode, if it is already open, belongs to another project than doc's, or doesn't load.
 bool openSceneAdditive(Document& doc, const std::string& path, std::string& error);
@@ -114,7 +116,8 @@ void setActiveScene(Document& doc, kast::SceneSlot slot);
 // Closes an open scene, discarding its unsaved changes (FileActions::removeScene prompts first). The only open scene
 // can't be closed (false); the active one hands active to the first other.
 bool removeScene(Document& doc, kast::SceneSlot slot);
-// Writes one open scene to path (saveFile for the active one): it becomes its file and has no unsaved changes.
+// Writes one open scene to path (saveFile for the active one; a missing folder is made): it becomes its file and has
+// no unsaved changes.
 bool saveOpenScene(Document& doc, kast::SceneSlot slot, const std::string& path, std::string& error);
 // Moves entity's subtree into open scene slot as a root (an undo step, "Move <name>"). False if it can't move (logged).
 bool moveToScene(Document& doc, entt::entity entity, kast::SceneSlot slot);

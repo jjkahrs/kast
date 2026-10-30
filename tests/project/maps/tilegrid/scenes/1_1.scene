@@ -1,0 +1,15 @@
+{
+  "version": 5,
+  "entities": [
+    {
+      "id": 1,
+      "name": "Statue",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [384, 30, 384], "rotation": [0, 0, 0, 1], "scale": [3, 10, 3] },
+        "MeshRenderer": { "primitive": "cube", "material": "" }
+      }
+    }
+  ],
+  "systems": []
+}

@@ -188,7 +188,7 @@ add_library(kast_engine STATIC
   engine/state_machines.cpp engine/lua_state_machines.cpp engine/post_process.cpp
   engine/lua_sandbox.cpp engine/lua_components.cpp engine/lua_items.cpp engine/pak.cpp engine/files.cpp engine/play.cpp engine/event_bus.cpp
   engine/gui.cpp engine/gui_render.cpp engine/gui_effects.cpp engine/gui_events.cpp engine/gui_models.cpp engine/gui_widgets.cpp engine/gui_lists.cpp engine/gui_richtext.cpp engine/gui_prefabs.cpp engine/gui_scale.cpp engine/scene_gui.cpp engine/world_ui.cpp engine/window_display.cpp engine/model.cpp engine/animation.cpp engine/physics.cpp
-  engine/audio.cpp engine/network.cpp engine/auth_client.cpp engine/chat_client.cpp engine/world_client.cpp engine/stats_overlay.cpp engine/replication.cpp engine/terrain.cpp engine/sky.cpp engine/ibl.cpp engine/bvh.cpp engine/lightmap.cpp engine/lightmap_bake.cpp engine/voxel_gi.cpp engine/sdfgi.cpp engine/volumetric_fog.cpp engine/particles.cpp engine/texture_cook.cpp ${KAST_ENGINE_SHADERS})
+  engine/audio.cpp engine/network.cpp engine/auth_client.cpp engine/chat_client.cpp engine/world_client.cpp engine/stats_overlay.cpp engine/replication.cpp engine/terrain.cpp engine/tile_scenes.cpp engine/sky.cpp engine/ibl.cpp engine/bvh.cpp engine/lightmap.cpp engine/lightmap_bake.cpp engine/voxel_gi.cpp engine/sdfgi.cpp engine/volumetric_fog.cpp engine/particles.cpp engine/texture_cook.cpp ${KAST_ENGINE_SHADERS})
 target_include_directories(kast_engine PUBLIC engine PRIVATE "${KAST_SHADER_OUT}" "${KAST_GENERATED}")
 target_include_directories(kast_engine SYSTEM PRIVATE "${LUAJIT_INCLUDE_DIR}" "${Stb_INCLUDE_DIR}" "${MINIAUDIO_INCLUDE_DIR}")
 # sol2 on the LuaJIT (Lua 5.1) API; safeties check argument types instead of trusting scripts. sol2 lets C++
@@ -222,7 +222,7 @@ add_executable(kast_editor
   editor/main.cpp editor/imgui_bgfx.cpp editor/document.cpp editor/scene_undo.cpp editor/gui_undo.cpp editor/build.cpp editor/camera.cpp editor/viewport.cpp
   editor/game_view.cpp editor/panels.cpp editor/lightmap_job.cpp editor/voxelgi_job.cpp editor/launcher.cpp editor/recent_projects.cpp editor/ui_common.cpp
   editor/assets.cpp editor/asset_ids.cpp editor/gui_doc.cpp editor/gui_builder.cpp editor/shader_graph_doc.cpp editor/shader_graph_editor.cpp editor/shader_preview.cpp editor/model_preview.cpp editor/external_editor.cpp editor/editor_settings.cpp
-  editor/shader_compiler.cpp editor/texture_cooker.cpp editor/online.cpp editor/online_panel.cpp editor/zone_session.cpp editor/zone_render.cpp editor/zone_panel.cpp editor/zone_terrain.cpp editor/zone_objects.cpp editor/zone_cli.cpp
+  editor/shader_compiler.cpp editor/texture_cooker.cpp editor/online.cpp editor/online_panel.cpp editor/zone_session.cpp editor/zone_render.cpp editor/zone_panel.cpp editor/zone_terrain.cpp editor/zone_objects.cpp editor/zone_cli.cpp editor/map_panel.cpp
   editor/kast_editor.rc
   "${KAST_MANIFEST}" ${KAST_EDITOR_SHADERS})
 target_include_directories(kast_editor PRIVATE "${KAST_SHADER_OUT}" "${KAST_GENERATED}")
@@ -1838,6 +1838,7 @@ set(KAST_GAMES "switch|Switch Test|scene_a.scene|FALSE" "switch_no_systems|Switc
                "spot_area_off|Spot Area Test|spot_area_shadows_lights_off.scene|FALSE"
                "physics|Physics Test|physics.scene|FALSE"
                "terrain|Terrain Test|terrain.scene|FALSE" "terrain_off|Terrain Test|terrain_off.scene|FALSE"
+               "tilegrid|Tile Grid Test|scenes/tilegrid.scene|FALSE"
                "prefabs|Prefabs Test|prefabs.scene|FALSE" "zone_objects|Zone Objects Test|zone_objects.scene|FALSE"
                "sky|Sky Test|sky_procedural.scene|FALSE" "sky_off|Sky Test|sky_off.scene|FALSE"
                "sky_moved|Sky Test|sky_moved.scene|FALSE" "sky_cube|Sky Test|sky_cubemap.scene|FALSE"
@@ -3339,6 +3340,8 @@ set_tests_properties(editor_no_focus launcher_no_focus editor_audio_play_no_focu
 set_tests_properties(player_no_focus PROPERTIES FIXTURES_REQUIRED game_switch_built TIMEOUT 90)
 
 include(cmake/zone_tests.cmake)
+# The Map tab and tile scene streaming (editor and player).
+include(cmake/map_tests.cmake)
 
 # samples/starter-mmo: the editor + services sample project.
 include(cmake/starter_mmo_tests.cmake)

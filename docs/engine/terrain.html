@@ -63,6 +63,40 @@ it streams out; the probes around it take it in from the next frame, so a tile h
 within 10 frames (<a href="sdfgi.html#terrain">tested</a>). There is nothing to bake, so maps of any size, and the world
 server's, get it. Lightmapped tiles keep their lightmaps (the <a href="lightmaps.html#shading">precedence</a>) but still bounce
 and block SDFGI's light.</p>
+<h2 id="tile-scenes">Tile scenes</h2>
+<p>A big zone does not have to be one scene: each 256 m tile can have its own scene file,
+<code>maps/&lt;folder&gt;/scenes/&lt;tx&gt;_&lt;tz&gt;.scene</code> (project-relative; the file exists exactly when the tile has one, no manifest
+lists them and <code>map.json</code> is unchanged). Its entities use <strong>world coordinates</strong>, like every scene (no per-tile
+offset). The zone's <strong>root scene</strong>, the one with the <code>Terrain</code> entity, stays the active scene; tile scenes are
+<a href="additive-scenes.html">additive scenes</a> beside it. The editor's <a href="../editor/map-builder.html">Map tab</a> opens,
+closes and creates them; the pure logic (paths, cell states, the streaming diff) is <code>engine/tile_scenes.h</code>. The world
+server never sees them.</p>
+<p><strong>Streaming</strong> (editor Play and <code>kast_player</code>, not edit mode): right after terrain streaming picks the tiles around the
+centre (the same centre, <code>Terrain.radius</code> and <code>tiles_around</code>), <code>LuaSystems::tick</code>, after the frame's
+<code>kast.loadScene</code> requests, makes the loaded tile scenes follow them through the same additive load and unload Lua uses (so
+the scene's systems init and shut down, physics, audio and the game GUI follow as described in
+<a href="additive-scenes.html#lua">Additive scenes</a>):</p>
+<ul>
+<li>every loaded tile scene (any map's) that is not one of the wanted tiles of the Terrain's map unloads, except the active
+  scene;</li>
+<li>the first wanted tile (in <code>tiles_around</code> order: by z, then x) whose scene file exists and is not loaded loads
+  additively, <strong>at most one a frame</strong>: a tile crossing with several scenes in range spreads them over the next frames
+  instead of hitching on one (the files are read on the main thread);</li>
+<li>a tile scene that is already loaded (open in the editor when Play started, or loaded by <code>kast.loadScene</code>) is not loaded
+  again;</li>
+<li>each load or unload publishes <code>map.tileScene.loaded</code> or <code>map.tileScene.unloaded</code> with <code>{map, tx, tz, path}</code>
+  (<a href="events.html#engine-events">Events</a>); streamed scenes are in <code>kast.loadedScenes()</code> by their project-relative
+  path;</li>
+<li>a missing or broken file logs one Console error (<code>Map: tile scene '...' did not load: ...</code>) and is skipped for the
+  rest of the session; streaming goes on with the others.</li>
+</ul>
+<p>Each map's <code>scenes/</code> folder is listed once per Play session (a tile scene saved during Play streams from the next
+one). Without a <code>Terrain</code> on a loaded map nothing streams. In the editor, Play starts from the open scenes, so a tile
+scene you had open unloads if it is out of range and others load; Stop restores the open set exactly
+(<a href="../editor/multi-scene.html">Multi-scene editing</a>).</p>
+<p><strong>Sample</strong>: <code>tests/project/scenes/tilegrid.scene</code> (a <code>Terrain</code> on map 7, radius 0) and
+<code>tests/project/maps/tilegrid</code> (3 x 3 tiles; scenes on 0_0, 1_0, 0_1 and 1_1, and an orphan on the undeclared 3_1);
+<code>scripts/map_stream.lua</code> moves the camera across tiles and logs the events.</p>
 <h2 id="objects">Zone objects</h2>
 <p>A map's tiles can hold placed objects: <code>maps/&lt;folder&gt;/objects/&lt;tx&gt;_&lt;tz&gt;.json</code> (the format, shared with the world
 server and the tools: <a href="../services/world/maps.html#objects">World Server, Maps, Objects</a>; authored in the

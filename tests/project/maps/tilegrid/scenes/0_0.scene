@@ -1,0 +1,24 @@
+{
+  "version": 5,
+  "entities": [
+    {
+      "id": 1,
+      "name": "Tower",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [128, 30, 140], "rotation": [0, 0, 0, 1], "scale": [4, 8, 4] },
+        "MeshRenderer": { "primitive": "cube", "material": "" }
+      }
+    },
+    {
+      "id": 2,
+      "name": "Flag",
+      "parent": 1,
+      "components": {
+        "Transform": { "position": [0, 0.7, 0], "rotation": [0, 0, 0, 1], "scale": [0.5, 0.3, 0.5] },
+        "MeshRenderer": { "primitive": "cube", "material": "" }
+      }
+    }
+  ],
+  "systems": []
+}

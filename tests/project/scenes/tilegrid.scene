@@ -1,0 +1,37 @@
+{
+  "version": 5,
+  "entities": [
+    {
+      "id": 1,
+      "name": "Sun",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [384, 80, 384], "rotation": [-0.115425, 0.799192, 0.16269, 0.567011], "scale": [1, 1, 1] },
+        "DirectionalLight": { "color": [1, 0.95, 0.9], "intensity": 1 }
+      }
+    },
+    {
+      "id": 2,
+      "name": "Terrain",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [0, 0, 0], "rotation": [0, 0, 0, 1], "scale": [1, 1, 1] },
+        "Terrain": { "map": 7, "radius": 0 }
+      }
+    },
+    {
+      "id": 3,
+      "name": "Main Camera",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [128, 90, 40], "rotation": [-0.258819, 0, 0, 0.965926], "scale": [1, 1, 1] },
+        "Camera": { "verticalFovDegrees": 60, "nearPlane": 0.1, "farPlane": 2000 }
+      }
+    }
+  ],
+  "systems": ["scripts/map_stream.lua"],
+  "lighting": { "ambientColor": [0.6, 0.7, 1], "ambientIntensity": 0.3 },
+  "editor": {
+    "camera": { "pivot": [384, 20, 384], "yaw": 0, "pitch": -55, "distance": 900 }
+  }
+}
