@@ -101,14 +101,24 @@ void ZoneRender::syncTiles(const zone::ZoneDoc& zone, std::array<float, 2> centr
 // or the manifest change (not mid-stroke), so the view shows it before it is saved.
 void ZoneRender::syncPreview(const zone::ZoneDoc& zone, kast::Renderer& renderer)
 {
+    const std::string material = zone::terrain_material_path(zone.folder);
+    if (!info_ || info_->material != material) { // first, so another material skips comparing every tile's heights
+        previewManifest_ = nullptr;
+        previewHeights_.clear();
+        if (std::exchange(previewSet_, false))
+            renderer.setPreview({}, {}, {}, {});
+        return;
+    }
+    // ponytail: compares the whole heights map (one entry per edited tile) a frame; a ZoneState edit counter if a
+    // big generated-material map shows it.
     if (zone.editing() || (zone.state.manifest == previewManifest_ && zone.state.heights == previewHeights_))
         return;
     previewManifest_ = zone.state.manifest;
     previewHeights_ = zone.state.heights;
     std::string err;
-    const std::string material = zone::terrain_material_path(zone.folder), texture = zone::terrain_texture_path(zone.folder);
+    const std::string texture = zone::terrain_texture_path(zone.folder);
     const auto gradient = zone::parse_gradient(zone.state.manifest, err);
-    if (!info_ || info_->material != material || !gradient) {
+    if (!gradient) {
         if (std::exchange(previewSet_, false))
             renderer.setPreview({}, {}, {}, {});
         return;

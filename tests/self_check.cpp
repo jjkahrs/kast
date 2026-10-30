@@ -5973,8 +5973,31 @@ void checkAssetRefs()
     kast::setAssetRefHooks({});
 }
 
+// FolderChanges: true the first time, then only after something under the folder (a subfolder too) changed.
+void checkFolderChanges()
+{
+    const std::filesystem::path root = projectTestDir("kast_folder_changes", "Changes");
+    std::filesystem::create_directories(root / "maps/a");
+    FolderChanges changes;
+    check(changes.changed(root), "FolderChanges: the first call for a folder is a change");
+    check(!changes.changed(root), "FolderChanges: nothing written, no change");
+    const auto settled = [&] { // the notification arrives a little after the write; one change may signal twice
+        bool seen = false;
+        for (int i = 0; i < 100 && !seen; ++i, std::this_thread::sleep_for(std::chrono::milliseconds(10)))
+            seen = changes.changed(root);
+        for (int i = 0; i < 20; ++i, std::this_thread::sleep_for(std::chrono::milliseconds(10)))
+            changes.changed(root);
+        return seen;
+    };
+    writeFile(root / "maps/a/0_0.r16", "x");
+    check(settled(), "FolderChanges: a new file in a subfolder is a change");
+    check(!changes.changed(root), "FolderChanges: quiet again after the change was seen");
+    check(changes.changed(root / "maps"), "FolderChanges: another folder starts over");
+}
+
 void checkAssets()
 {
+    checkFolderChanges();
     checkAssetScan();
     checkAssetNames();
     checkAssetPaths();

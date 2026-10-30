@@ -107,3 +107,58 @@ The 64 x 64 crash was the Map tab: one thumbnail texture per tile, 4096 of bgfx'
 1024 tiles get no thumbnails until phase 4 builds only visible cells'. The 32 x 32 black screenshots are gone. 64 x 64
 stays slower than 16 x 16 with the same 81 meshes: per-frame work over every tile (Map tab `declared_tiles`, Zone tab
 grid, preview checks) is phase 4 / 6.
+
+## After phase 6: other per-frame costs that grew with the map
+
+Same machine and settings, 2026-10-30, Release. Profiled (sampling the editor's main thread, RelWithDebInfo) 64 x 64 vs
+16 x 16 sculpting, both with 81 meshes. The 64 x 64 extra was:
+
+- the Assets tree rescan every 0.5 s (`Panels::refreshAssets`: a 64 x 64 map is 4096 heights files and 4096 `.meta`s,
+  ~6% of the frame time, a ~30 ms hitch twice a second): now only after a Windows change notification says something
+  under the project changed (`FolderChanges`, editor/assets.h);
+- the generated-terrain preview check comparing and copying the whole heights map every frame though the map doesn't
+  use that material (~3%): the material is checked first;
+- the Zone tab's spawn overlay copying every tile's spawns JSON every frame (~3%): read by reference.
+
+Editor sculpting, three passes (the machine was in its slow state: 8 x 8 at 84-91 FPS, vs 117 in the fastest
+baseline pass); median FPS average (range), lowest one-second window over the three passes:
+
+| Size | FPS average, median (range) | FPS lowest | Peak RAM | Peak GPU memory | Before, same session (8324a51) | Result |
+|------|-----------------------------|------------|----------|-----------------|--------------------------------|--------|
+| 8 x 8 | 85.3 (84.3-91.2) | 64.7 | 476 MB | 502 MB | 86.7 | meets 60 |
+| 16 x 16 | 71.1 (70.9-71.6) | 62.8 | 572 MB | 571 MB | 74.0 | meets 60 |
+| 32 x 32 | 70.8 (69.4-71.2) | 62.1 | 671 MB | 571 MB | 64.9 | meets 60 |
+| 64 x 64 | 67.9 (67.7-68.5) | 59.2 | 1,064 MB | 571 MB | 54.7 | meets 60 (average); one window at 59.2 |
+
+Interleaved A/B of the two builds (before, after, before, after, ...; 1200 frames each): 64 x 64 before 57.4 / 61.1 /
+58.6, after 68.2 / 67.3 / 66.4 FPS; 8 x 8 within noise (70.8-117 either build). 64 x 64 now runs within ~3 FPS of 16 x 16.
+
+Client, two passes (average / p99 / max ms):
+
+| Size | Editor Play | Play peak RAM | kast_player | Player peak RAM |
+|------|-------------|---------------|-------------|-----------------|
+| 8 x 8 | 0.65 / 0.88 / 51.9; 0.64 / 0.82 / 52.7 | 309 MB | 0.44 / 1.04 / 49.8; 0.45 / 1.10 / 51.3 | 176 MB |
+| 16 x 16 | 0.70 / 1.06 / 62.5; 0.69 / 0.81 / 64.6 | 332 MB | 0.50 / 1.18 / 63.7; 0.50 / 1.20 / 49.7 | 201 MB |
+| 32 x 32 | 0.68 / 0.80 / 65.6; 0.70 / 1.08 / 65.6 | 435 MB | 0.45 / 1.39 / 50.6; 0.46 / 1.44 / 50.2 | 300 MB |
+| 64 x 64 | 1.04 / 2.40 / 86.7; 1.05 / 1.96 / 108.9 | 826 MB | 0.90 / 1.36 / 88.0; 0.91 / 1.20 / 81.6 | 989 MB |
+
+Play now runs at 64 x 64 (the baseline crash was the Map tab's thumbnails, fixed in phases 3-4). Average and p99 meet
+16.7 ms at every size. The single-frame max (a row of tiles streaming in synchronously) is 50-66 ms up to 32 x 32 and
+82-109 ms at 64 x 64, where the average is also ~0.4 ms higher with the same p99: the streaming frames cost more on the
+64 x 64 map. Not diagnosed (the sampling profile shows no single size-dependent function; Play also spends ~15% in
+`zone::same`, the editor's unsaved-changes check comparing 4096 heights entries a frame, ~0.15 ms).
+
+World server: startup to `maps loaded` 0.15-0.30 s / 22 MB (8), 0.25 s / 53 MB (16), 0.58-0.62 s / 160 MB (32),
+1.97 s / 582 MB (64) (a first pass with a cold disk cache: 1.06 / 3.78 / 14.85 s for 16 / 32 / 64). Load test (no
+server change in this phase):
+
+| Size | Worst 10 s window tick p99 | Run tick p99 | Enter p50 / p99 | Corrections | load.sh |
+|------|----------------------------|--------------|-----------------|-------------|---------|
+| 0 (default maps) | 10.61 ms | 8.92 ms | 8 / 30 ms | 0 | PASS |
+| 8 x 8 | 15.67 ms | 13.08 ms | 8 / 44 ms | 112,738 | FAIL (corrections) |
+| 16 x 16 | 15.77 ms | 13.46 ms | 8 / 34 ms | 37,496 | FAIL (corrections) |
+| 32 x 32 | 15.06 ms | 13.06 ms | 8 / 45 ms | 33,386 | FAIL (corrections) |
+| 64 x 64 | 15.40 ms | 12.94 ms | 8 / 34 ms | 1,883 | FAIL (corrections) |
+
+Every size's tick p99 matches bench 8 x 8 (and the baseline); the bench maps' +4-6 ms over size 0 is terrain/navmesh/NPCs,
+not size.

@@ -1758,6 +1758,7 @@ int main(int argc, char** argv)
     if (options->simOnLog.empty())
         simStart = 0;
     float componentPollSeconds = 0.0f;
+    FolderChanges projectChanges; // the Assets tree is rescanned only after a file under the project changed
     std::string undoWindow; // the last focused window that isn't a menu or popup: picks the Edit menu's document
     ExternalEditor externalEditor(settingsFile);
     std::string preferencesDraft; // the Preferences modal's edit of the command
@@ -1888,7 +1889,8 @@ int main(int argc, char** argv)
             componentPollSeconds = 0.0f;
             refreshComponents(doc);
             refreshStateMachines(doc); // also during Play: only the editor's listing (Play reloads its own)
-            panels.refreshAssets(doc);
+            if (projectChanges.changed(doc.project ? doc.project->root : std::filesystem::path()))
+                panels.refreshAssets(doc);
             game.gui().reloadChanged(); // Play-mode GUI hot reload
             guiBuilder.poll();
             graphs.poll();

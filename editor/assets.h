@@ -36,6 +36,23 @@ std::filesystem::path fromUtf8(std::string_view text); // the inverse
 // metas, if given, gets the .meta files left out (from the listed folders only).
 std::vector<AssetEntry> scanAssets(const std::filesystem::path& root,
                                    std::vector<std::filesystem::directory_entry>* metas = nullptr);
+// Whether anything under a folder (subfolders too) was added, removed, renamed or written since the last call: a
+// Windows change notification, so a big project (a 64 x 64 map is 8k heights files and .metas) isn't rescanned while
+// nothing changes. True on the first call for a folder, and on every call if the folder can't be watched.
+class FolderChanges {
+public:
+    FolderChanges() = default;
+    FolderChanges(const FolderChanges&) = delete;
+    FolderChanges& operator=(const FolderChanges&) = delete;
+    ~FolderChanges() { close(); }
+    bool changed(const std::filesystem::path& folder);
+
+private:
+    void close();
+    std::filesystem::path folder_;
+    void* handle_ = nullptr; // the notification; null: not watching
+};
+
 // The entry with this project-relative path, or null.
 const AssetEntry* findAsset(const std::vector<AssetEntry>& entries, std::string_view path);
 
