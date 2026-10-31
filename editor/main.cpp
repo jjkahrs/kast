@@ -90,7 +90,7 @@ constexpr const char* kUsage =
     "[--gui-add Panel|Text|RichText|Button|Toggle|Slider|Dropdown|Spinbox|Progress|ListBox|VirtualList] [--gui-set-attr name=value] [--gui-set-prop name=value] [--gui-rich-wrap tag[=value],start,end] [--gui-undo N] [--gui-redo N] [--gui-save] [--gui-create-prefab folder|/] [--gui-place-prefab path]... [--gui-revert name|*] [--gui-apply name|*] [--gui-unpack] [--gui-delete] [--gui-move up|down] [--gui-reparent id|/] [--gui-click id] "
     "[--open-graph file.kshadergraph] [--graph-add type[,x,y]] [--graph-link N.pin,M.pin] [--graph-unlink N.pin] [--graph-select N[,M...]] "
     "[--graph-delete N[,M...]] [--graph-set N.setting=json] [--graph-comment title,x,y,w,h] [--graph-paste x,y] [--graph-undo N] [--graph-redo N] "
-    "[--graph-save] [--graph-add-menu N.pin|/] [--graph-preview sphere|cube|plane] [--graph-view-code] [--preview-model path] [--preview-clip name] [--preview-lod N] "
+    "[--graph-save] [--graph-add-menu N.pin|/] [--graph-preview sphere|cube|plane] [--graph-preview-collapse] [--graph-view-code] [--preview-model path] [--preview-clip name] [--preview-lod N] "
     "[--sim-mouse frame,none|left|right[+shift],dx,dy,wheel[,sx,sy[,hold]]] [--sim-key frame,[ctrl+]key]... [--sim-gamepad frame,frames,control=value[+...]]... [--sim-on-log text] [--settings-file settings.json] [--open-preferences] "
     "[--open-external path] [--drop-model path] [--create-prefab folder|/] [--drop-prefab path[,parentId]] [--drop-prefab-view path,u,v] "
     "[--set-field ID,Component.field,json] [--prefab-revert spec] [--prefab-apply spec] [--prefab-unpack ID] [--edit-prefab path] "
@@ -615,7 +615,7 @@ std::optional<Options> parseArgs(int argc, char** argv)
             }
             for (int n = 0; n < count; ++n)
                 options.graphSteps.emplace_back(arg, "");
-        } else if (arg == "--graph-save" || arg == "--graph-view-code") {
+        } else if (arg == "--graph-save" || arg == "--graph-view-code" || arg == "--graph-preview-collapse") {
             options.graphSteps.emplace_back(arg, "");
         } else if (arg == "--graph-preview" && hasValue) {
             options.graphSteps.emplace_back(arg, argv[++i]);
@@ -1037,7 +1037,6 @@ void buildDefaultLayout(ImGuiID dockspace)
     ImGui::DockBuilderDockWindow(GuiBuilder::kPreviewWindow, center);
     ImGui::DockBuilderDockWindow(ShaderGraphEditor::kCanvasWindow, center);
     ImGui::DockBuilderDockWindow(ShaderGraphEditor::kInspectorWindow, right);
-    ImGui::DockBuilderDockWindow(ShaderGraphEditor::kPreviewWindow, left);
     ImGui::DockBuilderDockWindow(ModelPreview::kWindow, center);
     ImGui::DockBuilderFinish(dockspace);
 }
@@ -1240,21 +1239,18 @@ void drawGuiBuilder(GuiBuilder& builder)
 }
 
 // The Shader Graph panels, docked beside their scene counterparts in layouts saved before they existed: Shader Graph by
-// Scene, Graph Inspector by Inspector, Shader Preview by Hierarchy. time: the preview's TIME.
+// Scene, Graph Inspector by Inspector. time: the canvas' preview inset's TIME.
 void drawShaderGraph(ShaderGraphEditor& graphs, float time)
 {
     for (const auto& [existing, window] : {std::pair{"Scene", ShaderGraphEditor::kCanvasWindow},
-                                           std::pair{"Inspector", ShaderGraphEditor::kInspectorWindow},
-                                           std::pair{"Hierarchy", ShaderGraphEditor::kPreviewWindow}}) {
+                                           std::pair{"Inspector", ShaderGraphEditor::kInspectorWindow}}) {
         if (const ImGuiWindowSettings* settings = ImGui::FindWindowSettingsByID(ImHashStr(existing));
             settings && !ImGui::FindWindowSettingsByID(ImHashStr(window)))
             ImGui::SetNextWindowDockID(settings->DockId, ImGuiCond_FirstUseEver);
         if (window == ShaderGraphEditor::kCanvasWindow)
-            graphs.drawCanvas();
-        else if (window == ShaderGraphEditor::kInspectorWindow)
-            graphs.drawInspector();
+            graphs.drawCanvas(time);
         else
-            graphs.drawPreview(time);
+            graphs.drawInspector();
     }
     graphs.drawModals();
 }
@@ -1375,6 +1371,9 @@ bool runGraphStep(ShaderGraphEditor& graphs, const std::filesystem::path& projec
         ok = graphs.save();
     } else if (flag == "--graph-view-code") {
         graphs.showGeneratedCode();
+        ok = true;
+    } else if (flag == "--graph-preview-collapse") {
+        graphs.collapsePreview();
         ok = true;
     } else if (flag == "--graph-preview") {
         error = "expected sphere, cube or plane";
@@ -1934,8 +1933,8 @@ int main(int argc, char** argv)
             if (!kast::guiConfigFromJson(json, gui, error) || !setGuiConfig(*doc.project, gui, error))
                 kast::log::error(std::format("--gui-settings-set: {}", error));
         }
-        // With --open-graph: after the graph panels took the focus (Shader Preview, Graph Inspector, canvas).
-        if (!options->focusPanel.empty() && frames.frame() == kAddComponentPopupFrame + (options->openGraph.empty() ? 0 : 3)) {
+        // With --open-graph: after the graph panels took the focus (Graph Inspector, canvas).
+        if (!options->focusPanel.empty() && frames.frame() == kAddComponentPopupFrame + (options->openGraph.empty() ? 0 : 2)) {
             // Applied when that window is submitted below. Builder panels go by their "###" id.
             const std::string id = "###" + options->focusPanel;
             ImGui::SetWindowFocus(ImGui::FindWindowByName(id.c_str()) ? id.c_str() : options->focusPanel.c_str());
