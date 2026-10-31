@@ -455,7 +455,7 @@ add_test(NAME editor_zone_tab_old_layout
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/zone_tab_old_layout.png"
           "-DEXTRA_ARGS=--scene ${CMAKE_CURRENT_SOURCE_DIR}/samples/starter-mmo/scenes/meadow.scene --zone-section Map,Problems --size 1600x1000"
           -DFOCUS_PANEL=Zone "-DLAYOUT_FROM=${CMAKE_CURRENT_SOURCE_DIR}/tests/layouts/pre_zone.ini"
-          "-DLAYOUT_SAME_DOCK=Entities;Zone;Systems" "-DFORBID_OUTPUT=\\[error\\]"
+          "-DLAYOUT_SAME_DOCK=Entities;Zone;Systems" -DLAYOUT_FIRST_TAB=Entities "-DFORBID_OUTPUT=\\[error\\]"
           -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
 # The Entities tab was named Hierarchy: a layout saved since keeps Entities where it was saved (beside Inspector here),
 # not moved to the old Hierarchy's dock (pre_zone.ini and pre_map.ini above show the move for layouts without it).

@@ -17,7 +17,7 @@ add_test(NAME editor_map_tab
 add_test(NAME editor_map_tab_old_layout
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/map_tab_old_layout.png"
           "-DEXTRA_ARGS=--scene ${KAST_TILEGRID} --size 1600x1000" -DFOCUS_PANEL=Map
-          "-DLAYOUT_FROM=${CMAKE_CURRENT_SOURCE_DIR}/tests/layouts/pre_map.ini" "-DLAYOUT_SAME_DOCK=Entities;Zone;Map"
+          "-DLAYOUT_FROM=${CMAKE_CURRENT_SOURCE_DIR}/tests/layouts/pre_map.ini" "-DLAYOUT_SAME_DOCK=Entities;Zone;Map" -DLAYOUT_FIRST_TAB=Entities
           "-DFORBID_OUTPUT=\\[error\\]" -P "${map_smoke}")
 add_test(NAME editor_map_tab_pre_zone_layout
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/map_tab_pre_zone_layout.png"
