@@ -42,8 +42,8 @@ bool acceptModelDrop(std::string& path);
 bool acceptPrefabDrop(std::string& path);
 // The same for a .guiprefab.
 bool acceptGuiPrefabDrop(std::string& path);
-// A small cube (top face and two sides) at x in a row from y, height tall: marks prefab instance roots in the Hierarchy
-// and GUI Hierarchy. Accent colored, black on a selected (accent-filled) row.
+// A small cube (top face and two sides) at x in a row from y, height tall: marks prefab instance roots in the Entities
+// panel and GUI Hierarchy. Accent colored, black on a selected (accent-filled) row.
 void drawPrefabIcon(float x, float y, float height, bool selected);
 // The #ffcc00 bar at the window's left edge beside an overridden prefab value, from y top to bottom (screen).
 void markOverride(float top, float bottom);

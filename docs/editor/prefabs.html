@@ -22,9 +22,9 @@ prefabs</a> and <a href="../engine/game-gui.html#prefabs">Game GUI: GUI prefabs<
 
 <h2 id="create">Creating a prefab</h2>
 <ul>
-<li>Drag an entity from the Hierarchy onto the Assets panel's background (the project root) or onto a folder:
+<li>Drag an entity from the Entities panel onto the Assets panel's background (the project root) or onto a folder:
   <code>&lt;entity name&gt;.prefab</code> is written there (<code>Orc_2.prefab</code>, ... if the name is taken).</li>
-<li>Or right-click it in the Hierarchy &gt; <strong>Create Prefab</strong>: the same, in the Assets panel's current folder (the selected
+<li>Or right-click it in the Entities panel &gt; <strong>Create Prefab</strong>: the same, in the Assets panel's current folder (the selected
   folder, else the selected file's folder, else the root).</li>
 <li>The entity becomes an instance of the new prefab. Its subtree may hold other prefab instances: they are nested in the
   new prefab and stay linked. An entity that is already part of an instance can't become a new prefab (unpack it first),
@@ -33,13 +33,13 @@ prefabs</a> and <a href="../engine/game-gui.html#prefabs">Game GUI: GUI prefabs<
 
 <h2 id="instantiate">Placing instances</h2>
 <ul>
-<li>Drag a <code>.prefab</code> from Assets onto the Hierarchy: on its empty space it becomes a root, on an entity a child of it.</li>
+<li>Drag a <code>.prefab</code> from Assets onto the Entities panel: on its empty space it becomes a root, on an entity a child of it.</li>
 <li>Drag it onto the Scene view: a root instance where the cursor ray first hits a mesh or model, else where the ray
   crosses the y = 0 plane, else 10 m in front of the camera.</li>
 <li>The new instance is selected; it starts at the prefab root's transform (the Scene view drop moves it).</li>
 <li>From Lua: <a href="../engine/lua-systems.html#instantiate"><code>kast.instantiate(path, parent?, position?)</code></a>, in editor Play and in built games.</li>
 </ul>
-<p>In the Hierarchy an instance root has a small cube icon after its name. Ctrl+D duplicates an instance as another
+<p>In the Entities panel an instance root has a small cube icon after its name. Ctrl+D duplicates an instance as another
 linked instance; a duplicated prefab child becomes an added child. Prefab children can't be dragged to another parent:
 unpack the instance first.</p>
 
@@ -83,8 +83,8 @@ saving or dropping something that would, is refused with an error saying which i
 
 <h2 id="edit-mode">Prefab edit mode</h2>
 <ul>
-<li>Double-click a <code>.prefab</code> in Assets. The Hierarchy, Inspector and Scene view then show only the prefab, under the
-  breadcrumb <code>&lt;scene name&gt; &gt; Crate.prefab</code> at the top of the Hierarchy, with a <strong>Back</strong> button. The window title
+<li>Double-click a <code>.prefab</code> in Assets. The Entities panel, Inspector and Scene view then show only the prefab, under the
+  breadcrumb <code>&lt;scene name&gt; &gt; Crate.prefab</code> at the top of the Entities panel, with a <strong>Back</strong> button. The window title
   shows the prefab.</li>
 <li>Edit it like a scene. Play is disabled. File &gt; Save (Ctrl+S) writes the <code>.prefab</code> (Save As saves to the same file).</li>
 <li><strong>Back</strong>, opening another prefab, or opening / creating a scene, building or quitting with unsaved prefab changes
@@ -102,7 +102,7 @@ saving or dropping something that would, is refused with an error saying which i
 
 <h2 id="missing">Missing prefabs</h2>
 <p>A scene (or prefab) whose instance names a prefab that doesn't load (deleted, moved outside the editor, broken JSON, a
-cycle) still loads. The instance becomes a placeholder entity named after the prefab file, drawn red in the Hierarchy
+cycle) still loads. The instance becomes a placeholder entity named after the prefab file, drawn red in the Entities panel
 (its tooltip and the Inspector card name the path), and the Console has a warning naming the entity and the path.
 Saving keeps the reference and all its overrides unchanged, so once the prefab is back the instance is too.</p>
 

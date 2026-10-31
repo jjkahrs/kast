@@ -1,5 +1,5 @@
 # Additive scenes (docs/engine/additive-scenes.html, docs/editor/multi-scene.html): several open scenes in the editor
-# (Hierarchy headers, active scene, Remove Scene's prompt, the open set reopening after a restart) and Lua's additive
+# (Entities headers, active scene, Remove Scene's prompt, the open set reopening after a restart) and Lua's additive
 # loads in the built player. tests/project/additive_a.scene and additive_b.scene both use entity id 1, with different
 # skies and gravity. Included from CMakeLists.txt.
 set(KAST_ADDITIVE_A "${KAST_TEST_PROJECT}/additive_a.scene")
@@ -32,7 +32,7 @@ set_tests_properties(editor_additive_active_a PROPERTIES FIXTURES_SETUP additive
 set_tests_properties(editor_additive_active_b PROPERTIES FIXTURES_SETUP additive_active_b_shot)
 set_tests_properties(editor_additive_active_differs PROPERTIES FIXTURES_REQUIRED "additive_active_a_shot;additive_active_b_shot")
 # A scene header's context menu (Set Active Scene, Save Scene, Remove Scene, New Scene, Open Scene Additive..., Create),
-# a's cube moved into b (the Hierarchy drop), and Remove Scene on b with unsaved changes asking first.
+# a's cube moved into b (the Entities panel drop), and Remove Scene on b with unsaved changes asking first.
 add_test(NAME editor_additive_scene_menu
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/additive_scene_menu.png"
           "-DEXTRA_ARGS=${KAST_ADDITIVE_ARGS} --scene-menu 1" "-DFORBID_OUTPUT=\\[error\\]"

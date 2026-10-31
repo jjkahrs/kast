@@ -17,9 +17,9 @@ Play: the editor side of <a href="../engine/additive-scenes.html">additive scene
 sky, lighting, post-processing and physics settings are the ones in effect (and edited in Window &gt; Lighting, Post
 Processing and Physics and the Systems panel), new objects go into it, and the window title names it.</p>
 
-<h2 id="hierarchy">The Hierarchy</h2>
+<h2 id="hierarchy">The Entities panel</h2>
 <ul>
-<li>With one scene open the Hierarchy is the plain entity tree. With more, each open scene is a collapsible header
+<li>With one scene open the Entities panel is the plain entity tree. With more, each open scene is a collapsible header
   with its entities under it: the scene's name, <code>*</code> while it has unsaved
   changes, and <code>(Active)</code> on the active one, whose header is drawn in the highlight color (#ffcc00) instead of the
   header color (#ffaa00). Hovering a header shows its file.</li>
@@ -36,7 +36,7 @@ Processing and Physics and the Systems panel), new objects go into it, and the w
   <li><strong>Open Scene Additive...</strong> and <strong>Create</strong> (an object as a root of that scene).</li>
   </ul></li>
 <li>Right-clicking the empty space below the scenes creates objects in the active scene. In prefab edit mode the
-  Hierarchy shows just the prefab, as before.</li>
+  Entities panel shows just the prefab, as before.</li>
 </ul>
 
 <h2 id="file-menu">File menu and saving</h2>
@@ -62,7 +62,7 @@ so each scene's <code>*</code> follows its own save point: undoing an edit of sc
 <li>Play runs every open scene: their systems (each script once), entities and physics together, with the active scene's
   settings.</li>
 <li>While playing, Lua can load and unload scenes (<code>kast.loadScene(path, {additive = true})</code>, <code>kast.unloadScene</code>) and
-  change the active one; the Hierarchy shows the scenes as they are, and the title names the running active scene when
+  change the active one; the Entities panel shows the scenes as they are, and the title names the running active scene when
   it isn't the edited one.</li>
 <li>Stop restores the open set exactly as it was: the scenes (also ones Lua unloaded or added), the active scene, their
   unsaved-changes markers and the selection.</li>
@@ -81,7 +81,7 @@ skipped with a warning in the Console. Opening a scene by <code>--scene</code> o
 <h2 id="command-line">Command line</h2>
 <p>For tests and screenshots (<a href="command-line.html">Command line</a>): <code>--open-additive file</code> (repeatable) opens scenes
 additively after <code>--scene</code>; <code>--active-scene N</code> makes open scene N (0 = the first) active; <code>--move-to-scene ID,N</code> moves
-entity ID (its in-memory id: file id plus the scene's slot times 4294967296) into open scene N as a Hierarchy drop
+entity ID (its in-memory id: file id plus the scene's slot times 4294967296) into open scene N as an Entities drop
 does; <code>--scene-menu N</code> opens scene header N's menu and <code>--remove-scene N</code> its Remove Scene.</p>
 </main>
 </div>

@@ -84,10 +84,10 @@ animation clips through an <code>Animator</code>. The editor imports each model 
   paused. The Animator Inspector has a <strong>Clip</strong> dropdown (the model's clips) and a <strong>Preview</strong> row: Play / Pause and a
   time scrub (dragging pauses). The preview never saves and never marks the scene dirty; Play mode starts every
   <code>playOnStart</code> clip from 0.</li>
-<li><strong>Editor</strong>: drag a model from the Assets panel onto the Scene view (an entity at the origin) or the Hierarchy (at the
+<li><strong>Editor</strong>: drag a model from the Assets panel onto the Scene view (an entity at the origin) or the Entities panel (at the
   root, or onto an entity for a child): the entity is named after the file and gets a <code>ModelRenderer</code>, plus an
   <code>Animator</code> if the model has clips, playing <code>Idle</code> if there is one, else <code>Idle_A</code>, else the first clip whose name
-  contains "idle" (any case), else the first clip. <strong>GameObject &gt; Model</strong> (and the Hierarchy's right-click menu) adds an
+  contains "idle" (any case), else the first clip. <strong>GameObject &gt; Model</strong> (and the Entities panel's right-click menu) adds an
   empty <code>ModelRenderer</code>. Its Inspector has a <strong>Model</strong> combo (the project's model files) and a <code>.mat</code> combo per
   material slot, named as in the file, with <strong>None (embedded)</strong>. Scene view picking and focus use the model's bind-pose
   bounds. Renaming or moving a model, a <code>.mat</code> or a folder holding them in Assets rewrites the open scene's

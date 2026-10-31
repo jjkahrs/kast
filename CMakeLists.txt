@@ -394,12 +394,12 @@ add_test(NAME game_f3_twice
           "-DEXPECT_OUTPUT=Stats overlay shown.*Stats overlay hidden" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
 add_test(NAME game_f3_unfocused
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/game_f3_unfocused.png"
-          "-DEXTRA_ARGS=--scene ${KAST_TEST_SCENES}/basic.scene --play --sim-key 30,F3" -DFOCUS_PANEL=Hierarchy
+          "-DEXTRA_ARGS=--scene ${KAST_TEST_SCENES}/basic.scene --play --sim-key 30,F3" -DFOCUS_PANEL=Entities
           "-DFORBID_OUTPUT=Stats overlay" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
 # Gamepad in Play (docs/engine/lua-systems.html#gamepad): tests/scenes/gamepad.scene's script runs the Player cube on
 # project.kast's "move" / "turn" axes and orbits the camera on "lookX", logging both on its frame 100. A --sim-gamepad
 # virtual pad (left stick forward, right stick right for 50 frames) moves the cube and turns the camera; with no pad
-# nothing moves; with the Hierarchy focused (the Game view without input) the pad is connected but drives nothing.
+# nothing moves; with the Entities panel focused (the Game view without input) the pad is connected but drives nothing.
 set(KAST_GAMEPAD_ARGS "--scene ${KAST_TEST_SCENES}/gamepad.scene --play --fixed-dt 0.0333 --no-audio-device")
 add_test(NAME gamepad_play_before
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/gamepad_before.png"
@@ -419,7 +419,7 @@ set_tests_properties(gamepad_play_after PROPERTIES FIXTURES_SETUP gamepad_after_
 set_tests_properties(gamepad_play_differs PROPERTIES FIXTURES_REQUIRED "gamepad_before_shot;gamepad_after_shot")
 add_test(NAME gamepad_play_unfocused
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/gamepad_unfocused.png"
-          "-DEXTRA_ARGS=${KAST_GAMEPAD_ARGS} --sim-gamepad 30,50,lefty=-1+rightx=1" -DFRAMES=140 -DFOCUS_PANEL=Hierarchy
+          "-DEXTRA_ARGS=${KAST_GAMEPAD_ARGS} --sim-gamepad 30,50,lefty=-1+rightx=1" -DFRAMES=140 -DFOCUS_PANEL=Entities
           "-DEXPECT_OUTPUT=gamepad test: pad connected, position x=0\\.00 z=0\\.00, camera yaw=0\\.00"
           "-DFORBID_OUTPUT=\\[error\\]|Lua error" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
 add_test(NAME game_no_camera
@@ -444,18 +444,26 @@ add_test(NAME editor_zone_missing_map
           "-DEXTRA_ARGS=--scene ${KAST_TEST_SCENES}/missing_map.scene"
           "-DEXPECT_OUTPUT=Zone: the Terrain map did not load: no map with id 999" -DEXPECT_COUNT=1 -DFOCUS_PANEL=Zone
           -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
-# The Zone tab (docs/editor/zone-builder.html) is a tab beside Hierarchy in the default layout and in a layout saved
+# The Zone tab (docs/editor/zone-builder.html) is a tab beside Entities in the default layout and in a layout saved
 # before it existed (tests/layouts/pre_zone.ini); --zone-section expands its Map and Problems sections.
 add_test(NAME editor_zone_tab
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/zone_tab.png"
           "-DEXTRA_ARGS=--scene ${CMAKE_CURRENT_SOURCE_DIR}/samples/starter-mmo/scenes/meadow.scene --zone-section Map,Problems --size 1600x1000"
-          -DFOCUS_PANEL=Zone "-DLAYOUT_SAME_DOCK=Hierarchy;Zone" "-DEXPECT_OUTPUT=Zone: loaded maps/meadow \\(map 10\\)"
+          -DFOCUS_PANEL=Zone "-DLAYOUT_SAME_DOCK=Entities;Zone" "-DEXPECT_OUTPUT=Zone: loaded maps/meadow \\(map 10\\)"
           "-DFORBID_OUTPUT=\\[error\\]" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
 add_test(NAME editor_zone_tab_old_layout
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/zone_tab_old_layout.png"
           "-DEXTRA_ARGS=--scene ${CMAKE_CURRENT_SOURCE_DIR}/samples/starter-mmo/scenes/meadow.scene --zone-section Map,Problems --size 1600x1000"
           -DFOCUS_PANEL=Zone "-DLAYOUT_FROM=${CMAKE_CURRENT_SOURCE_DIR}/tests/layouts/pre_zone.ini"
-          "-DLAYOUT_SAME_DOCK=Hierarchy;Zone;Systems" "-DFORBID_OUTPUT=\\[error\\]"
+          "-DLAYOUT_SAME_DOCK=Entities;Zone;Systems" "-DFORBID_OUTPUT=\\[error\\]"
+          -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+# The Entities tab was named Hierarchy: a layout saved since keeps Entities where it was saved (beside Inspector here),
+# not moved to the old Hierarchy's dock (pre_zone.ini and pre_map.ini above show the move for layouts without it).
+add_test(NAME editor_entities_saved_layout
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/entities_saved_layout.png"
+          "-DEXTRA_ARGS=--scene ${KAST_TEST_SCENES}/basic.scene --size 1600x1000" -DFOCUS_PANEL=Entities
+          "-DLAYOUT_FROM=${CMAKE_CURRENT_SOURCE_DIR}/tests/layouts/entities_in_inspector_dock.ini"
+          "-DLAYOUT_SAME_DOCK=Entities;Inspector" "-DFORBID_OUTPUT=\\[error\\]"
           -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
 # No project: the tab says one is required (tests/scenes has a project.kast, so a copy of basic.scene outside it).
 file(COPY_FILE "${KAST_TEST_SCENES}/basic.scene" "${CMAKE_CURRENT_BINARY_DIR}/no_project_basic.scene")

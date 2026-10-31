@@ -181,7 +181,7 @@ struct Options {
     int undo = 0, redo = 0; // --scene-undo N / --scene-redo N: scene Undo N times, then Redo N times, after the startup edits
     // Additive scenes (docs/editor/multi-scene.html), after --scene / --project: --open-additive opens each scene as
     // File > Open Scene Additive does; --active-scene N makes open scene N (0 = the first) active; --move-to-scene
-    // ID,N moves entity ID (its in-memory id) into open scene N as the Hierarchy drop does, before --scene-undo;
+    // ID,N moves entity ID (its in-memory id) into open scene N as the Entities drop does, before --scene-undo;
     // --scene-menu N opens scene header N's context menu and --remove-scene N its Remove Scene (with the
     // unsaved-changes prompt) at the --file-save frame.
     std::vector<std::string> openAdditive;
@@ -1014,6 +1014,15 @@ std::optional<Options> parseArgs(int argc, char** argv)
     return options;
 }
 
+// The Entities tab's saved settings; in a layout saved before it was renamed from Hierarchy (its settings are not saved
+// until the next .ini write), Hierarchy's.
+const ImGuiWindowSettings* entitiesSettings()
+{
+    if (const ImGuiWindowSettings* entities = ImGui::FindWindowSettingsByID(ImHashStr("Entities")))
+        return entities;
+    return ImGui::FindWindowSettingsByID(ImHashStr("Hierarchy"));
+}
+
 void buildDefaultLayout(ImGuiID dockspace)
 {
     ImGui::DockBuilderAddNode(dockspace, ImGuiDockNodeFlags_DockSpace);
@@ -1023,7 +1032,7 @@ void buildDefaultLayout(ImGuiID dockspace)
     const ImGuiID right = ImGui::DockBuilderSplitNode(center, ImGuiDir_Right, 0.25f, nullptr, &center);
     const ImGuiID bottom = ImGui::DockBuilderSplitNode(center, ImGuiDir_Down, 0.3f, nullptr, &center);
     ImGuiID leftBottom = ImGui::DockBuilderSplitNode(left, ImGuiDir_Down, 0.35f, nullptr, &left);
-    ImGui::DockBuilderDockWindow("Hierarchy", left);
+    ImGui::DockBuilderDockWindow("Entities", left);
     ImGui::DockBuilderDockWindow(ZonePanel::kWindow, left);
     ImGui::DockBuilderDockWindow(MapPanel::kWindow, left);
     const ImGuiID leftLowest = ImGui::DockBuilderSplitNode(leftBottom, ImGuiDir_Down, 0.5f, nullptr, &leftBottom);
@@ -1432,7 +1441,7 @@ std::optional<PrefabOp> parsePrefabOp(std::string_view spec, bool apply)
     return op;
 }
 
-// One --create-prefab ... --prefab-back step, as the Hierarchy, Scene view, Inspector and Assets panel would do it.
+// One --create-prefab ... --prefab-back step, as the Entities panel, Scene view, Inspector and Assets panel would do it.
 // False (logged) if it fails.
 bool runPrefabStep(Document& doc, const std::string& flag, const std::string& value)
 {
@@ -2116,22 +2125,26 @@ int main(int argc, char** argv)
         }
         // Before the views render: a graph edit handed to the library shows in this frame's Scene and Game.
         graphs.update(doc.project ? doc.project->root : std::filesystem::path());
+        // Layouts saved before the Hierarchy tab was renamed Entities: dock it where Hierarchy was.
+        if (const ImGuiWindowSettings* hierarchy = ImGui::FindWindowSettingsByID(ImHashStr("Hierarchy"));
+            hierarchy && !ImGui::FindWindowSettingsByID(ImHashStr("Entities")))
+            ImGui::SetNextWindowDockID(hierarchy->DockId, ImGuiCond_FirstUseEver);
         panels.drawHierarchy(doc, files);
         // Before the views render: Inspector edits (a material saved to disk) show in this frame's Scene and Game.
         panels.drawInspector(doc);
         zonePanel.guardMapChange(doc, zone); // an Inspector edit of Terrain.map waits for the unsaved-zone prompt
         zone.update(doc);
-        // Layouts saved before the Zone tab existed: dock it as a tab beside Hierarchy.
-        if (const ImGuiWindowSettings* hierarchy = ImGui::FindWindowSettingsByID(ImHashStr("Hierarchy"));
-            hierarchy && !ImGui::FindWindowSettingsByID(ImHashStr(ZonePanel::kWindow)))
-            ImGui::SetNextWindowDockID(hierarchy->DockId, ImGuiCond_FirstUseEver);
+        // Layouts saved before the Zone tab existed: dock it as a tab beside Entities.
+        if (const ImGuiWindowSettings* entities = entitiesSettings();
+            entities && !ImGui::FindWindowSettingsByID(ImHashStr(ZonePanel::kWindow)))
+            ImGui::SetNextWindowDockID(entities->DockId, ImGuiCond_FirstUseEver);
         if (options->sculptLoop && showZone() && zone.zone())
             zone_cli::sculptLoop(*zone.zone(), frames.frame());
         zonePanel.draw(doc, zone); // before the zone is synced: its edits show this frame
-        // Layouts saved before the Map tab existed: dock it as a tab beside Hierarchy.
-        if (const ImGuiWindowSettings* hierarchy = ImGui::FindWindowSettingsByID(ImHashStr("Hierarchy"));
-            hierarchy && !ImGui::FindWindowSettingsByID(ImHashStr(MapPanel::kWindow)))
-            ImGui::SetNextWindowDockID(hierarchy->DockId, ImGuiCond_FirstUseEver);
+        // Layouts saved before the Map tab existed: dock it as a tab beside Entities.
+        if (const ImGuiWindowSettings* entities = entitiesSettings();
+            entities && !ImGui::FindWindowSettingsByID(ImHashStr(MapPanel::kWindow)))
+            ImGui::SetNextWindowDockID(entities->DockId, ImGuiCond_FirstUseEver);
         mapPanel.draw(doc, zone, files);
         zoneRender.sync(showZone() ? zone.zone() : nullptr, {doc.camera.pivot.x, doc.camera.pivot.z},
                         doc.project ? doc.project->root : std::filesystem::path(), viewport.renderer());
@@ -2145,10 +2158,10 @@ int main(int argc, char** argv)
         if (const ImGuiWindowSettings* scene = ImGui::FindWindowSettingsByID(ImHashStr("Scene")))
             ImGui::SetNextWindowDockID(scene->DockId, ImGuiCond_FirstUseEver);
         game.draw(doc, viewport.drewGui());
-        // Layouts saved before the Systems panel existed: dock it as a tab beside Hierarchy.
-        if (const ImGuiWindowSettings* hierarchy = ImGui::FindWindowSettingsByID(ImHashStr("Hierarchy"));
-            hierarchy && !ImGui::FindWindowSettingsByID(ImHashStr("Systems")))
-            ImGui::SetNextWindowDockID(hierarchy->DockId, ImGuiCond_FirstUseEver);
+        // Layouts saved before the Systems panel existed: dock it as a tab beside Entities.
+        if (const ImGuiWindowSettings* entities = entitiesSettings();
+            entities && !ImGui::FindWindowSettingsByID(ImHashStr("Systems")))
+            ImGui::SetNextWindowDockID(entities->DockId, ImGuiCond_FirstUseEver);
         panels.drawSystems(doc);
         // Layouts saved before the Components panel existed: dock it as a tab beside Systems.
         if (const ImGuiWindowSettings* systems = ImGui::FindWindowSettingsByID(ImHashStr("Systems"));

@@ -306,7 +306,7 @@ foreach(shot "on|" "off|--no-scene-world-ui" "field|--set-field 6,WorldUI.offset
 endforeach()
 # Probes: Plate 700,270 and Sign 1040,262 (their clear color or the ground without them); Sign raised 1040,210; Sign
 # dragged 1150,262; Sign's outline 900,305; Plate's anchor cross below it 649,290 and its outline 700,222 and 520,250
-# (over the panel); the Hierarchy's Crate row 200,120 (the
+# (over the panel); the Entities panel's Crate row 200,120 (the
 # accent when selected).
 set(world_ui_scene_plate 0.43781,0.30056)
 set(world_ui_scene_sign 0.65031,0.29167)

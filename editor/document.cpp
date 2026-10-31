@@ -460,7 +460,7 @@ void startPlay(Document& doc)
     }
     if (doc.play == PlayState::Stopped) {
         endSceneGesture(doc); // a gesture still open is an edit-mode step
-        doc.scene.activeScene().path = doc.path; // the Hierarchy and kast.loadedScenes read every scene's from the Scene
+        doc.scene.activeScene().path = doc.path; // the Entities panel and kast.loadedScenes read every scene's from the Scene
         doc.playSnapshot = kast::scenesToJson(doc.scene);
         doc.playSnapshotDirty = doc.dirty;
         doc.playSnapshotSaves = doc.sceneSaves;
