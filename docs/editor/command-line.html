@@ -237,7 +237,7 @@ volume of the scene is voxelized into <code>&lt;scene-name&gt;_voxelgi/&lt;entit
 </tr>
 <tr>
 <td><code>--gui-add Panel\|Text\|RichText\|Button\|Toggle\|Slider\|Dropdown\|Spinbox\|Progress\|ListBox\|VirtualList</code></td>
-<td>With <code>--open-gui</code>: add that element as the GUI Hierarchy's <strong>+</strong> buttons do (into the selected Panel, else <code>&lt;body&gt;</code>), after 17 frames. A kind's label also works (<code>"List Box"</code>).</td>
+<td>With <code>--open-gui</code>: add that element as the GUI Hierarchy's <strong>Add</strong> menu does (into the selected Panel, else <code>&lt;body&gt;</code>), after 17 frames. A kind's label also works (<code>"List Box"</code>).</td>
 </tr>
 <tr>
 <td><code>--gui-set-prop &lt;name&gt;=&lt;value&gt;</code></td>
@@ -281,6 +281,10 @@ Text.</td>
 <tr>
 <td><code>--gui-delete</code>, <code>--gui-move up|down</code>, <code>--gui-reparent &lt;id&gt;|/</code></td>
 <td>With <code>--open-gui</code>: delete, move or reparent (onto the element with that id; <code>/</code> = <code>&lt;body&gt;</code>) the selection as the GUI Hierarchy does, after 17 frames. Inside a prefab instance they are refused with a warning (<code>GUI Hierarchy: the edit refused: ...</code>), as <code>--gui-add</code> into one is.</td>
+</tr>
+<tr>
+<td><code>--gui-hierarchy-collapse</code></td>
+<td>With <code>--open-gui</code>: start the GUI Preview's GUI Hierarchy inset collapsed to its header strip (for screenshots and probes of the preview under it).</td>
 </tr>
 <tr>
 <td><code>--drop-model &lt;path&gt;</code></td>
@@ -450,11 +454,11 @@ unsaved-changes prompt if that scene has unsaved changes), for screenshots.</td>
 </tr>
 <tr>
 <td><code>--sim-mouse &lt;frame,button,dx,dy,wheel[,sx,sy[,hold]]&gt;</code></td>
-<td>With <code>--play</code> (without it: the Scene view's image instead, e.g. for <code>--zone-tool</code>, or the Shader Graph canvas that covers it with <code>--open-graph</code>): on frame <code>frame</code>, move the mouse to the center of the Game panel's image (or <code>sx, sy</code> pixels from it), press <code>button</code> (<code>left</code>, <code>right</code> or <code>none</code>) and turn the wheel by <code>wheel</code> notches; the next frame move it by <code>dx, dy</code> pixels (with <code>none</code>: a hover there, held until the run ends), then keep the button down there for <code>hold</code> frames (default 1) and release it (a game GUI sees a drag and drop; the Shader Graph canvas needs a hold of a few frames to accept a link). Each run logs <code>--sim-mouse: press at X,Y</code> in window points. <code>left+shift</code> / <code>right+shift</code> also hold Shift from the press until after the release. Synthetic SDL events, so <code>kast.input</code> and the game GUIs get them as from a real mouse while the Game panel is focused. <code>kast.input.setCursorLocked</code> is not applied to the window in such a run, so the real cursor is never grabbed. Example: <code>--sim-mouse 600,left,240,-40,0</code>.</td>
+<td>With <code>--play</code> (without it: the Scene view's image instead, e.g. for <code>--zone-tool</code>, or the Shader Graph canvas or GUI Preview that covers it with <code>--open-graph</code> / <code>--open-gui</code>): on frame <code>frame</code>, move the mouse to the center of the Game panel's image (or <code>sx, sy</code> pixels from it), press <code>button</code> (<code>left</code>, <code>right</code> or <code>none</code>) and turn the wheel by <code>wheel</code> notches; the next frame move it by <code>dx, dy</code> pixels (with <code>none</code>: a hover there, held until the run ends), then keep the button down there for <code>hold</code> frames (default 1) and release it (a game GUI sees a drag and drop; the Shader Graph canvas needs a hold of a few frames to accept a link). Each run logs <code>--sim-mouse: press at X,Y</code> in window points. <code>left+shift</code> / <code>right+shift</code> also hold Shift from the press until after the release. Synthetic SDL events, so <code>kast.input</code> and the game GUIs get them as from a real mouse while the Game panel is focused. <code>kast.input.setCursorLocked</code> is not applied to the window in such a run, so the real cursor is never grabbed. Example: <code>--sim-mouse 600,left,240,-40,0</code>.</td>
 </tr>
 <tr>
 <td><code>--sim-key &lt;frame,[ctrl+]key&gt;</code></td>
-<td>With <code>--play</code>, <code>--open-graph</code> or <code>--focus-panel Scene</code>, repeatable: on frame <code>frame</code> press <code>key</code> (an SDL key name: <code>B</code>, <code>Escape</code>, <code>Tab</code>, <code>Delete</code>, <code>Keypad 5</code>) on the Game panel (with <code>--open-graph</code> or <code>--focus-panel Scene</code>: the focused panel, e.g. the canvas or the Scene view); <code>ctrl+</code> holds Ctrl with it (<code>ctrl+C</code>, <code>ctrl+V</code>; it types nothing), with the character it types (a letter or digit, lower case) for a focused game GUI text field, and release it two frames later. Synthetic SDL events, like <code>--sim-mouse</code>. Example: <code>--sim-key 600,B</code>.</td>
+<td>With <code>--play</code>, <code>--open-graph</code>, <code>--open-gui</code> or <code>--focus-panel Scene</code>, repeatable: on frame <code>frame</code> press <code>key</code> (an SDL key name: <code>B</code>, <code>Escape</code>, <code>Tab</code>, <code>Delete</code>, <code>Keypad 5</code>) on the Game panel (with <code>--open-graph</code>, <code>--open-gui</code> or <code>--focus-panel Scene</code>: the focused panel, e.g. the canvas, the GUI Hierarchy inset or the Scene view); <code>ctrl+</code> holds Ctrl with it (<code>ctrl+C</code>, <code>ctrl+V</code>; it types nothing), with the character it types (a letter or digit, lower case) for a focused game GUI text field, and release it two frames later. Synthetic SDL events, like <code>--sim-mouse</code>. Example: <code>--sim-key 600,B</code>.</td>
 </tr>
 <tr>
 <td><code>--sim-on-log &lt;text&gt;</code></td>

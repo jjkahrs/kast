@@ -87,7 +87,7 @@ constexpr const char* kUsage =
     "[--new-component-prompt Name] [--new-component Name] [--new-state-machine-prompt Name] [--build dir] "
     "[--open-menu Name] [--open-build-settings] [--open-online-settings] [--open-gui-settings] [--gui-settings-set json] [--game-resolution WxH] [--game-display-scale S] [--gui-preview-scale PERCENT] [--assets-menu path|/] [--assets-create system|fsm|gui|material|shader|shadergraph:folder] [--assets-rename path=name] [--assets-select path] [--assets-edit path] [--material-set field=json] [--material-undo N] [--material-redo N] "
     "[--focus-panel Window] [--map-click tx,tz]... [--grid-view tx,tz,zoom] [--zone-section Map[,Problems...]] [--zone-tool Raise|Lower|Flatten|SetSpawn|...] [--zone-select id|object:tx,tz,index] [--bake] [--mapbake exe] [--open-gui file.rml|file.guiprefab] [--gui-select id] [--gui-preview-size WxH] [--gui-pick X,Y] "
-    "[--gui-add Panel|Text|RichText|Button|Toggle|Slider|Dropdown|Spinbox|Progress|ListBox|VirtualList] [--gui-set-attr name=value] [--gui-set-prop name=value] [--gui-rich-wrap tag[=value],start,end] [--gui-undo N] [--gui-redo N] [--gui-save] [--gui-create-prefab folder|/] [--gui-place-prefab path]... [--gui-revert name|*] [--gui-apply name|*] [--gui-unpack] [--gui-delete] [--gui-move up|down] [--gui-reparent id|/] [--gui-click id] "
+    "[--gui-add Panel|Text|RichText|Button|Toggle|Slider|Dropdown|Spinbox|Progress|ListBox|VirtualList] [--gui-set-attr name=value] [--gui-set-prop name=value] [--gui-rich-wrap tag[=value],start,end] [--gui-undo N] [--gui-redo N] [--gui-save] [--gui-create-prefab folder|/] [--gui-place-prefab path]... [--gui-revert name|*] [--gui-apply name|*] [--gui-unpack] [--gui-delete] [--gui-move up|down] [--gui-reparent id|/] [--gui-hierarchy-collapse] [--gui-click id] "
     "[--open-graph file.kshadergraph] [--graph-add type[,x,y]] [--graph-link N.pin,M.pin] [--graph-unlink N.pin] [--graph-select N[,M...]] "
     "[--graph-delete N[,M...]] [--graph-set N.setting=json] [--graph-comment title,x,y,w,h] [--graph-paste x,y] [--graph-undo N] [--graph-redo N] "
     "[--graph-save] [--graph-close] [--graph-add-menu N.pin|/] [--graph-preview sphere|cube|plane] [--graph-preview-collapse] [--graph-view-code] [--preview-model path] [--preview-clip name] [--preview-lod N] "
@@ -112,7 +112,7 @@ struct SimMouse {
 };
 
 // --sim-key: one key press on the Game panel, or the focused panel (down, its typed character, up two frames later),
-// for tests of game keys and the Shader Graph canvas' and Scene view's (--focus-panel Scene) shortcuts.
+// for tests of game keys and the Shader Graph canvas', GUI Builder's and Scene view's (--focus-panel Scene) shortcuts.
 struct SimKey {
     int frame = 0;
     SDL_Scancode scancode = SDL_SCANCODE_UNKNOWN;
@@ -195,7 +195,7 @@ struct Options {
     std::string guiSelect;          // then select the element with this id in it
     std::optional<std::pair<int, int>> guiPreviewSize; // add this GUI Preview resolution and pick it
     std::optional<std::pair<int, int>> guiPick; // click the GUI Preview here (preview pixels, kAddComponentPopupFrame)
-    std::optional<GuiKind> guiAdd; // then add this element as the GUI Hierarchy's + buttons do
+    std::optional<GuiKind> guiAdd; // then add this element as the GUI Hierarchy's Add menu does
     std::optional<std::pair<std::string, std::string>> guiSetAttr; // then set this attribute of the selection, as the
                                                                    // GUI Inspector does (one step)
     std::optional<std::pair<std::string, std::string>> guiSetProp; // then set this widget property of the selection, as
@@ -218,6 +218,7 @@ struct Options {
     bool guiDelete = false;
     int guiMove = 0;
     std::optional<std::string> guiReparent; // the new parent's id ("" = <body>)
+    bool guiHierarchyCollapse = false; // the GUI Preview's GUI Hierarchy inset starts collapsed to its header
     std::string guiClick;           // with --play: click the game GUI element with this id (frame kAddComponentPopupFrame)
     std::string openGraph;          // open this .kshadergraph in the Shader Graph panels (relative: to the project, else the cwd)
     // --graph-* edits of it (and later --open-graph), flag and value in command-line order, run as the panels do them
@@ -687,8 +688,8 @@ std::optional<Options> parseArgs(int argc, char** argv)
             options.guiApply = argv[++i];
         } else if (arg == "--gui-unpack") {
             options.guiUnpack = true;
-        } else if (arg == "--gui-delete") {
-            options.guiDelete = true;
+        } else if (arg == "--gui-delete" || arg == "--gui-hierarchy-collapse") { // one branch: MSVC's else-if nesting limit
+            (arg == "--gui-delete" ? options.guiDelete : options.guiHierarchyCollapse) = true;
         } else if (arg == "--gui-move" && hasValue && (std::string_view(argv[i + 1]) == "up" || std::string_view(argv[i + 1]) == "down")) {
             options.guiMove = std::string_view(argv[++i]) == "up" ? -1 : 1;
         } else if (arg == "--gui-reparent" && hasValue) {
@@ -959,7 +960,7 @@ std::optional<Options> parseArgs(int argc, char** argv)
     if ((!options.guiSelect.empty() || options.guiPick || options.guiAdd || options.guiSetAttr || options.guiSetProp ||
          options.guiRichWrap || options.guiUndo || options.guiRedo || options.guiSave || options.guiCreatePrefab ||
          !options.guiPlacePrefabs.empty() || !options.guiRevert.empty() || !options.guiApply.empty() || options.guiUnpack ||
-         options.guiDelete || options.guiMove || options.guiReparent) &&
+         options.guiDelete || options.guiMove || options.guiReparent || options.guiHierarchyCollapse) &&
         options.openGui.empty()) {
         kast::log::error("--gui-select, --gui-pick, --gui-add, --gui-set-attr, --gui-set-prop, --gui-rich-wrap, --gui-undo, "
                          "--gui-redo, --gui-save and the GUI prefab and hierarchy flags require --open-gui <file.rml>");
@@ -977,8 +978,9 @@ std::optional<Options> parseArgs(int argc, char** argv)
         kast::log::error("--gui-click requires --play");
         return std::nullopt;
     }
-    if (!options.simKeys.empty() && !options.play && options.openGraph.empty() && options.focusPanel != "Scene") {
-        kast::log::error("--sim-key requires --play, --open-graph or --focus-panel Scene");
+    if (!options.simKeys.empty() && !options.play && options.openGraph.empty() && options.openGui.empty() &&
+        options.focusPanel != "Scene") {
+        kast::log::error("--sim-key requires --play, --open-graph, --open-gui or --focus-panel Scene");
         return std::nullopt;
     }
     if (!options.simGamepad.empty() && !options.play) {
@@ -1034,7 +1036,6 @@ void buildDefaultLayout(ImGuiID dockspace)
     ImGui::DockBuilderDockWindow("Assets", bottom);
     ImGui::DockBuilderDockWindow("Scene", center);
     ImGui::DockBuilderDockWindow("Game", center);
-    ImGui::DockBuilderDockWindow(GuiBuilder::kHierarchyWindow, left);
     ImGui::DockBuilderDockWindow(GuiBuilder::kInspectorWindow, right);
     ImGui::DockBuilderDockWindow(GuiBuilder::kStyleWindow, bottom);
     ImGui::DockBuilderDockWindow(GuiBuilder::kPreviewWindow, center);
@@ -1067,8 +1068,7 @@ UndoTarget focusedUndoTarget(const std::string& window, Document& doc, GuiBuilde
                 .blocked = doc.play != PlayState::Stopped};
     if (UndoStack* materials = panels.materialHistory(); materials && window == "Inspector")
         return {.history = materials, .undo = [materials] { materials->undo(); }, .redo = [materials] { materials->redo(); }};
-    constexpr const char* kGuiWindows[] = {GuiBuilder::kHierarchyWindow, GuiBuilder::kInspectorWindow,
-                                           GuiBuilder::kStyleWindow, GuiBuilder::kPreviewWindow};
+    constexpr const char* kGuiWindows[] = {GuiBuilder::kInspectorWindow, GuiBuilder::kStyleWindow, GuiBuilder::kPreviewWindow};
     if (std::ranges::any_of(kGuiWindows, [&](const char* id) { return window.ends_with(id); }))
         return {.history = &guiBuilder.history(),
                 .undo = [&guiBuilder] { guiBuilder.undo(); },
@@ -1222,7 +1222,7 @@ void drawPreferences(ExternalEditor& editor, OnlineModel& online, std::string& d
 }
 
 // The GUI Builder's panels, each docked beside its scene counterpart in layouts saved before the builder existed:
-// GUI Hierarchy by Hierarchy, GUI Inspector by Inspector, GUI Style by Console, GUI Preview by Scene.
+// GUI Inspector by Inspector, GUI Style by Console, GUI Preview (with the GUI Hierarchy inset) by Scene.
 void drawGuiBuilder(GuiBuilder& builder)
 {
     const auto dockBeside = [](const char* existing, const char* window) {
@@ -1230,8 +1230,6 @@ void drawGuiBuilder(GuiBuilder& builder)
             settings && !ImGui::FindWindowSettingsByID(ImHashStr(window)))
             ImGui::SetNextWindowDockID(settings->DockId, ImGuiCond_FirstUseEver);
     };
-    dockBeside("Hierarchy", GuiBuilder::kHierarchyWindow);
-    builder.drawHierarchy();
     dockBeside("Inspector", GuiBuilder::kInspectorWindow);
     builder.drawInspector();
     dockBeside("Console", GuiBuilder::kStyleWindow);
@@ -2013,6 +2011,8 @@ int main(int argc, char** argv)
         }
         if (!options->openGui.empty() && frames.frame() == kAddComponentPopupFrame)
             guiBuilder.focusPanels(); // again: the first frames' docking undid the focus open() asked for
+        if (options->guiHierarchyCollapse && frames.frame() == kAddComponentPopupFrame)
+            guiBuilder.collapseHierarchy();
         if (!options->openGraph.empty() && frames.frame() == kAddComponentPopupFrame)
             graphs.focusPanels(); // again: the first frames' docking undid the focus open() asked for
         if (!options->previewModel.empty() && frames.frame() == kAddComponentPopupFrame)

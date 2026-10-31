@@ -12,19 +12,24 @@
 <nav class="side"><h2>Editor</h2><ul><li><a href="index.html">Overview</a></li><li><a href="command-line.html">Command line</a></li><li><a href="controls.html">Editor controls</a></li><li><a href="undo-redo.html">Undo and redo</a></li><li><a href="multi-scene.html">Multi-scene editing</a></li><li><a href="project-manager.html">Project Manager</a></li><li><a href="projects.html">Projects</a></li><li><a href="build.html">Build</a></li><li><a href="online-tooling.html">Online Services tooling</a></li><li><a href="gui-builder.html" class="active">GUI Builder</a></li><li><a href="prefabs.html">Prefabs</a></li><li><a href="shaders.html">Shaders</a></li><li><a href="shader-graph.html">Shader Graph</a></li><li><a href="zone-builder.html">Zone Builder</a></li><li><a href="map-builder.html">Map Builder</a></li><li><a href="model-preview.html">Model Preview</a></li><li><a href="assets.html">Assets and asset ids</a></li></ul></nav>
 <main>
 <h1 id="gui-builder">GUI Builder</h1>
-<p>Four editor panels on one open GUI. <strong>Assets &gt; Create &gt; GUI</strong> writes <code>new_gui.rml</code> + <code>new_gui.rcss</code> (a Panel holding a
+<p>Three editor panels and an inset on one open GUI. <strong>Assets &gt; Create &gt; GUI</strong> writes <code>new_gui.rml</code> + <code>new_gui.rcss</code> (a Panel holding a
 Text and a Button with <code>data-event="ui.clicked"</code>, the <code>.rml</code> linking the <code>.rcss</code>) into the chosen folder, as
 <code>new_gui_2</code>, <code>new_gui_3</code>, ... when a name is taken (ignoring case), never overwriting, and starts renaming the
 <code>.rml</code>. Renaming an <code>.rml</code> in Assets also renames the sibling <code>&lt;stem&gt;.rcss</code> it links and rewrites the link (refused,
 nothing changed, if either new name is taken); moves and renames of the open files are followed. <strong>Double-click</strong> an
 <code>.rml</code> in Assets to open it (one GUI at a time; with unsaved builder changes, Save / Discard / Cancel first); its
-four panels come to the front.</p>
+three panels come to the front.</p>
 <ul>
-<li><strong>GUI Hierarchy</strong> (tab beside Hierarchy): the elements under <strong>Body</strong>. <strong>+ Panel / + Text / + <a href="#rich-text">Rich Text</a> / + Button</strong> and the
-  <a href="#form-widgets">form widgets</a> <strong>+ Toggle / + Slider / + Dropdown / + Spinbox / + Progress</strong> and the
-  <a href="#lists">lists</a> <strong>+ List Box / + Virtual List</strong> add into the selected Panel, else into Body (the buttons wrap to the panel's width); <strong>Delete</strong>, <strong>Up</strong>, <strong>Down</strong> act on the
-  selection; the right-click menu has the same (<strong>Add Toggle</strong>, ...). Drag an element onto a Panel or Body to move it
-  there (into itself or its own children is refused). Unknown elements are greyed and labelled <code>&lt;tag&gt;</code>.</li>
+<li><strong>GUI Hierarchy</strong> (not a tab: an inset over the GUI Preview, 8 px in from its top-left corner, 260x360): the
+  elements under <strong>Body</strong>, under a toolbar of <strong>Save</strong>, <strong>Delete</strong>, <strong>Up</strong> and <strong>Down</strong> (Delete / Up / Down
+  act on the selection). Right-click Body or a Panel to add into it: <strong>Add Panel / Add Text / Add <a href="#rich-text">Rich Text</a> / Add Button</strong>,
+  the <a href="#form-widgets">form widgets</a> <strong>Add Toggle / Add Slider / Add Dropdown / Add Spinbox / Add Progress</strong> and the
+  <a href="#lists">lists</a> <strong>Add List Box / Add Virtual List</strong>; the menu also has Move Up / Move Down / Delete. Drag an element
+  onto a Panel or Body to move it there (into itself or its own children is refused). Unknown elements are greyed and
+  labelled <code>&lt;tag&gt;</code>. Drag the inset's #ffaa00 header to move it (it stays inside the preview area, also when the
+  panel shrinks); drag its bottom-right corner, right or bottom edge to resize it (160x120 up to 80% of the area); its
+  arrow collapses it to the header. Position, size and collapsed state last for the session. Clicks, drags and drops on
+  the inset never reach the preview under it.</li>
 <li><strong>GUI Inspector</strong> (tab beside Inspector): the selection's <code>id</code> and <code>class</code>, its text (Text and Button holding only
   text; one with child elements says so), a Rich Text's <a href="#rich-text">markup, toolbar and warnings</a>, <code>data-event</code> for a Button, the input widgets and the lists, and a widget's
   <a href="#form-widgets">properties and options</a> or a list's <a href="#lists">properties and rows</a>. Then, on any element (Unknown ones too),
@@ -46,7 +51,7 @@ four panels come to the front.</p>
   template (see <a href="#lists">Lists</a>).</li>
 </ul>
 <h2 id="rich-text">Rich Text</h2>
-<p><strong>+ Rich Text</strong> adds <code>&lt;p class="rich"&gt;[b]Rich[/b] text&lt;/p&gt;</code>: a paragraph whose text is
+<p><strong>Add Rich Text</strong> adds <code>&lt;p class="rich"&gt;[b]Rich[/b] text&lt;/p&gt;</code>: a paragraph whose text is
 <a href="../engine/game-gui.html#rich-text">BBCode</a>, converted to styled RML in the preview, in Play and in the built game. Any
 <code>&lt;p&gt;</code> with class <code>rich</code> (among others too) is Rich Text; a plain <code>&lt;p&gt;</code> stays Text, its text shown as typed. The
 markup is saved verbatim (line breaks included; the file escapes only <code>&amp; &lt; &gt;</code>), so it round-trips.</p>
@@ -118,7 +123,7 @@ removes that attribute. The attributes the fields stand for are not repeated und
 attribute and child is kept as written. <code>--gui-add Toggle</code> (or any kind) and <code>--gui-set-prop name=value</code> do the same from the
 <a href="command-line.html">command line</a>.</p>
 <p>Selection is shared by the three. Any edit marks the GUI dirty: <code>*</code> after the file name in the builder panels'
-titles. <strong>Save</strong> (GUI Hierarchy, GUI Style) or <strong>Ctrl+S</strong> while a builder panel is focused writes the <code>.rml</code> and
+titles. <strong>Save</strong> (GUI Hierarchy inset, GUI Style) or <strong>Ctrl+S</strong> while a builder panel (or the inset) is focused writes the <code>.rml</code> and
 <code>.rcss</code> (elsewhere Ctrl+S still saves the scene). Quitting with unsaved builder changes asks Save / Discard / Cancel
 first, then the scene's own prompt if it is dirty. When the open files change on disk (the 0.5 s poll), a clean
 builder reloads them (keeping the selection by <code>id</code> and, if the new sheet is broken, the last good style); with
@@ -185,8 +190,8 @@ counterpart of <a href="prefabs.html">scene prefabs</a>. The file format, the ma
 </ul>
 <h3 id="prefab-place">Placing instances</h3>
 <ul>
-<li>Drag a <code>.guiprefab</code> from Assets onto the GUI Hierarchy: onto a Panel or Body it becomes their last child. Or onto
-  the GUI Preview: into the deepest Panel under the cursor, else Body.</li>
+<li>Drag a <code>.guiprefab</code> from Assets onto the GUI Hierarchy inset: onto a Panel or Body it becomes their last child. Or
+  onto the GUI Preview outside the inset: into the deepest Panel under the cursor, else Body.</li>
 <li>The instance gets the prefab's file stem as id, made unique in the document (<code>prefab_button</code>, <code>prefab_button_2</code>,
   ...: no element has it and no id starts with it plus <code>_</code>), and is selected. One undo step.</li>
 <li>Refused if the prefab doesn't load, if the target is inside an instance, or if the prefab holds (directly or nested)
@@ -196,7 +201,7 @@ counterpart of <a href="prefabs.html">scene prefabs</a>. The file format, the ma
 <p>The GUI Hierarchy shows an instance as one node with the prefab marker (a small cube) after its label, its tooltip naming
 the prefab. Its prefab elements are listed under it and can be selected (in the tree or the preview) to override their
 attributes and text, but they can't be moved, deleted, dragged, reparented or receive children: Delete / Up / Down and
-the <strong>+</strong> buttons are disabled, their menus leave those items out, and the command-line equivalents are refused
+their menus leave those items and the Add items out, and the command-line equivalents are refused
 with a warning. The instance root itself moves, deletes and reparents like any element. A Dropdown's options and a List
 Box's rows in an instance can't be added, removed or reordered.</p>
 <p>The GUI Inspector shows a <strong>Prefab</strong> card on any element of an instance: the prefab's path (and the nested prefab
@@ -219,7 +224,7 @@ renames the ids inside that start with the old id plus <code>_</code>; it is nev
   Instances nested in it stay linked, with what it changed on them as their own overrides.</li>
 </ul>
 <h3 id="prefab-edit">Editing a prefab</h3>
-<p>Double-click a <code>.guiprefab</code> in Assets: it opens in the four GUI panels like an <code>.rml</code> (the same Save / Discard /
+<p>Double-click a <code>.guiprefab</code> in Assets: it opens in the GUI panels like an <code>.rml</code> (the same Save / Discard /
 Cancel prompts, undo and reload rules). Its one element is under Body (Body takes no second element and its element
 can't be deleted); GUI Style edits its sibling <code>.rcss</code> (Save creates it once it has text). The preview shows it alone,
 in Roboto white text unless its sheet says otherwise. Instances of other prefabs in it are edited as above; placing one

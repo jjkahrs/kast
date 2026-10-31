@@ -6,6 +6,7 @@
 
 #include <gui.h>
 #include <gui_models.h>
+#include <imgui.h>
 
 #include <filesystem>
 #include <functional>
@@ -18,10 +19,13 @@ class Element;
 class ElementDocument;
 } // namespace Rml
 
-// GUI Builder: four panels on one open .rml (gui_doc.h) and the .rcss it links.
-// - GUI Hierarchy: element tree; add Panel / Text / Rich Text / Button / Toggle / Slider / Dropdown / Spinbox / Progress / List Box /
-//   Virtual List (into the selected Panel, else <body>), delete, move up/down, drag-drop onto a Panel or <body> to
-//   reparent; Save. A composite widget (GuiDoc::composite) is one node: its insides are not listed.
+// GUI Builder: three panels on one open .rml (gui_doc.h) and the .rcss it links, and an inset in the preview.
+// - GUI Hierarchy: not a panel but an inset over the GUI Preview (top-left by default): element tree; Save, delete, move
+//   up/down; a Panel's or Body's right-click menu adds Panel / Text / Rich Text / Button / Toggle / Slider / Dropdown /
+//   Spinbox / Progress / List Box / Virtual List into it; drag-drop onto a Panel or <body> to reparent. Dragged by its
+//   header (kept inside the preview area), resized from its bottom-right corner and right / bottom edges, collapsed to its
+//   header; for the session only. The mouse over it never reaches the preview (no pick, no drop on the image). A
+//   composite widget (GuiDoc::composite) is one node: its insides are not listed.
 // - GUI Inspector: id, class, text (Text, Button) and data-event (Button, the input widgets and the lists) of the
 //   selection, its widget properties (GuiDoc::widgetProperties), a Dropdown's options and a List Box's rows (add,
 //   remove, move, value, label, selected), a Rich Text's markup (multiline; a toolbar wraps the selection in or puts at
@@ -48,7 +52,6 @@ class ElementDocument;
 class GuiBuilder {
 public:
     // Window names (stable ids; the visible title adds the file name and dirty marker).
-    static constexpr const char* kHierarchyWindow = "###GUI Hierarchy";
     static constexpr const char* kInspectorWindow = "###GUI Inspector";
     static constexpr const char* kStyleWindow = "###GUI Style";
     static constexpr const char* kPreviewWindow = "###GUI Preview";
@@ -59,17 +62,18 @@ public:
 
     // Opens rml in the builder (after the unsaved-changes prompt if dirty) and brings its panels to the front.
     void open(const std::filesystem::path& rml);
-    void focusPanels() { focusStep_ = 4; } // brings the four panels to the front of their docks, one per frame
+    void focusPanels() { focusStep_ = 3; } // brings the three panels to the front of their docks, one per frame
     // Selects the first element with this id attribute. False if there is none.
     bool selectById(const std::string& id);
     // Selects the deepest element at (x, y) in preview pixels, as a click there does (<body> if none). False if no
     // preview is laid out yet.
     bool pick(float x, float y);
     std::string selectedId() const { return GuiDoc::attribute(GuiDoc::widgetElement(selected_), "id"); } // "" if none
-    // Adds an element of kind as the GUI Hierarchy's + buttons do (applied when the panel next draws).
+    // Adds an element of kind as the GUI Hierarchy's Add menu does, into the selected Panel, else <body> (applied when the
+    // preview next draws).
     void requestAdd(GuiKind kind) { edit_ = {Edit::Op::Add, addParent(), {}, kind}; }
     // Deletes, moves (-1 up, +1 down) or reparents (onto the element with that id) the selection as the GUI Hierarchy
-    // does (applied when the panel next draws; refused, with a warning, inside a prefab instance).
+    // does (applied when the preview next draws; refused, with a warning, inside a prefab instance).
     void requestDelete() { edit_ = {Edit::Op::Delete, selected_}; }
     void requestMove(int delta) { edit_ = {Edit::Op::Move, selected_, {}, GuiKind::Panel, delta}; }
     bool requestReparent(const std::string& parentId);
@@ -127,8 +131,10 @@ public:
     // AppHooks::quitRequested: false while the user still has to answer the unsaved-changes prompt.
     bool onQuitRequested();
 
-    // The panels (the host docks each) and the builder's modals; call once per frame.
-    void drawHierarchy();
+    void collapseHierarchy() { hierarchyCollapsed_ = true; } // the GUI Hierarchy inset, to its header
+
+    // The panels (the host docks each; the preview draws the GUI Hierarchy inset) and the builder's modals; call once
+    // per frame.
     void drawInspector();
     void drawStyle();
     void drawPreview();
@@ -166,6 +172,7 @@ private:
     std::string title(const char* name, const char* window) const;
     pugi::xml_node addParent() const; // the selected Panel, else <body>
 
+    void drawHierarchyInset(ImVec2 areaMin, ImVec2 areaMax); // over the preview area areaMin..areaMax
     void drawNode(pugi::xml_node node);
     void applyEdit();
     std::filesystem::path projectRoot() const; // the open file's project, else its folder
@@ -190,6 +197,10 @@ private:
     int resolution_ = 0;
     std::vector<int> scales_{100, 125, 150, 200}; // the preview's UI scale choices, percent
     int scale_ = 0;
+    ImVec2 hierarchyPos_{8.0f, 8.0f};      // the GUI Hierarchy inset's, from the preview area's top-left; kept inside it
+    ImVec2 hierarchySize_{260.0f, 360.0f}; // header included; clamped to the area when drawn
+    bool hierarchyCollapsed_ = false;
+    ImVec2 hierarchyMin_{}, hierarchyMax_{}; // where the inset was drawn last (empty: nowhere)
     double previewRatio_ = 0.0; // the dp ratio last logged
 
     std::filesystem::path rml_; // empty = nothing open
@@ -237,5 +248,5 @@ private:
     bool reloadPromptRequested_ = false;
     bool quitPromptRequested_ = false;
     bool quitConfirmed_ = false;
-    int focusStep_ = 0; // focusPanels: 4 Hierarchy, 3 Inspector, 2 Style, 1 Preview (ImGui focuses one window a frame)
+    int focusStep_ = 0; // focusPanels: 3 Inspector, 2 Style, 1 Preview (ImGui focuses one window a frame)
 };
