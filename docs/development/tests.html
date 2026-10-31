@@ -670,6 +670,10 @@ its three refusals, nested instantiation, and a prefab edit hot-reloading the do
 <td>The GUI Hierarchy inset over the GUI Preview of <code>main_menu.rml</code>: probes of its default place and of <code>--gui-hierarchy-collapse</code>; through <code>--sim-mouse</code>, a click on Quit outside it picks (<code>GUI Preview: click ... selected 'quit_button'</code>), a click in it doesn't; its header dragged far stops at the preview area's corner, its corner dragged out / in stops at 80% of the area / 160x120 (probes), none of them picking; a right-click on Body opens the Add menu; a click in it then <code>--sim-key ctrl+S</code> saves (on <code>gui_inset_project</code>, a copy).</td>
 </tr>
 <tr>
+<td><code>gui_builder_hidden</code>, <code>gui_builder_hidden_old_layout</code>, <code>gui_builder_close</code>, <code>gui_builder_close_cancel</code>, <code>gui_builder_close_discard</code>, <code>gui_builder_close_save</code> (and their <code>_probe</code>s), <code>gui_builder_close_saved_file</code></td>
+<td>The GUI Builder panels draw only while a GUI is open: a probe where the GUI Inspector tab is shows the empty tab bar with no GUI opened (default layout and <code>tests/layouts/pre_zone.ini</code>) and after <code>--gui-close</code> (<code>Closed GUI</code>). Dirty (<code>--gui-set-attr class=closing</code>), <code>--gui-close</code> asks Save / Discard / Cancel, answered by a <code>--sim-mouse</code> click: Cancel keeps it open (tab still there, nothing saved or closed), Discard closes it without saving, Save (on <code>gui_inset_project</code>) logs <code>Saved GUI</code> then <code>Closed GUI</code> and the file has <code>class="closing"</code>.</td>
+</tr>
+<tr>
 <td><code>gui_builder_add_screenshot</code></td>
 <td><code>--gui-select buttons --gui-add Button</code>, writing <code>gui_builder_add.png</code> (a third button in tree and preview, <code>*</code> in the titles; nothing saved).</td>
 </tr>

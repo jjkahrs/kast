@@ -150,8 +150,19 @@ bool GuiBuilder::load(const std::filesystem::path& rml)
     return true;
 }
 
+void GuiBuilder::requestClose()
+{
+    if (!dirty()) {
+        close();
+        return;
+    }
+    pendingOpen_.clear();
+    openPromptRequested_ = true;
+}
+
 void GuiBuilder::close()
 {
+    kast::log::info(std::format("Closed GUI '{}'", rml_.string()));
     rml_.clear();
     rcss_.clear();
     rcssText_.clear();
@@ -1306,8 +1317,11 @@ void GuiBuilder::drawPreview()
     if (focusStep_ == 1) // last: the preview keeps the focus
         ImGui::SetNextWindowFocus();
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
-    const bool visible = ImGui::Begin(title("GUI Preview", kPreviewWindow).c_str());
+    bool keepOpen = true; // false: the tab's X was clicked
+    const bool visible = ImGui::Begin(title("GUI Preview", kPreviewWindow).c_str(), &keepOpen);
     ImGui::PopStyleVar();
+    if (!keepOpen)
+        requestClose(); // clean: closed now, so nothing below draws
     if (visible && !rml_.empty()) {
         saveShortcut();
         ImGui::SetNextItemWidth(160.0f);
@@ -1434,8 +1448,11 @@ void GuiBuilder::drawModals()
     if (std::exchange(openPromptRequested_, false))
         ImGui::OpenPopup("Unsaved GUI changes##open");
     if (ImGui::BeginPopupModal("Unsaved GUI changes##open", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::Text("Save changes to %s before opening %s?", utf8(rml_.filename()).c_str(),
-                    utf8(pendingOpen_.filename()).c_str());
+        if (pendingOpen_.empty())
+            ImGui::Text("Save changes to %s before closing it?", utf8(rml_.filename()).c_str());
+        else
+            ImGui::Text("Save changes to %s before opening %s?", utf8(rml_.filename()).c_str(),
+                        utf8(pendingOpen_.filename()).c_str());
         ImGui::Spacing();
         const bool saveIt = ImGui::Button("Save");
         ImGui::SameLine();
@@ -1444,7 +1461,10 @@ void GuiBuilder::drawModals()
         const bool cancel = ImGui::Button("Cancel");
         if ((saveIt && save()) || discard) {
             rmlDirty_ = rcssDirty_ = false;
-            open(pendingOpen_);
+            if (pendingOpen_.empty())
+                close();
+            else
+                open(pendingOpen_);
         }
         if (saveIt || discard || cancel)
             ImGui::CloseCurrentPopup();

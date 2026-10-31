@@ -3176,6 +3176,33 @@ kast_gui_inset_shot(sim_inset_save "--project ${KAST_GUI_INSET_PROJECT} ${builde
 set_tests_properties(gui_inset_project_clean PROPERTIES FIXTURES_SETUP gui_inset_cleaned)
 set_tests_properties(gui_inset_project_copy PROPERTIES FIXTURES_REQUIRED gui_inset_cleaned FIXTURES_SETUP gui_inset_copied)
 set_tests_properties(gui_builder_sim_inset_save PROPERTIES FIXTURES_REQUIRED gui_inset_copied)
+# The three GUI Builder panels draw only while a GUI is open: at 1600x1000 the probe is where the GUI Inspector tab is
+# (#ffaa00) when one is, and the empty tab bar (#313131) when none is: none opened (gui_builder_hidden; and in a layout
+# saved with them docked, pre_zone.ini, where that tab is further left), and after --gui-close (the Preview tab's X).
+# Dirty (--gui-set-attr), --gui-close asks Save / Discard / Cancel, answered by a --sim-mouse click on Cancel (still open,
+# nothing saved), Discard (closed, nothing saved) or Save (on the gui_inset_project copy: saved, then closed).
+kast_gui_inset_shot(hidden "--project ${KAST_TEST_PROJECT} --size 1600x1000" "-DFORBID_OUTPUT=\\[error\\]|Opened GUI")
+kast_gui_inset_probe(hidden 0.9125,0.025,49,49,49,6)
+kast_gui_inset_shot(hidden_old_layout "--project ${KAST_TEST_PROJECT} --size 1600x1000" "-DFORBID_OUTPUT=\\[error\\]"
+  "-DLAYOUT_FROM=${CMAKE_CURRENT_SOURCE_DIR}/tests/layouts/pre_zone.ini")
+kast_gui_inset_probe(hidden_old_layout 0.8,0.025,49,49,49,6)
+kast_gui_inset_shot(close "${inset_args} --gui-close" "-DEXPECT_OUTPUT=Closed GUI" "-DFORBID_OUTPUT=\\[error\\]")
+kast_gui_inset_probe(close 0.9125,0.025,49,49,49,6)
+set(close_dirty_args "${builder_args} --gui-select start_button --gui-set-attr class=closing --gui-close")
+kast_gui_inset_shot(close_cancel "--project ${KAST_TEST_PROJECT} ${close_dirty_args} --sim-mouse 40,left,0,0,0,-19,136"
+  "-DEXPECT_OUTPUT=--sim-mouse: press at 780,523" "-DFORBID_OUTPUT=\\[error\\]|Closed GUI|Saved GUI")
+kast_gui_inset_probe(close_cancel 0.9125,0.025,255,170,0,6)
+kast_gui_inset_shot(close_discard "--project ${KAST_TEST_PROJECT} ${close_dirty_args} --sim-mouse 40,left,0,0,0,-80,136"
+  "-DEXPECT_OUTPUT=press at 720,523.*Closed GUI" "-DFORBID_OUTPUT=\\[error\\]|Saved GUI")
+kast_gui_inset_probe(close_discard 0.9125,0.025,49,49,49,6)
+kast_gui_inset_shot(close_save "--project ${KAST_GUI_INSET_PROJECT} ${close_dirty_args} --sim-mouse 40,left,0,0,0,-135,136"
+  "-DEXPECT_OUTPUT=press at 664,523.*Saved GUI.*Closed GUI" "-DFORBID_OUTPUT=\\[error\\]")
+kast_gui_inset_probe(close_save 0.9125,0.025,49,49,49,6)
+add_test(NAME gui_builder_close_saved_file COMMAND "${CMAKE_COMMAND}" -E cat "${KAST_GUI_INSET_PROJECT}/ui/main_menu.rml")
+set_tests_properties(gui_builder_close_saved_file PROPERTIES PASS_REGULAR_EXPRESSION "class=\"closing\"")
+# After sim_inset_save: both write main_menu.rml.
+set_tests_properties(gui_builder_close_save PROPERTIES FIXTURES_REQUIRED gui_inset_copied DEPENDS gui_builder_sim_inset_save)
+set_tests_properties(gui_builder_close_saved_file PROPERTIES FIXTURES_REQUIRED gui_builder_close_save_shot)
 # The GUI Builder previews ui/effects.rml through the same renderer: no RmlUi or GUI renderer warning, and probes
 # (preview at 1280x720 scaled into the panel) show the glow outside the box, the box keeping #313131, and the linear
 # gradient's ends; the GUI Hierarchy inset collapsed off them.

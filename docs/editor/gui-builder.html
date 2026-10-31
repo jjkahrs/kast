@@ -19,6 +19,12 @@ Text and a Button with <code>data-event="ui.clicked"</code>, the <code>.rml</cod
 nothing changed, if either new name is taken); moves and renames of the open files are followed. <strong>Double-click</strong> an
 <code>.rml</code> in Assets to open it (one GUI at a time; with unsaved builder changes, Save / Discard / Cancel first); its
 three panels come to the front.</p>
+<p>The three panels are hidden until a GUI (<code>.rml</code> or <code>.guiprefab</code>) is open: no tabs, no empty panels. Opening one
+shows them in their dock spots, the GUI Preview focused. The <strong>GUI Preview</strong> tab has a close <strong>X</strong> (GUI
+Inspector and GUI Style don't): it closes the GUI and hides all three again. With unsaved changes it first asks
+<em>Save changes to &lt;file&gt; before closing it?</em> <strong>Save</strong> (closes once saved), <strong>Discard</strong> (closes,
+the files on disk untouched) or <strong>Cancel</strong> (stays open). <code>--gui-close</code> does the same from the
+<a href="command-line.html">command line</a>.</p>
 <ul>
 <li><strong>GUI Hierarchy</strong> (not a tab: an inset over the GUI Preview, 8 px in from its top-left corner, 260x360): the
   elements under <strong>Body</strong>, under a toolbar of <strong>Save</strong>, <strong>Delete</strong>, <strong>Up</strong> and <strong>Down</strong> (Delete / Up / Down
