@@ -54,6 +54,9 @@ public:
     {
         assetEdit_ = {AssetEdit::Op::Rename, std::move(path), std::move(name)};
     }
+    // Assets > Edit on the .kshadergraph at path (project-relative), as the menu item does: drawAssets opens it in the
+    // Shader Graph. --assets-edit.
+    void editAsset(std::string path) { openGraph_ = std::move(path); }
     // Selects the Assets entry at path (project-relative), as a click does: a .mat or .kshader also shows in the
     // Inspector until an entity is selected. Opens the entry's folder.
     void selectAsset(const std::string& path);
@@ -286,7 +289,7 @@ private:
     // The Inspector shows inspectedAsset_ (a project-relative .mat, .kshader or .kshadergraph, set by selecting it in Assets) instead of the
     // selected entity until another entity is selected.
     std::string inspectedAsset_;
-    std::string openGraph_; // a .kshadergraph the Inspector's "Open in Shader Graph" asked for (drawAssets opens it)
+    std::string openGraph_; // a .kshadergraph the Inspector's "Open in Shader Graph" or Assets > Edit asked for (drawAssets opens it)
     entt::entity inspectedEntity_ = entt::null; // doc.selected when last drawn
     struct {
         std::string path; // what value / error were loaded from

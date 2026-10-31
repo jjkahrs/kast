@@ -38,8 +38,9 @@ struct EditorContext;
 // line sits on the canvas, and the library logs them.
 // Edits mark the graph dirty ("*" in the titles) and are steps on its own undo history, cleared on open and reload; a
 // drag, or an Inspector field from activation to release, is one step. Save or Ctrl+S (a graph panel focused) writes
-// the file. A file changed on disk reloads when clean, else Reload / Keep mine is asked. Opening another graph or
-// quitting while dirty asks Save / Discard / Cancel first.
+// the file. A file changed on disk reloads when clean, else Reload / Keep mine is asked. Opening another graph, closing
+// the canvas tab (its X) or quitting while dirty asks Save / Discard / Cancel first. Both panels exist only while a
+// graph is open: closed, neither is submitted.
 class ShaderGraphEditor {
 public:
     // Window names (stable ids; the visible title adds the file name and dirty marker).
@@ -54,6 +55,12 @@ public:
 
     // Opens file (after the unsaved-changes prompt if dirty) and brings the panels to the front.
     void open(const std::filesystem::path& file);
+    // The canvas tab's X, --graph-close: closes the graph (after the unsaved-changes prompt if dirty); both panels go.
+    void close();
+    // An Assets delete of deleted (a file or folder): closes the open graph if it was or was inside it, unasked (the
+    // delete was confirmed).
+    void closeIfDeleted(const std::filesystem::path& deleted);
+    bool isOpen() const { return doc_.isOpen(); } // the panels draw only then
     // One panel a frame: Graph Inspector, then the canvas, which then zooms to fit the graph (at its
     // docked size: framed while still hidden it would fit the wrong size).
     void focusPanels()
@@ -112,6 +119,7 @@ private:
     };
 
     bool load(const std::filesystem::path& file);
+    void unload(); // no graph open: a fresh state for the next open
     std::string title(const char* name, const char* window) const;
     void saveShortcut();
     void drawNodes();
@@ -172,7 +180,7 @@ private:
     std::string editingKey_;
     std::map<std::string, std::pair<std::string, std::string>> fieldErrors_; // key -> refused text, why
 
-    std::filesystem::path pendingOpen_;
+    std::filesystem::path pendingOpen_; // what the unsaved-changes prompt opens after Save / Discard; empty: close
     bool openPromptRequested_ = false;
     bool reloadPromptRequested_ = false;
     bool quitPromptRequested_ = false;

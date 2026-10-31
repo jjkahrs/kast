@@ -212,6 +212,10 @@ volume of the scene is voxelized into <code>&lt;scene-name&gt;_voxelgi/&lt;entit
 <td>Rename that project-relative Assets entry to <code>&lt;name&gt;</code> at frame 10, as the panel's Rename does: its <code>.meta</code> moves along and every reference to it is updated (<a href="assets.html#operations">Assets and asset ids</a>).</td>
 </tr>
 <tr>
+<td><code>--assets-edit &lt;path&gt;</code></td>
+<td>Run Assets &gt; <strong>Edit</strong> on that project-relative <code>.kshadergraph</code> at frame 10, as the menu item does: the graph opens in the <a href="shader-graph.html">Shader Graph</a> and its tab takes the focus.</td>
+</tr>
+<tr>
 <td><code>--material-set &lt;field&gt;=&lt;json&gt;</code> (repeatable), <code>--material-undo N</code>, <code>--material-redo N</code></td>
 <td>With <code>--assets-select</code> of a <code>.mat</code>: set that field or <code>.kshader</code> / <code>.kshadergraph</code> param as an Inspector edit does (saved, one undo step each, in order), then Undo N times, then Redo N times, at frame 11. For tests of the material Inspector's undo.</td>
 </tr>
@@ -342,7 +346,7 @@ unsaved-changes prompt if that scene has unsaved changes), for screenshots.</td>
 </tr>
 <tr>
 <td><code>--assets-delete &lt;path&gt;</code></td>
-<td>Open the Assets <strong>Delete Asset</strong> confirmation for this entry after 12 frames, for screenshots (for a prefab it lists the scenes and prefabs using it).</td>
+<td>Open the Assets <strong>Delete Asset</strong> confirmation for this entry after 12 frames (14 with <code>--open-graph</code>, after <code>--focus-panel</code>), for screenshots (for a prefab it lists the scenes and prefabs using it).</td>
 </tr>
 <tr>
 <td><code>--prefab-back-prompt</code></td>
@@ -526,6 +530,10 @@ logs <code>[error] --graph-... &lt;value&gt;: &lt;why&gt;</code>. In PowerShell,
 <tr>
 <td><code>--graph-save</code></td>
 <td>Save the graph as its <strong>Save</strong> button does.</td>
+</tr>
+<tr>
+<td><code>--graph-close</code></td>
+<td>Close the graph as the Shader Graph tab's X does: closed at once when clean (logs <code>Closed shader graph '...'</code>, both panels go); with unsaved changes the Save / Discard / Cancel prompt opens.</td>
 </tr>
 <tr>
 <td><code>--graph-add-menu &lt;N.pin&gt;\|/</code></td>

@@ -211,6 +211,38 @@ bool ShaderGraphEditor::load(const std::filesystem::path& file)
     return true;
 }
 
+void ShaderGraphEditor::close()
+{
+    if (!doc_.dirty()) {
+        unload();
+        return;
+    }
+    pendingOpen_.clear();
+    openPromptRequested_ = true;
+}
+
+void ShaderGraphEditor::closeIfDeleted(const std::filesystem::path& deleted)
+{
+    if (doc_.isOpen() && remapPath(doc_.file(), deleted, deleted))
+        unload();
+}
+
+void ShaderGraphEditor::unload()
+{
+    if (!doc_.isOpen())
+        return;
+    kast::log::info(std::format("Closed shader graph '{}'", doc_.file().string()));
+    doc_.close(); // update() then drops the live override and its issues
+    resetCanvas_ = true;
+    selection_.clear();
+    selectedComments_.clear();
+    pendingSelect_.reset();
+    refused_.reset();
+    fieldErrors_.clear();
+    buffers_.clear();
+    editingKey_.clear();
+}
+
 bool ShaderGraphEditor::save()
 {
     if (!doc_.isOpen())
@@ -282,8 +314,6 @@ void ShaderGraphEditor::showRefusedLink(const GraphPin& from, const GraphPin& to
 
 std::string ShaderGraphEditor::title(const char* name, const char* window) const
 {
-    if (!doc_.isOpen())
-        return std::format("{}{}", name, window);
     return std::format("{} - {}{}{}", name, utf8(doc_.file().filename()), doc_.dirty() ? "*" : "", window);
 }
 
@@ -402,12 +432,13 @@ void ShaderGraphEditor::drawCanvas(float time)
     if (focusStep_ == 1) // last: the canvas keeps the focus
         ImGui::SetNextWindowFocus();
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
-    const bool visible = ImGui::Begin(title("Shader Graph", kCanvasWindow).c_str());
+    bool keepOpen = true; // false: the tab's X was clicked
+    const bool visible = ImGui::Begin(title("Shader Graph", kCanvasWindow).c_str(), &keepOpen);
     ImGui::PopStyleVar();
-    if (!visible || !doc_.isOpen()) {
-        if (visible)
-            ImGui::TextDisabled("Double-click a .kshadergraph in Assets to open it.");
+    if (!visible || !keepOpen) {
         ImGui::End();
+        if (!keepOpen)
+            close();
         return;
     }
     saveShortcut();
@@ -1318,7 +1349,10 @@ void ShaderGraphEditor::drawModals()
     if (std::exchange(openPromptRequested_, false))
         ImGui::OpenPopup("Unsaved shader graph changes##open");
     if (ImGui::BeginPopupModal("Unsaved shader graph changes##open", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::Text("Save changes to %s before opening %s?", name.c_str(), utf8(pendingOpen_.filename()).c_str());
+        if (pendingOpen_.empty())
+            ImGui::Text("Save changes to %s before closing it?", name.c_str());
+        else
+            ImGui::Text("Save changes to %s before opening %s?", name.c_str(), utf8(pendingOpen_.filename()).c_str());
         ImGui::Spacing();
         const bool saveIt = ImGui::Button("Save");
         ImGui::SameLine();
@@ -1326,9 +1360,13 @@ void ShaderGraphEditor::drawModals()
         ImGui::SameLine();
         const bool cancel = ImGui::Button("Cancel");
         if ((saveIt && save()) || discard) {
-            if (load(pendingOpen_))
+            if (pendingOpen_.empty())
+                unload();
+            else if (load(pendingOpen_))
                 focusPanels();
         }
+        if (cancel && pendingOpen_.empty())
+            focusStep_ = 1; // the X's click brought the next tab to the front: the canvas comes back
         if (saveIt || discard || cancel)
             ImGui::CloseCurrentPopup();
         ImGui::EndPopup();
