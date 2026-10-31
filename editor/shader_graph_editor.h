@@ -34,7 +34,7 @@ struct EditorContext;
 // compiles it on its worker while frames keep drawing; every material using the graph (Scene, Game, preview) then
 // renders it, the last good version until a compile succeeds. Saving writes the file; opening another graph (or the
 // file going away) drops the override, back to the file on disk. Errors and warnings (validation, and shaderc's mapped
-// to nodes) outline their node, red or #ffcc00, with the message as its tooltip and in the Graph Inspector; a summary
+// to nodes) outline their node, red or kHighlight, with the message as its tooltip and in the Graph Inspector; a summary
 // line sits on the canvas, and the library logs them.
 // Edits mark the graph dirty ("*" in the titles) and are steps on its own undo history, cleared on open and reload; a
 // drag, or an Inspector field from activation to release, is one step. Save or Ctrl+S (a graph panel focused) writes

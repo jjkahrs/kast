@@ -3126,7 +3126,7 @@ add_test(NAME gui_builder_pick_differs
 set_tests_properties(gui_builder_pick_screenshot PROPERTIES FIXTURES_SETUP gui_builder_pick_shot)
 set_tests_properties(gui_builder_pick_differs PROPERTIES FIXTURES_REQUIRED "gui_builder_shot;gui_builder_pick_shot")
 # The GUI Hierarchy inset over the GUI Preview, on main_menu.rml at 1600x1000: the preview area's top-left is 321,69, the
-# inset 329,77 .. 589,437 (260x360, a 22 px #ffaa00 header, #313131 body), the preview's background #2b3440; --sim-mouse
+# inset 329,77 .. 589,437 (260x360, a 22 px #222227 header, #151518 body), the preview's background #2b3440; --sim-mouse
 # presses go from the Scene view's center, 800,387.
 # - gui_builder_inset: the default inset; gui_builder_inset_collapsed (--gui-hierarchy-collapse): its header only.
 # - sim_preview_click: a click on Quit (800,321), outside the inset, picks it; sim_inset_click: a click in the inset's
@@ -3150,22 +3150,22 @@ endfunction()
 set(inset_args "--project ${KAST_TEST_PROJECT} ${builder_args}")
 set(inset_forbid "-DFORBID_OUTPUT=\\[error\\]|GUI Preview: click")
 kast_gui_inset_shot(inset "${inset_args}" "-DFORBID_OUTPUT=\\[error\\]")
-kast_gui_inset_probe(inset 0.3125,0.088,255,170,0,6 0.28125,0.3,49,49,49,6)
+kast_gui_inset_probe(inset 0.3125,0.088,34,34,39,6 0.28125,0.3,21,21,24,6)
 kast_gui_inset_shot(inset_collapsed "${inset_args} --gui-hierarchy-collapse" "-DFORBID_OUTPUT=\\[error\\]")
-kast_gui_inset_probe(inset_collapsed 0.3125,0.088,255,170,0,6 0.28125,0.3,43,52,64,6)
+kast_gui_inset_probe(inset_collapsed 0.3125,0.088,34,34,39,6 0.28125,0.3,43,52,64,6)
 kast_gui_inset_shot(sim_preview_click "${inset_args} --sim-mouse 30,left,0,0,0,0,-66"
   "-DEXPECT_OUTPUT=GUI Preview: click at [0-9]+,321 selected 'quit_button'" "-DFORBID_OUTPUT=\\[error\\]")
 kast_gui_inset_shot(sim_inset_click "${inset_args} --sim-mouse 30,left,0,0,0,-350,13"
   "-DEXPECT_OUTPUT=--sim-mouse: press at 450,400" "${inset_forbid}")
 kast_gui_inset_shot(sim_inset_drag "${inset_args} --sim-mouse 30,left,2000,2000,0,-350,-299"
   "-DEXPECT_OUTPUT=--sim-mouse: press at 450,88" "${inset_forbid}")
-kast_gui_inset_probe(sim_inset_drag 0.78125,0.348,255,170,0,6 0.71875,0.6,49,49,49,6 0.28125,0.3,43,52,64,6)
+kast_gui_inset_probe(sim_inset_drag 0.78125,0.348,34,34,39,6 0.71875,0.6,21,21,24,6 0.28125,0.3,43,52,64,6)
 kast_gui_inset_shot(sim_inset_resize "${inset_args} --sim-mouse 30,left,2000,2000,0,-214,47"
   "-DEXPECT_OUTPUT=--sim-mouse: press at 586,434" "${inset_forbid}")
-kast_gui_inset_probe(sim_inset_resize 0.68,0.5,49,49,49,6 0.6875,0.5,43,52,64,6 0.4375,0.57,49,49,49,6 0.4375,0.59,43,52,64,6)
+kast_gui_inset_probe(sim_inset_resize 0.68,0.5,21,21,24,6 0.6875,0.5,43,52,64,6 0.4375,0.57,21,21,24,6 0.4375,0.59,43,52,64,6)
 kast_gui_inset_shot(sim_inset_resize_min "${inset_args} --sim-mouse 30,left,-2000,-2000,0,-214,47"
   "-DEXPECT_OUTPUT=--sim-mouse: press at 586,434" "${inset_forbid}")
-kast_gui_inset_probe(sim_inset_resize_min 0.25,0.19,49,49,49,6 0.25,0.205,43,52,64,6 0.3125,0.15,43,52,64,6)
+kast_gui_inset_probe(sim_inset_resize_min 0.25,0.19,21,21,24,6 0.25,0.205,43,52,64,6 0.3125,0.15,43,52,64,6)
 kast_gui_inset_shot(sim_inset_menu "${inset_args} --sim-mouse 30,right,0,0,0,-420,-243"
   "-DEXPECT_OUTPUT=--sim-mouse: press at 380,144" "${inset_forbid}")
 set(KAST_GUI_INSET_PROJECT "${CMAKE_CURRENT_BINARY_DIR}/gui_inset_project")
@@ -3177,27 +3177,27 @@ set_tests_properties(gui_inset_project_clean PROPERTIES FIXTURES_SETUP gui_inset
 set_tests_properties(gui_inset_project_copy PROPERTIES FIXTURES_REQUIRED gui_inset_cleaned FIXTURES_SETUP gui_inset_copied)
 set_tests_properties(gui_builder_sim_inset_save PROPERTIES FIXTURES_REQUIRED gui_inset_copied)
 # The three GUI Builder panels draw only while a GUI is open: at 1600x1000 the probe is where the GUI Inspector tab is
-# (#ffaa00) when one is, and the empty tab bar (#313131) when none is: none opened (gui_builder_hidden; and in a layout
+# (#222227) when one is, and the empty tab bar (#0c0c0e) when none is: none opened (gui_builder_hidden; and in a layout
 # saved with them docked, pre_zone.ini, where that tab is further left), and after --gui-close (the Preview tab's X).
 # Dirty (--gui-set-attr), --gui-close asks Save / Discard / Cancel, answered by a --sim-mouse click on Cancel (still open,
 # nothing saved), Discard (closed, nothing saved) or Save (on the gui_inset_project copy: saved, then closed).
 kast_gui_inset_shot(hidden "--project ${KAST_TEST_PROJECT} --size 1600x1000" "-DFORBID_OUTPUT=\\[error\\]|Opened GUI")
-kast_gui_inset_probe(hidden 0.9125,0.025,49,49,49,6)
+kast_gui_inset_probe(hidden 0.9125,0.025,12,12,14,6)
 kast_gui_inset_shot(hidden_old_layout "--project ${KAST_TEST_PROJECT} --size 1600x1000" "-DFORBID_OUTPUT=\\[error\\]"
   "-DLAYOUT_FROM=${CMAKE_CURRENT_SOURCE_DIR}/tests/layouts/pre_zone.ini")
-kast_gui_inset_probe(hidden_old_layout 0.8,0.025,49,49,49,6)
+kast_gui_inset_probe(hidden_old_layout 0.8,0.025,12,12,14,6)
 kast_gui_inset_shot(close "${inset_args} --gui-close" "-DEXPECT_OUTPUT=Closed GUI" "-DFORBID_OUTPUT=\\[error\\]")
-kast_gui_inset_probe(close 0.9125,0.025,49,49,49,6)
+kast_gui_inset_probe(close 0.9125,0.025,12,12,14,6)
 set(close_dirty_args "${builder_args} --gui-select start_button --gui-set-attr class=closing --gui-close")
 kast_gui_inset_shot(close_cancel "--project ${KAST_TEST_PROJECT} ${close_dirty_args} --sim-mouse 40,left,0,0,0,-19,136"
   "-DEXPECT_OUTPUT=--sim-mouse: press at 780,523" "-DFORBID_OUTPUT=\\[error\\]|Closed GUI|Saved GUI")
-kast_gui_inset_probe(close_cancel 0.9125,0.025,255,170,0,6)
+kast_gui_inset_probe(close_cancel 0.9125,0.025,34,34,39,6)
 kast_gui_inset_shot(close_discard "--project ${KAST_TEST_PROJECT} ${close_dirty_args} --sim-mouse 40,left,0,0,0,-80,136"
   "-DEXPECT_OUTPUT=press at 720,523.*Closed GUI" "-DFORBID_OUTPUT=\\[error\\]|Saved GUI")
-kast_gui_inset_probe(close_discard 0.9125,0.025,49,49,49,6)
+kast_gui_inset_probe(close_discard 0.9125,0.025,12,12,14,6)
 kast_gui_inset_shot(close_save "--project ${KAST_GUI_INSET_PROJECT} ${close_dirty_args} --sim-mouse 40,left,0,0,0,-135,136"
   "-DEXPECT_OUTPUT=press at 664,523.*Saved GUI.*Closed GUI" "-DFORBID_OUTPUT=\\[error\\]")
-kast_gui_inset_probe(close_save 0.9125,0.025,49,49,49,6)
+kast_gui_inset_probe(close_save 0.9125,0.025,12,12,14,6)
 add_test(NAME gui_builder_close_saved_file COMMAND "${CMAKE_COMMAND}" -E cat "${KAST_GUI_INSET_PROJECT}/ui/main_menu.rml")
 set_tests_properties(gui_builder_close_saved_file PROPERTIES PASS_REGULAR_EXPRESSION "class=\"closing\"")
 # After sim_inset_save: both write main_menu.rml.

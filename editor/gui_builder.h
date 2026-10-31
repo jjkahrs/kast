@@ -44,7 +44,7 @@ class ElementDocument;
 //   move, delete, reparent or children); a missing prefab's node is red. Create GUI Prefab (node menu, or a node dropped
 //   on the Assets panel) and placing (a .guiprefab dropped on a Panel / Body or the Preview) are steps. The Inspector
 //   shows a Prefab card (Select Root, Open Prefab; on the root Revert All, Apply All, Unpack) and marks overridden
-//   fields #ffcc00 (right-click: Revert, Apply). A prefab saved on disk refreshes the open GUI's instances.
+//   fields kHighlight (right-click: Revert, Apply). A prefab saved on disk refreshes the open GUI's instances.
 // The three panels draw only while a GUI is open (isOpen); the GUI Preview tab's X (requestClose) closes it, and all three
 // go until another GUI opens, in the same dock spots.
 // Edits mark the GUI dirty ("*" in the titles) and are steps on its own undo history (gui_undo.h), cleared when a GUI is
@@ -183,7 +183,7 @@ private:
     std::filesystem::path projectRoot() const; // the open file's project, else its folder
     void prefabFailed(std::string error);      // logged and shown in a modal
     void drawPrefabCard(pugi::xml_node root);  // the Inspector's Prefab card (root null: a missing prefab)
-    // The #ffcc00 marker and the Revert / Apply menu after an Inspector field of the selection, if it is overridden.
+    // The kHighlight marker and the Revert / Apply menu after an Inspector field of the selection, if it is overridden.
     void overrideMarker(const std::string& field);
     void runPrefabOp(const PrefabOp& op);
     void reselect(const std::vector<size_t>& path); // after every node was replaced (refresh, Apply)

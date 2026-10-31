@@ -1,5 +1,7 @@
 #include "game_view.h"
 
+#include "ui_common.h"
+
 #include <imgui.h>
 #include <log.h>
 
@@ -97,7 +99,7 @@ void GameViewport::drawSimulationLabel(int width, int height, double scale) cons
     const ImVec2 min(imageMin_.x + imageSize_.x - textSize.x - 2.0f * kPad, imageMin_.y);
     ImDrawList* draw = ImGui::GetWindowDrawList();
     draw->AddRectFilled(min, ImVec2(imageMin_.x + imageSize_.x, min.y + textSize.y + 2.0f * kPad), IM_COL32(0, 0, 0, 160));
-    draw->AddText(ImVec2(min.x + kPad, min.y + kPad), IM_COL32(0xff, 0xcc, 0x00, 0xff), text.c_str());
+    draw->AddText(ImVec2(min.x + kPad, min.y + kPad), kHighlight, text.c_str());
 }
 
 void GameViewport::drawStats(const Document& doc) const

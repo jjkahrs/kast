@@ -26,13 +26,7 @@ constexpr size_t kMaxThumbnails = 1024; // visible tiles at most (a texture each
 constexpr float kMinThumbnailCell = 8.0f; // pixels: smaller cells show their state color only
 constexpr int kThumbnailsPerFrame = 64; // built a frame at most: a zoom that shows hundreds stays smooth
 constexpr float kMaxCell = 96.0f; // pixels: the widest a cell fits or zooms to
-constexpr ImU32 kButton = IM_COL32(255, 170, 0, 255);    // #ffaa00: an open tile scene
-constexpr ImU32 kHighlight = IM_COL32(255, 204, 0, 255); // #ffcc00: unsaved, the hovered cell, portals
-constexpr ImU32 kDarken = IM_COL32(255, 153, 0, 255);    // #ff9900: a tile scene on disk
-constexpr ImU32 kCard = IM_COL32(49, 49, 49, 255);       // #313131: an undeclared cell
-constexpr ImU32 kField = IM_COL32(69, 69, 69, 255);      // #454545: a declared tile without a scene
-constexpr ImU32 kFieldHighlight = IM_COL32(129, 129, 129, 255); // #818181: an undeclared cell's label
-constexpr ImU32 kWarning = IM_COL32(255, 115, 102, 255); // kErrorColor: an orphan scene
+constexpr ImU32 kButton = kAccent; // an open tile scene
 constexpr ImU32 kBlack = IM_COL32(0, 0, 0, 255);
 // Not ImGui's text color, so darkenTextOnAccent leaves cell labels on an open cell's accent tint white.
 constexpr ImU32 kWhite = IM_COL32(250, 250, 250, 255);
@@ -41,10 +35,10 @@ ImU32 borderColor(kast::TileCell cell)
 {
     switch (cell) {
     case kast::TileCell::Declared: return kField;
-    case kast::TileCell::HasScene: return kDarken;
+    case kast::TileCell::HasScene: return kPressed;
     case kast::TileCell::Open: return kButton;
     case kast::TileCell::Unsaved: return kHighlight;
-    case kast::TileCell::Orphan: return kWarning;
+    case kast::TileCell::Orphan: return kError;
     case kast::TileCell::Undeclared: break;
     }
     return kCard;
@@ -310,8 +304,8 @@ void MapPanel::drawGrid(Document& doc, const ZoneSession& zone, FileActions& fil
             if (fits && text.x + 4.0f <= cell) { // long names (two-digit tiles) need a wider cell
                 if (state != kast::TileCell::Undeclared)
                     draw->AddRectFilled(min, {min.x + text.x + 4.0f, min.y + text.y}, IM_COL32(0, 0, 0, 160));
-                draw->AddText({min.x + 2.0f, min.y}, state == kast::TileCell::Undeclared ? kFieldHighlight
-                                                     : state == kast::TileCell::Orphan  ? kWarning
+                draw->AddText({min.x + 2.0f, min.y}, state == kast::TileCell::Undeclared ? kTextSecondary
+                                                     : state == kast::TileCell::Orphan  ? kError
                                                                                          : kWhite,
                               label.c_str());
             }
@@ -345,7 +339,7 @@ void MapPanel::drawGrid(Document& doc, const ZoneSession& zone, FileActions& fil
                 const ImVec2 min = grid_.corner({tx, tz});
                 const ImVec2 a{min.x + (cx0 / km::kTileSize - float(tx)) * cell, min.y + (float(tz + 1) - cz1 / km::kTileSize) * cell};
                 const ImVec2 b{min.x + (cx1 / km::kTileSize - float(tx)) * cell, min.y + (float(tz + 1) - cz0 / km::kTileSize) * cell};
-                draw->AddRectFilled(a, {std::max(b.x, a.x + 2.0f), std::max(b.y, a.y + 2.0f)}, IM_COL32(255, 204, 0, 110));
+                draw->AddRectFilled(a, {std::max(b.x, a.x + 2.0f), std::max(b.y, a.y + 2.0f)}, withAlpha(kHighlight, 110));
                 draw->AddRect(a, {std::max(b.x, a.x + 2.0f), std::max(b.y, a.y + 2.0f)}, kHighlight);
             }
     }
@@ -362,8 +356,8 @@ void MapPanel::drawGrid(Document& doc, const ZoneSession& zone, FileActions& fil
     if (input.clicked && !locked)
         click(doc, zone, files, *input.hover);
 
-    for (const auto& [color, label] : {std::pair{kField, "No scene"}, {kDarken, "Scene"}, {kButton, "Open"},
-                                       {kHighlight, "Unsaved *"}, {kWarning, "Orphan"}, {kCard, "Not a tile"}})
+    for (const auto& [color, label] : {std::pair{kField, "No scene"}, {kPressed, "Scene"}, {kButton, "Open"},
+                                       {kHighlight, "Unsaved *"}, {kError, "Orphan"}, {kCard, "Not a tile"}})
         legendItem(color, label);
     ImGui::NewLine();
     ImGui::TextDisabled("O spawn   [ ] portal");

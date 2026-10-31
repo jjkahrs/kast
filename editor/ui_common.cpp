@@ -27,28 +27,11 @@ constexpr float kFontSize = 16.0f; // at UI scale 1.0
 constexpr float kIconSize = kFontSize * 1.5f;
 constexpr int kScreenshotTimeoutFrames = 30;
 
-// Editor palette (see CLAUDE.md).
-constexpr ImU32 kAccent = IM_COL32(0xff, 0xaa, 0x00, 0xff);    // buttons, tabs, headers
-constexpr ImU32 kHighlight = IM_COL32(0xff, 0xcc, 0x00, 0xff); // hovered accent
-constexpr ImU32 kDarken = IM_COL32(0xff, 0x99, 0x00, 0xff);    // pressed accent
-constexpr ImU32 kBackground = IM_COL32(0x00, 0x00, 0x00, 0xff);
-constexpr ImU32 kCard = IM_COL32(0x31, 0x31, 0x31, 0xff);
-constexpr ImU32 kField = IM_COL32(0x45, 0x45, 0x45, 0xff);
-constexpr ImU32 kFieldHighlight = IM_COL32(0x81, 0x81, 0x81, 0xff);
+// Fills whose text darkenTextOnAccent recolors, told apart from the same colors elsewhere (fields, cards) by an alpha
+// of 0xfe, which looks the same.
+constexpr ImU32 kTabFill = withAlpha(kCard, 0xfe);     // an inactive tab: secondary text
+constexpr ImU32 kSelectedFill = withAlpha(kField, 0xfe); // the active tab, a header, a selected row: accent text
 
-ImVec4 toVec4(ImU32 color, float alpha = 1.0f)
-{
-    ImVec4 v = ImGui::ColorConvertU32ToFloat4(color);
-    v.w = alpha;
-    return v;
-}
-
-bool isAccent(ImU32 color)
-{
-    const ImU32 rgb = color & ~IM_COL32_A_MASK;
-    return rgb == (kAccent & ~IM_COL32_A_MASK) || rgb == (kHighlight & ~IM_COL32_A_MASK) ||
-           rgb == (kDarken & ~IM_COL32_A_MASK);
-}
 // A card's own splitter (channel 0 = its background, 1 = its content), not the draw list's: tables and columns inside
 // a card split with their own splitters too, so nothing drawn in a card can collide with it.
 ImDrawListSplitter cardSplitter;
@@ -141,12 +124,12 @@ bool acceptGuiPrefabDrop(std::string& path)
     });
 }
 
-void drawPrefabIcon(float x, float y, float height, bool selected)
+void drawPrefabIcon(float x, float y, float height)
 {
     ImDrawList* draw = ImGui::GetWindowDrawList();
     const float s = ImGui::GetFontSize() * 0.6f; // icon height
     const float top = y + (height - s) * 0.5f;
-    const ImU32 color = selected ? IM_COL32_BLACK : ImGui::GetColorU32(ImGuiCol_Button);
+    const ImU32 color = ImGui::GetColorU32(ImGuiCol_Button);
     const float w = s * 0.5f, q = s * 0.25f;
     const ImVec2 up{x + w, top}, left{x, top + q}, right{x + s, top + q}, mid{x + w, top + 2.0f * q};
     const ImVec2 bottomLeft{x, top + s - q}, bottomRight{x + s, top + s - q}, bottom{x + w, top + s};
@@ -161,7 +144,7 @@ void markOverride(float top, float bottom)
 {
     const float x = ImGui::GetWindowPos().x + 1.0f;
     ImGui::GetWindowDrawList()->PushClipRectFullScreen();
-    ImGui::GetWindowDrawList()->AddRectFilled({x, top}, {x + 4.0f, bottom}, IM_COL32(0xff, 0xcc, 0x00, 0xff));
+    ImGui::GetWindowDrawList()->AddRectFilled({x, top}, {x + 4.0f, bottom}, kHighlight);
     ImGui::GetWindowDrawList()->PopClipRect();
 }
 
@@ -205,67 +188,97 @@ void applyTheme()
 {
     ImGui::StyleColorsDark(); // the base for anything not set below
     ImVec4* c = ImGui::GetStyle().Colors;
-    for (ImGuiCol col : {ImGuiCol_WindowBg, ImGuiCol_MenuBarBg, ImGuiCol_ScrollbarBg, ImGuiCol_DockingEmptyBg})
+    c[ImGuiCol_Text] = toVec4(kText);
+    c[ImGuiCol_TextDisabled] = toVec4(kTextSecondary);
+    // The title bars are the dock nodes' tab bars.
+    for (ImGuiCol col : {ImGuiCol_WindowBg, ImGuiCol_MenuBarBg, ImGuiCol_ScrollbarBg, ImGuiCol_DockingEmptyBg,
+                         ImGuiCol_TitleBg, ImGuiCol_TitleBgActive, ImGuiCol_TitleBgCollapsed})
         c[col] = toVec4(kBackground);
-    for (ImGuiCol col : {ImGuiCol_PopupBg, ImGuiCol_TitleBg, ImGuiCol_TitleBgCollapsed, ImGuiCol_TableHeaderBg})
+    for (ImGuiCol col : {ImGuiCol_PopupBg, ImGuiCol_TableHeaderBg})
         c[col] = toVec4(kCard);
-    // Not the accent: a focused dock node's tab bar is a title bar, behind tabs that carry the accent.
-    c[ImGuiCol_TitleBgActive] = toVec4(kField);
     for (ImGuiCol col : {ImGuiCol_FrameBg, ImGuiCol_Border, ImGuiCol_Separator, ImGuiCol_ScrollbarGrab,
                          ImGuiCol_TableBorderStrong, ImGuiCol_TableBorderLight})
         c[col] = toVec4(kField);
     for (ImGuiCol col : {ImGuiCol_FrameBgHovered, ImGuiCol_FrameBgActive, ImGuiCol_ScrollbarGrabHovered,
                          ImGuiCol_ScrollbarGrabActive, ImGuiCol_TextSelectedBg})
         c[col] = toVec4(kFieldHighlight);
-    for (ImGuiCol col : {ImGuiCol_Button, ImGuiCol_Header, ImGuiCol_TabSelected, ImGuiCol_TabDimmedSelected,
-                         ImGuiCol_CheckMark, ImGuiCol_SliderGrab, ImGuiCol_PlotLines, ImGuiCol_PlotHistogram})
+    for (ImGuiCol col : {ImGuiCol_Button, ImGuiCol_CheckMark, ImGuiCol_SliderGrab, ImGuiCol_PlotLines,
+                         ImGuiCol_PlotHistogram})
         c[col] = toVec4(kAccent);
-    for (ImGuiCol col : {ImGuiCol_ButtonHovered, ImGuiCol_HeaderHovered, ImGuiCol_TabHovered,
-                         ImGuiCol_SeparatorHovered, ImGuiCol_ResizeGripHovered, ImGuiCol_SliderGrabActive,
-                         ImGuiCol_PlotLinesHovered, ImGuiCol_PlotHistogramHovered, ImGuiCol_NavCursor,
-                         ImGuiCol_DragDropTarget, ImGuiCol_TextLink})
+    for (ImGuiCol col : {ImGuiCol_ButtonHovered, ImGuiCol_SeparatorHovered, ImGuiCol_ResizeGripHovered,
+                         ImGuiCol_SliderGrabActive, ImGuiCol_PlotLinesHovered, ImGuiCol_PlotHistogramHovered,
+                         ImGuiCol_NavCursor, ImGuiCol_DragDropTarget, ImGuiCol_TextLink})
         c[col] = toVec4(kHighlight);
-    for (ImGuiCol col : {ImGuiCol_ButtonActive, ImGuiCol_HeaderActive, ImGuiCol_SeparatorActive,
-                         ImGuiCol_ResizeGripActive, ImGuiCol_Tab, ImGuiCol_TabDimmed})
-        c[col] = toVec4(kDarken);
-    c[ImGuiCol_TabSelectedOverline] = toVec4(kHighlight);
-    c[ImGuiCol_TabDimmedSelectedOverline] = toVec4(kDarken);
-    c[ImGuiCol_ResizeGrip] = toVec4(kAccent, 0.25f);
-    c[ImGuiCol_DockingPreview] = toVec4(kAccent, 0.7f);
+    for (ImGuiCol col : {ImGuiCol_ButtonActive, ImGuiCol_SeparatorActive, ImGuiCol_ResizeGripActive})
+        c[col] = toVec4(kPressed);
+    // Tabs and headers are grey, their text recolored by darkenTextOnAccent.
+    for (ImGuiCol col : {ImGuiCol_Tab, ImGuiCol_TabDimmed})
+        c[col] = toVec4(kTabFill);
+    for (ImGuiCol col : {ImGuiCol_TabSelected, ImGuiCol_TabDimmedSelected, ImGuiCol_Header, ImGuiCol_HeaderActive})
+        c[col] = toVec4(kSelectedFill);
+    for (ImGuiCol col : {ImGuiCol_TabHovered, ImGuiCol_HeaderHovered})
+        c[col] = toVec4(kRowHover);
+    for (ImGuiCol col : {ImGuiCol_TabSelectedOverline, ImGuiCol_TabDimmedSelectedOverline})
+        c[col] = toVec4(withAlpha(kBackground, 0));
+    c[ImGuiCol_ResizeGrip] = toVec4(withAlpha(kAccent, 0x40));
+    c[ImGuiCol_DockingPreview] = toVec4(withAlpha(kAccent, 0xb3));
 }
 
 void darkenTextOnAccent(ImDrawData* drawData)
 {
-    const ImU32 textRgb = ImGui::GetColorU32(ImGuiCol_Text) & ~IM_COL32_A_MASK;
-    const auto isText = [&](const ImDrawVert& v) { return (v.col & ~IM_COL32_A_MASK) == textRgb; };
+    constexpr ImU32 kRgb = ~IM_COL32_A_MASK;
+    const ImU32 textRgb = ImGui::GetColorU32(ImGuiCol_Text) & kRgb;
+    const auto isText = [&](const ImDrawVert& v) { return (v.col & kRgb) == textRgb; };
+    // The text color over a fill of v's color, 0 if it keeps its own. A marked fill's anti-aliased fringe has alpha 0.
+    const auto textOn = [](const ImDrawVert& v) -> ImU32 {
+        const ImU32 rgb = v.col & kRgb, alpha = v.col & IM_COL32_A_MASK;
+        if (rgb == (kAccent & kRgb) || rgb == (kHighlight & kRgb) || rgb == (kPressed & kRgb))
+            return IM_COL32_BLACK;
+        const bool marked = alpha == (kSelectedFill & IM_COL32_A_MASK) || alpha == 0;
+        if (marked && rgb == (kSelectedFill & kRgb))
+            return kAccent;
+        if (marked && rgb == (kTabFill & kRgb))
+            return kTextSecondary;
+        return 0;
+    };
+    struct Fill {
+        ImRect rect;
+        ImU32 text;
+    };
     const float minFill = ImGui::GetFontSize() * 0.5f;
-    std::vector<bool> onAccent;
-    std::vector<ImRect> fills;
+    std::vector<ImU32> recolor;
+    std::vector<Fill> fills;
     for (ImDrawList* list : drawData->CmdLists) {
-        // Vertices are in submission order: a widget's accent fill comes before the text drawn on it.
+        // Vertices are in submission order: a widget's fill comes before the text drawn on it.
         // ponytail: every text vertex is tested against every fill so far, fine for a few dozen fills per window.
-        onAccent.assign(list->VtxBuffer.Size, false);
+        recolor.assign(list->VtxBuffer.Size, 0);
         fills.clear();
-        bool inFill = false;
+        ImU32 inFill = 0; // the current run of fill vertices' text color
         for (int i = 0; i < list->VtxBuffer.Size; ++i) {
             const ImDrawVert& v = list->VtxBuffer[i];
-            if (isAccent(v.col)) {
-                if (inFill)
-                    fills.back().Add(v.pos);
-                else
-                    fills.emplace_back(v.pos, v.pos);
-                inFill = true;
+            const ImU32 text = textOn(v);
+            if (text != inFill) {
+                // Lines (a tab bar's underline) and marks too small to hold text are not fills.
+                if (inFill && (fills.back().rect.GetWidth() < minFill || fills.back().rect.GetHeight() < minFill))
+                    fills.pop_back();
+                if (text)
+                    fills.push_back({ImRect(v.pos, v.pos), text});
+                inFill = text;
+            }
+            if (text) {
+                fills.back().rect.Add(v.pos);
                 continue;
             }
-            // Lines (a tab bar's underline) and marks too small to hold text are not fills.
-            if (inFill && (fills.back().GetWidth() < minFill || fills.back().GetHeight() < minFill))
-                fills.pop_back();
-            inFill = false;
-            onAccent[i] = isText(v) &&
-                          std::any_of(fills.begin(), fills.end(), [&](const ImRect& r) { return r.Contains(v.pos); });
+            if (!isText(v))
+                continue;
+            // The last fill under it: a tab drawn over its tab bar's underline.
+            const auto under =
+                std::find_if(fills.rbegin(), fills.rend(), [&](const Fill& f) { return f.rect.Contains(v.pos); });
+            if (under != fills.rend())
+                recolor[i] = under->text;
         }
 
-        // Whole triangles, so a glyph whose descender hangs below the fill turns black as one. Only those sampling the
+        // Whole triangles, so a glyph whose descender hangs below the fill changes as one. Only those sampling the
         // font atlas: images (the viewports, thumbnails) carry a plain texture id and keep their white tint.
         for (const ImDrawCmd& cmd : list->CmdBuffer) {
             if (cmd.UserCallback || !cmd.TexRef._TexData)
@@ -273,12 +286,13 @@ void darkenTextOnAccent(ImDrawData* drawData)
             for (unsigned int i = 0; i + 2 < cmd.ElemCount; i += 3) {
                 const ImDrawIdx* tri = &list->IdxBuffer[cmd.IdxOffset + i];
                 const unsigned int a = cmd.VtxOffset + tri[0], b = cmd.VtxOffset + tri[1], c = cmd.VtxOffset + tri[2];
-                if (!onAccent[a] && !onAccent[b] && !onAccent[c])
+                const ImU32 text = recolor[a] ? recolor[a] : recolor[b] ? recolor[b] : recolor[c];
+                if (!text)
                     continue;
                 for (unsigned int index : {a, b, c}) {
                     ImDrawVert& v = list->VtxBuffer[index];
                     if (isText(v))
-                        v.col = (v.col & IM_COL32_A_MASK) | (kBackground & ~IM_COL32_A_MASK);
+                        v.col = (v.col & IM_COL32_A_MASK) | (text & kRgb);
                 }
             }
         }

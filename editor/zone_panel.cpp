@@ -26,10 +26,10 @@ namespace km = kast::map;
 constexpr const char* kUnsavedPopup = "Unsaved zone changes";
 constexpr const char* kNewMapPopup = "New Map";
 constexpr const char* kRemoveTilePopup = "Remove tile?";
-constexpr ImVec4 kDirtyColor{1.0f, 0.8f, 0.0f, 1.0f}; // #ffcc00, the palette's highlight
-constexpr ImU32 kBrushColor = IM_COL32(255, 204, 0, 255); // the same highlight: the brush ring
-constexpr ImVec4 kToolIdle{0.27f, 0.27f, 0.27f, 1.0f}; // #454545, the palette's text field: an idle tool button
-constexpr ImVec4 kToolActive{1.0f, 0.8f, 0.0f, 1.0f}; // #ffcc00, the highlight: the active tool
+constexpr ImVec4 kDirtyColor = toVec4(kHighlight);
+constexpr ImU32 kBrushColor = kHighlight; // the brush ring
+constexpr ImVec4 kToolIdle = toVec4(kField); // an idle tool button
+constexpr ImVec4 kToolActive = toVec4(kHighlight); // the active tool
 constexpr float kPickDistance = 10000.0f; // metres: past the far corner of any map in view
 constexpr std::pair<const char*, ZonePanel::Tool> kToolNames[] = {
     {"Raise", ZonePanel::Tool::Raise},           {"Lower", ZonePanel::Tool::Lower},

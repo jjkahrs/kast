@@ -29,16 +29,16 @@ using zone::Json;
 using zone::Point;
 using zone::Vec3;
 
-constexpr ImU32 kAreaColor = IM_COL32(255, 170, 0, 200);
-constexpr ImU32 kAreaSelected = IM_COL32(255, 204, 0, 255);
+constexpr ImU32 kAreaColor = withAlpha(kAccent, 200);
+constexpr ImU32 kAreaSelected = kHighlight;
 constexpr ImU32 kPortalColor = IM_COL32(110, 200, 255, 230);
 constexpr ImU32 kSpawnMarker = IM_COL32(255, 110, 70, 255);
 constexpr ImU32 kPathColor = IM_COL32(120, 255, 140, 220);
 constexpr ImU32 kDraftColor = IM_COL32(255, 255, 255, 230);
 constexpr ImU32 kVisualColor = IM_COL32(120, 220, 90, 200);
-constexpr ImU32 kObstacleColor = IM_COL32(255, 153, 0, 230); // the palette's darken
+constexpr ImU32 kObstacleColor = withAlpha(kPressed, 230);
 constexpr ImU32 kInteractableColor = IM_COL32(110, 200, 255, 240);
-constexpr ImU32 kScatterColor = IM_COL32(255, 204, 0, 255);
+constexpr ImU32 kScatterColor = kHighlight;
 constexpr ImU32 kEraseColor = IM_COL32(255, 80, 60, 255);
 constexpr float kHandlePx = 10.0f;     // grab distance of a handle, in window points
 constexpr float kHeadingLength = 8.0f; // metres
