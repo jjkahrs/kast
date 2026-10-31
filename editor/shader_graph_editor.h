@@ -3,6 +3,8 @@
 #include "shader_graph_doc.h"
 #include "shader_preview.h"
 
+#include <imgui.h>
+
 #include <array>
 #include <chrono>
 #include <filesystem>
@@ -24,8 +26,10 @@ struct EditorContext;
 //   Comment frames: titled, resized from their edges; dragging one moves the nodes inside it.
 // - Graph Inspector: the selected node's settings and constant inputs, or a selected frame's title; with nothing
 //   selected, the graph's params (add, remove, rename, retype, defaults).
-// - Shader Preview: the graph, unsaved edits included, on a sphere, cube or plane (ShaderPreview); "View generated code"
-//   shows the .kshader text the library compiles.
+// - Shader Preview: not a panel but an inset in the canvas' bottom-right corner: the graph, unsaved edits included, on a
+//   sphere, cube or plane (ShaderPreview); "View generated code" shows the .kshader text the library compiles. Resized
+//   from its top-left corner and top / left edges (the bottom-right stays put), collapsed to its header; for the session
+//   only. The mouse over it never reaches the canvas (no pan, zoom, box select or add menu).
 // Live update: 0.3 s after the last edit the graph goes to ShaderLibrary as an override of its file (setOverride), which
 // compiles it on its worker while frames keep drawing; every material using the graph (Scene, Game, preview) then
 // renders it, the last good version until a compile succeeds. Saving writes the file; opening another graph (or the
@@ -41,7 +45,6 @@ public:
     // Window names (stable ids; the visible title adds the file name and dirty marker).
     static constexpr const char* kCanvasWindow = "###Shader Graph";
     static constexpr const char* kInspectorWindow = "###Graph Inspector";
-    static constexpr const char* kPreviewWindow = "###Shader Preview";
     static constexpr double kLiveDelay = 0.3; // seconds after the last edit until the graph recompiles
 
     // The Shader Preview renders on views previewView .. previewView + ShaderPreview::kViews - 1.
@@ -51,11 +54,11 @@ public:
 
     // Opens file (after the unsaved-changes prompt if dirty) and brings the panels to the front.
     void open(const std::filesystem::path& file);
-    // One panel a frame: Shader Preview, Graph Inspector, then the canvas, which then zooms to fit the graph (at its
+    // One panel a frame: Graph Inspector, then the canvas, which then zooms to fit the graph (at its
     // docked size: framed while still hidden it would fit the wrong size).
     void focusPanels()
     {
-        focusStep_ = 3;
+        focusStep_ = 2;
         navigateIn_ = 3;
     }
     // The open graph's model: the --graph-* flags edit it as the panels do.
@@ -88,10 +91,10 @@ public:
     void update(const std::filesystem::path& root);
     ShaderPreview& preview() { return preview_; }
     void showGeneratedCode() { codeRequested_ = true; } // the "View generated code" window
+    void collapsePreview() { previewCollapsed_ = true; } // the preview inset, to its header
 
-    void drawCanvas();
+    void drawCanvas(float time); // time: TIME for the preview inset
     void drawInspector();
-    void drawPreview(float time); // time: TIME for the preview
     void drawModals();
 
 private:
@@ -128,9 +131,13 @@ private:
     void showFieldError(const std::string& key, bool ok, const std::string& error);
     void applyLive(); // hands the graph to the library if its generated code changed
     void drawIssues(int node) const; // the node's errors and warnings, one line each
+    void drawPreviewInset(ImVec2 areaMin, ImVec2 areaMax, float time); // in the canvas area areaMin..areaMax
 
     ShaderGraphDoc doc_;
     ShaderPreview preview_;
+    ImVec2 previewSize_{300.0f, 300.0f}; // the inset's, header included; clamped to the canvas when drawn
+    bool previewCollapsed_ = false;
+    ImVec2 previewMin_{}, previewMax_{}; // where the inset was drawn last (empty: nowhere)
     // Live update.
     using Clock = std::chrono::steady_clock;
     std::string livePath_;

@@ -50,9 +50,9 @@ and Build ships it. The file format, the type rules and the code generation are 
 </ul>
 
 <h2 id="sg-panels">Panels</h2>
-<p>Three dockable panels, docked by default next to the views (<strong>Shader Graph</strong> with Scene and Game,
-<strong>Graph Inspector</strong> with the Inspector, <strong>Shader Preview</strong> with the Hierarchy). Opening a graph brings them
-to the front. Their titles show the file name, with a <code>*</code> while it has unsaved changes.</p>
+<p>Two dockable panels, docked by default next to the views (<strong>Shader Graph</strong> with Scene and Game,
+<strong>Graph Inspector</strong> with the Inspector), and the <strong>Shader Preview</strong>, an inset inside the canvas. Opening a
+graph brings the panels to the front. Their titles show the file name, with a <code>*</code> while it has unsaved changes.</p>
 <ul>
 <li><strong>Shader Graph</strong>: the canvas. A summary line at its top reads <em>Compiled</em>, <em>Compiling...</em>, or in red
   <em>Errors: the last good version renders - 1 error, 1 warning - node 12: ...</em>.</li>
@@ -69,11 +69,22 @@ to the front. Their titles show the file name, with a <code>*</code> while it ha
     adds one, <strong>Remove</strong> deletes one. Renaming a param renames it on its Param nodes; changing its type drops the links
     the new type can't make. A material sets its own values in the Inspector.</li>
   </ul></li>
-<li><strong>Shader Preview</strong>: the graph as it is now, saved or not, on a lit <strong>Sphere</strong>, <strong>Cube</strong> or
-  <strong>Plane</strong>, with a directional light, ambient light, the sky and TIME running. Drag to orbit, wheel to zoom. The
-  preview material is the built-in material's defaults plus the params' defaults; a graph that samples the screen or depth
-  texture gets alpha mode blend, so it can render. <strong>View generated code</strong> shows the <code>.kshader</code> text the
-  library compiles, read-only, with <strong>Copy to clipboard</strong>.</li>
+<li><strong>Shader Preview</strong>: an inset in the Shader Graph canvas, not a panel of its own. Its bottom-right corner sits
+  8 px in from the canvas' bottom-right corner; it starts 300 &times; 300 px. It shows the graph as it is now, saved or not, on a
+  lit <strong>Sphere</strong>, <strong>Cube</strong> or <strong>Plane</strong>, with a directional light, ambient light, the sky and TIME
+  running. Drag to orbit, wheel to zoom. The preview material is the built-in material's defaults plus the params' defaults; a
+  graph that samples the screen or depth texture gets alpha mode blend, so it can render. <strong>View generated code</strong>
+  shows the <code>.kshader</code> text the library compiles, read-only, with <strong>Copy to clipboard</strong>. A graph outside the
+  project has no preview: the inset says so.
+  <ul>
+  <li><strong>Resize</strong>: drag its top-left corner, or its top or left edge. The bottom-right corner stays put. At least
+    160 &times; 120 px, at most 80% of the canvas' width and height; a smaller canvas shrinks it to fit. The size lasts until
+    the editor quits.</li>
+  <li><strong>Collapse</strong>: the arrow in its header folds it to the header strip, still at the bottom right; the arrow again
+    brings it back at its size.</li>
+  <li>The mouse over the inset (or a drag that started in it) is the preview's: the canvas doesn't pan, zoom, box-select or
+    open the add menu (right-click or Space) there.</li>
+  </ul></li>
 </ul>
 
 <h2 id="sg-canvas">The canvas: nodes, links, the add menu</h2>
@@ -392,7 +403,7 @@ in the Scene view and in Play.</p>
 <p>For tests and screenshots, the panels' edits run from flags: <code>--open-graph</code>, <code>--graph-add</code>,
 <code>--graph-link</code>, <code>--graph-unlink</code>, <code>--graph-select</code>, <code>--graph-delete</code>, <code>--graph-set</code>,
 <code>--graph-comment</code>, <code>--graph-paste</code>, <code>--graph-undo</code>, <code>--graph-redo</code>, <code>--graph-save</code>,
-<code>--graph-add-menu</code>, <code>--graph-preview</code>, <code>--graph-view-code</code>, plus <code>--assets-create
+<code>--graph-add-menu</code>, <code>--graph-preview</code>, <code>--graph-preview-collapse</code>, <code>--graph-view-code</code>, plus <code>--assets-create
 shadergraph:&lt;folder&gt;</code> and canvas gestures with <code>--sim-mouse</code> / <code>--sim-key</code>. See
 <a href="command-line.html#shader-graph-flags">Command line: Shader Graph</a>.</p>
 </main>

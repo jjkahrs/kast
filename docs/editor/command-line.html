@@ -489,7 +489,7 @@ logs <code>[error] --graph-... &lt;value&gt;: &lt;why&gt;</code>. In PowerShell,
 <tbody>
 <tr>
 <td><code>--open-graph &lt;file.kshadergraph&gt;</code></td>
-<td>Open the graph in the Shader Graph, Graph Inspector and Shader Preview panels (relative paths: to the project, else the working directory) and bring them to the front. Opening compiles it (for the preview). With unsaved changes, a later <code>--open-graph</code> asks Save / Discard / Cancel.</td>
+<td>Open the graph in the Shader Graph and Graph Inspector panels and the canvas' Shader Preview inset (relative paths: to the project, else the working directory) and bring them to the front. Opening compiles it (for the preview). With unsaved changes, a later <code>--open-graph</code> asks Save / Discard / Cancel.</td>
 </tr>
 <tr>
 <td><code>--graph-add &lt;type&gt;[,x,y]</code></td>
@@ -534,6 +534,10 @@ logs <code>[error] --graph-... &lt;value&gt;: &lt;why&gt;</code>. In PowerShell,
 <tr>
 <td><code>--graph-preview sphere\|cube\|plane</code></td>
 <td>Show the Shader Preview on that mesh.</td>
+</tr>
+<tr>
+<td><code>--graph-preview-collapse</code></td>
+<td>Start the Shader Preview inset collapsed to its header strip.</td>
 </tr>
 <tr>
 <td><code>--graph-view-code</code></td>

@@ -397,7 +397,7 @@ void ShaderGraphEditor::drawIssues(int node) const
 
 // --- Canvas ---
 
-void ShaderGraphEditor::drawCanvas()
+void ShaderGraphEditor::drawCanvas(float time)
 {
     if (focusStep_ == 1) // last: the canvas keeps the focus
         ImGui::SetNextWindowFocus();
@@ -439,8 +439,9 @@ void ShaderGraphEditor::drawCanvas()
     ImGui::SetCursorPos(ImVec2(ImGui::GetCursorPosX() + 8.0f, ImGui::GetCursorPosY() + 2.0f));
     ImGui::TextColored(ImColor(errors ? kRefusedColor : !issues_.empty() ? kHighlight : kFieldHighlight), "%s",
                        summary.c_str());
-    const ImVec2 center(ImGui::GetCursorScreenPos().x + ImGui::GetContentRegionAvail().x * 0.5f,
-                        ImGui::GetCursorScreenPos().y + ImGui::GetContentRegionAvail().y * 0.5f);
+    const ImVec2 areaMin = ImGui::GetCursorScreenPos(); // the canvas area, under the summary line
+    const ImVec2 areaMax(areaMin.x + ImGui::GetContentRegionAvail().x, areaMin.y + ImGui::GetContentRegionAvail().y);
+    const ImVec2 center((areaMin.x + areaMax.x) * 0.5f, (areaMin.y + areaMax.y) * 0.5f);
     ed::SetCurrentEditor(canvas_);
     ed::Style& style = ed::GetStyle();
     style.Colors[ed::StyleColor_Bg] = ImColor(0, 0, 0);
@@ -456,6 +457,17 @@ void ShaderGraphEditor::drawCanvas()
     style.NodeRounding = 4.0f;
     style.NodePadding = ImVec4(8.0f, 4.0f, 8.0f, 8.0f);
 
+    // The mouse is the preview inset's while over it, or while a press made in it is held: the canvas doesn't see it
+    // then (imgui-node-editor pans, box-selects and opens its menus by the mouse's position, whatever ImGui hovers).
+    ImGuiIO& io = ImGui::GetIO();
+    const ImRect inset(previewMin_, previewMax_);
+    bool insetMouse = inset.Contains(io.MousePos);
+    for (int button = 0; button < ImGuiMouseButton_COUNT; ++button)
+        if (ImGui::IsMouseDown(button))
+            insetMouse = inset.Contains(io.MouseClickedPos[button]);
+    const ImVec2 mousePos = io.MousePos;
+    if (insetMouse)
+        io.MousePos = ImVec2(-FLT_MAX, -FLT_MAX); // ImGui's "no mouse"
     ed::Begin("Shader Graph Canvas");
     const ImVec2 mouse = ImGui::GetMousePos(); // canvas coordinates while the canvas isn't suspended
     mouse_ = {mouse.x, mouse.y};
@@ -493,7 +505,7 @@ void ShaderGraphEditor::drawCanvas()
     // Right-click or Space on the canvas: the add menu at the cursor.
     ed::Suspend();
     if (ed::ShowBackgroundContextMenu() ||
-        (ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows) && !ImGui::IsAnyItemActive() &&
+        (ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows) && !insetMouse && !ImGui::IsAnyItemActive() &&
          ImGui::IsKeyPressed(ImGuiKey_Space, false)))
         requestAddMenu(std::nullopt, false, mouse_);
     ed::Resume();
@@ -501,8 +513,10 @@ void ShaderGraphEditor::drawCanvas()
     if (navigateIn_ > 0 && --navigateIn_ == 0)
         ed::NavigateToContent(0.0f);
     ed::End();
+    io.MousePos = mousePos;
     syncFromCanvas();
     ed::SetCurrentEditor(nullptr);
+    drawPreviewInset(areaMin, areaMax, time);
     ImGui::End();
 }
 
@@ -948,7 +962,7 @@ void ShaderGraphEditor::showFieldError(const std::string& key, bool ok, const st
 
 void ShaderGraphEditor::drawInspector()
 {
-    if (focusStep_ == 2)
+    if (focusStep_ == 2) // first
         ImGui::SetNextWindowFocus();
     if (ImGui::Begin(title("Graph Inspector", kInspectorWindow).c_str()) && doc_.isOpen()) {
         saveShortcut();
@@ -1162,35 +1176,117 @@ void ShaderGraphEditor::drawParams()
     }
 }
 
-// --- Shader Preview ---
+// --- Shader Preview inset ---
 
-void ShaderGraphEditor::drawPreview(float time)
+void ShaderGraphEditor::drawPreviewInset(ImVec2 areaMin, ImVec2 areaMax, float time)
 {
-    if (focusStep_ == 3)
-        ImGui::SetNextWindowFocus();
-    if (ImGui::Begin(title("Shader Preview", kPreviewWindow).c_str()) && !livePath_.empty()) {
-        int mesh = static_cast<int>(preview_.mesh);
-        for (const auto& [value, label] : {std::pair{kast::Primitive::Sphere, "Sphere"}, {kast::Primitive::Cube, "Cube"},
-                                           {kast::Primitive::Plane, "Plane"}}) {
-            if (value != kast::Primitive::Sphere)
-                ImGui::SameLine();
-            ImGui::RadioButton(label, &mesh, static_cast<int>(value));
+    constexpr float kMargin = 8.0f; // from the canvas area's bottom-right corner
+    constexpr float kGrip = 6.0f;   // the resize edges' thickness
+    constexpr ImVec2 kMinSize(160.0f, 120.0f);
+    const float header = ImGui::GetFrameHeight();
+    // At most 80% of the canvas (never under the minimum); a canvas too small for that clips it at its top-left.
+    const ImVec2 limit(std::max(kMinSize.x, (areaMax.x - areaMin.x) * 0.8f), std::max(kMinSize.y, (areaMax.y - areaMin.y) * 0.8f));
+    const ImVec2 max(areaMax.x - kMargin, areaMax.y - kMargin);
+    const ImVec2 min(std::max(max.x - std::clamp(previewSize_.x, kMinSize.x, limit.x), areaMin.x),
+                     std::max(max.y - (previewCollapsed_ ? header : std::clamp(previewSize_.y, kMinSize.y, limit.y)), areaMin.y));
+    const ImVec2 size(max.x - min.x, max.y - min.y);
+    previewMin_ = previewMax_ = ImVec2();
+    if (size.x <= 0.0f || size.y <= 0.0f)
+        return;
+    previewMin_ = min;
+    previewMax_ = max;
+    // A child window drawn over the canvas.
+    ImGui::SetCursorScreenPos(min);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, kCard);
+    constexpr ImGuiWindowFlags kFlags = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
+    ImGui::BeginChild("Shader Preview", size, ImGuiChildFlags_None, kFlags);
+    ImGui::PopStyleColor();
+    ImGui::PopStyleVar();
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    if (!previewCollapsed_) {
+        // Resize grips, first so they win over the header: the top-left corner, the top and left edges.
+        struct Grip {
+            const char* id;
+            ImVec2 size;
+            bool x, y;
+            ImGuiMouseCursor cursor;
+        };
+        for (const Grip& grip : {Grip{"##corner", ImVec2(kGrip * 2.0f, kGrip * 2.0f), true, true, ImGuiMouseCursor_ResizeNWSE},
+                                 Grip{"##top", ImVec2(size.x, kGrip), false, true, ImGuiMouseCursor_ResizeNS},
+                                 Grip{"##left", ImVec2(kGrip, size.y), true, false, ImGuiMouseCursor_ResizeEW}}) {
+            ImGui::SetCursorScreenPos(min);
+            ImGui::InvisibleButton(grip.id, grip.size);
+            if (ImGui::IsItemHovered() || ImGui::IsItemActive())
+                ImGui::SetMouseCursor(grip.cursor);
+            if (ImGui::IsItemActive()) { // the bottom-right corner stays put
+                const ImVec2 mouse = ImGui::GetIO().MousePos;
+                if (grip.x)
+                    previewSize_.x = std::clamp(max.x - mouse.x, kMinSize.x, limit.x);
+                if (grip.y)
+                    previewSize_.y = std::clamp(max.y - mouse.y, kMinSize.y, limit.y);
+            }
         }
-        preview_.mesh = static_cast<kast::Primitive>(mesh);
-        if (ImGui::Button("View generated code"))
-            codeRequested_ = true;
-        const kast::ShaderLibrary::Status status = kast::shaders().status(livePath_);
-        if (status.state == kast::ShaderLibrary::State::Compiling)
-            ImGui::TextDisabled("Compiling...");
-        else if (status.state == kast::ShaderLibrary::State::Failed)
-            ImGui::TextColored(kErrorColor, status.hasShader ? "Errors: the last good version renders" : "Errors: renders magenta");
-        else
-            ImGui::TextDisabled(doc_.dirty() ? "Unsaved edits shown. Drag to orbit." : "Drag to orbit.");
-        preview_.draw(livePath_, time);
-    } else if (livePath_.empty()) {
-        ImGui::TextDisabled(doc_.isOpen() ? "The graph isn't in the project: no preview." : "No shader graph open.");
     }
-    ImGui::End();
+    // The header strip: the collapse arrow and the title, black on #ffaa00.
+    draw->AddRectFilled(min, ImVec2(max.x, min.y + header), kHeader);
+    ImGui::SetCursorScreenPos(ImVec2(min.x + kGrip, min.y));
+    ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32_BLACK);
+    ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(0, 0, 0, 0));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, kHighlight);
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, kDarken);
+    if (ImGui::ArrowButton("##collapse", previewCollapsed_ ? ImGuiDir_Up : ImGuiDir_Down))
+        previewCollapsed_ = !previewCollapsed_;
+    ImGui::PopStyleColor(3);
+    ImGui::SameLine();
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted("Shader Preview");
+    ImGui::PopStyleColor();
+    if (!previewCollapsed_) {
+        // Between the left grip and a margin as wide on the right: a child window there would take the grip's mouse.
+        ImGui::SetCursorScreenPos(ImVec2(min.x + kGrip, min.y + header));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, kGrip));
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, IM_COL32(0, 0, 0, 0)); // the inset's #313131 shows through
+        ImGui::BeginChild("body", ImVec2(std::max(size.x - kGrip * 2.0f, 1.0f), 0.0f), ImGuiChildFlags_AlwaysUseWindowPadding, kFlags);
+        ImGui::PopStyleColor();
+        ImGui::PopStyleVar();
+        if (livePath_.empty()) {
+            ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+            ImGui::TextWrapped("The graph isn't in the project: no preview.");
+            ImGui::PopStyleColor();
+        } else {
+            // One row while it fits: a control that doesn't goes to the next line.
+            const auto flow = [](float width) {
+                ImGui::SameLine();
+                if (ImGui::GetContentRegionAvail().x < width)
+                    ImGui::NewLine();
+            };
+            const ImGuiStyle& style = ImGui::GetStyle();
+            int mesh = static_cast<int>(preview_.mesh);
+            for (const auto& [value, label] : {std::pair{kast::Primitive::Sphere, "Sphere"}, {kast::Primitive::Cube, "Cube"},
+                                               {kast::Primitive::Plane, "Plane"}}) {
+                if (value != kast::Primitive::Sphere)
+                    flow(ImGui::GetFrameHeight() + style.ItemInnerSpacing.x + ImGui::CalcTextSize(label).x);
+                ImGui::RadioButton(label, &mesh, static_cast<int>(value));
+            }
+            preview_.mesh = static_cast<kast::Primitive>(mesh);
+            flow(ImGui::CalcTextSize("View generated code").x + style.FramePadding.x * 2.0f);
+            if (ImGui::Button("View generated code"))
+                codeRequested_ = true;
+            const kast::ShaderLibrary::Status status = kast::shaders().status(livePath_);
+            const bool failed = status.state == kast::ShaderLibrary::State::Failed;
+            const char* text = status.state == kast::ShaderLibrary::State::Compiling ? "Compiling..."
+                               : failed ? (status.hasShader ? "Errors: the last good version renders" : "Errors: renders magenta")
+                               : doc_.dirty() ? "Unsaved edits shown. Drag to orbit."
+                                              : "Drag to orbit.";
+            flow(ImGui::CalcTextSize(text).x);
+            ImGui::TextColored(failed ? kErrorColor : style.Colors[ImGuiCol_TextDisabled], "%s", text);
+            preview_.draw(livePath_, time);
+        }
+        ImGui::EndChild();
+    }
+    draw->AddRect(min, max, kFieldHighlight); // the 1 px border, over the header and body's edges
+    ImGui::EndChild();
 }
 
 // --- Modals ---

@@ -62,24 +62,31 @@ set_tests_properties(shader_graph_reload PROPERTIES PASS_REGULAR_EXPRESSION "\nO
 # file stays as it is.
 # - shader_graph_update: on shader_graph_demo.scene, a red Vector3 into the Fragment Output's EMISSION. 0.3 s after the
 #   edit the graph compiles on the library's worker (frames keep drawing: the log counts them, at least 2, where a
-#   blocking compile counts 1) and the Scene view's cube and the preview's sphere turn red without a save (probes).
+#   blocking compile counts 1) and the Scene view's cube turns red without a save (probe); shader_graph_update_preview:
+#   the same edit with the canvas in front, its preview inset's sphere red.
 set(KAST_GRAPH_UPDATE_ARGS --scene ${KAST_SHADER_TEST_PROJECT}/shader_graph_demo.scene --size 1600x900 --fixed-dt 0.016
     --open-graph shaders/graph_demo.kshadergraph)
 kast_graph_shot(update "${KAST_GRAPH_UPDATE_ARGS} --focus-panel Scene --graph-add constant_vec3,900,500 --graph-set 12.value=[1,0,0] --graph-link 12.out,1.EMISSION --screenshot-on-log 10,live-updated"
   -DFRAMES=600 "-DEXPECT_OUTPUT=live-updated [0-9.]+ s after the edit \\(([2-9]|[1-9][0-9]+) frames drawn while it compiled\\)"
   "-DFORBID_OUTPUT=\\[error\\]|Saved shader graph")
 add_test(NAME shader_graph_update_probe COMMAND kast_self_check --probe-png "${CMAKE_CURRENT_BINARY_DIR}/shader_graph_update.png"
-         0.428125,0.4,255,100,85,60 0.1375,0.4444,255,108,90,60)
+         0.428125,0.4,255,100,85,60)
 set_tests_properties(shader_graph_update_screenshot PROPERTIES FIXTURES_SETUP shader_graph_update_shot)
 set_tests_properties(shader_graph_update_probe PROPERTIES FIXTURES_REQUIRED shader_graph_update_shot)
+kast_graph_shot(update_preview "${KAST_GRAPH_UPDATE_ARGS} --graph-add constant_vec3,900,500 --graph-set 12.value=[1,0,0] --graph-link 12.out,1.EMISSION --screenshot-on-log 10,live-updated"
+  -DFRAMES=600 "-DEXPECT_OUTPUT=live-updated" "-DFORBID_OUTPUT=\\[error\\]|Saved shader graph")
+add_test(NAME shader_graph_update_preview_probe COMMAND kast_self_check --probe-png "${CMAKE_CURRENT_BINARY_DIR}/shader_graph_update_preview.png"
+         0.70625,0.5889,255,108,90,60)
+set_tests_properties(shader_graph_update_preview_screenshot PROPERTIES FIXTURES_SETUP shader_graph_update_preview_shot)
+set_tests_properties(shader_graph_update_preview_probe PROPERTIES FIXTURES_REQUIRED shader_graph_update_preview_shot)
 # - shader_graph_broken: a Custom Expression shaderc rejects (its "vec3 o" spelled with a JSON escape for the
 #   space: EXTRA_ARGS splits on spaces), and a vec4 into ALBEDO (a warning): the error maps to node
 #   12 (outlined red, in the summary line and the log), the warning to node 1 (#ffcc00); the preview keeps the last good
-#   version (not magenta: probe).
+#   version (not magenta: probe, the canvas' preview inset).
 kast_graph_shot(broken "${KAST_GRAPH_UPDATE_ARGS} --graph-add custom_expression,1000,480 --graph-set 12.outputs=\"vec3\\u0020o\" --graph-set 12.code=\"o=undefinedThing\" --graph-link 12.o,1.EMISSION --graph-link 8.rgba,1.ALBEDO --screenshot-on-log 10,live-update"
   -DFRAMES=600 "-DEXPECT_OUTPUT=node 1: input 'ALBEDO': vec4 truncated to vec3.*node 12: .*live-update failed [0-9.]+ s after the edit. the last good version keeps rendering")
 add_test(NAME shader_graph_broken_probe COMMAND kast_self_check --probe-png "${CMAKE_CURRENT_BINARY_DIR}/shader_graph_broken.png"
-         0.1375,0.4444,126,108,90,60)
+         0.70625,0.5889,126,108,90,60)
 set_tests_properties(shader_graph_broken_screenshot PROPERTIES FIXTURES_SETUP shader_graph_broken_shot)
 set_tests_properties(shader_graph_broken_probe PROPERTIES FIXTURES_REQUIRED shader_graph_broken_shot)
 # - shader_graph_code: "View generated code" (the library's text); shader_graph_preview_cube: the preview's cube.
@@ -99,22 +106,31 @@ set_tests_properties(shader_graph_material_written PROPERTIES FIXTURES_REQUIRED 
   PASS_REGULAR_EXPRESSION "\"speed\": 2.5,[ \n]*\"tint\": \\[[ \n]*1.0,[ \n]*0.8,[ \n]*0.5[ \n]*\\]" FAIL_REGULAR_EXPRESSION "\"speed\": 1.0")
 
 # Canvas gestures through --sim-mouse (in-app SDL events; ",hold" keeps the button down over the target) and --sim-key,
-# at graph_demo's pin positions in the 1600x900 window (offsets from the Scene view's center, 800,352):
+# at graph_demo's pin positions in the 1600x900 window (offsets from the Scene view's center, 800,352); the preview inset
+# is collapsed where it would cover the Fragment Output's pins:
 # - sim_link: Float.out dragged onto the Fragment Output's EMISSION links them.
 # - sim_refused: Param pattern (texture2D) held over ALPHA: the red link and why; no link is made.
 # - sim_pin_menu: Float.out dropped on empty canvas opens the add menu filtered from that pin.
 # - sim_delete: a box around Time, Multiply and Param speed selects them; Delete removes them.
 # - sim_copy_paste: the same box, Ctrl+C, Ctrl+V: three new nodes (their links kept) at the cursor, selected.
-kast_graph_shot(sim_link "${KAST_GRAPH_ARGS} --sim-mouse 30,left,201,-164,0,86,160,8"
+kast_graph_shot(sim_link "${KAST_GRAPH_ARGS} --graph-preview-collapse --sim-mouse 30,left,201,-164,0,86,160,8"
   "-DEXPECT_OUTPUT=Shader Graph: linked 11.out to 1.EMISSION" "-DFORBID_OUTPUT=\\[error\\]")
 kast_graph_shot(sim_refused "${KAST_GRAPH_ARGS} --sim-mouse 30,left,292,91,0,-5,-150,100" -DFRAMES=50
   "-DFORBID_OUTPUT=\\[error\\]|Shader Graph: linked")
-kast_graph_shot(sim_pin_menu "${KAST_GRAPH_ARGS} --sim-mouse 30,left,124,68,0,86,160,3"
+kast_graph_shot(sim_pin_menu "${KAST_GRAPH_ARGS} --graph-preview-collapse --sim-mouse 30,left,124,68,0,86,160,3"
   "-DEXPECT_OUTPUT=Shader Graph: add menu, [0-9]+ entries that link from 11.out" "-DFORBID_OUTPUT=\\[error\\]")
 kast_graph_shot(sim_delete "${KAST_GRAPH_ARGS} --sim-mouse 30,left,315,-270,0,-465,248,3 --sim-key 45,Delete" -DFRAMES=70
   "-DEXPECT_OUTPUT=Shader Graph: deleted 3 nodes" "-DFORBID_OUTPUT=\\[error\\]")
 kast_graph_shot(sim_copy_paste "${KAST_GRAPH_ARGS} --sim-mouse 30,left,315,-270,0,-465,248,3 --sim-key 45,ctrl+C --sim-key 55,ctrl+V"
   -DFRAMES=80 "-DEXPECT_OUTPUT=Shader Graph: copied 3 nodes.*Shader Graph: pasted 3 nodes" "-DFORBID_OUTPUT=\\[error\\]")
+# - sim_canvas_menu: a right-click on empty canvas opens the add menu; sim_inset_menu / sim_inset_space: a right-click,
+#   or Space, over the preview inset's image (1120,507) doesn't.
+kast_graph_shot(sim_canvas_menu "${KAST_GRAPH_ARGS} --sim-mouse 30,right,0,0,0,-300,200"
+  "-DEXPECT_OUTPUT=Shader Graph: add menu, [0-9]+ entries" "-DFORBID_OUTPUT=\\[error\\]")
+kast_graph_shot(sim_inset_menu "${KAST_GRAPH_ARGS} --sim-mouse 30,right,0,0,0,320,155"
+  "-DEXPECT_OUTPUT=--sim-mouse: press at 1120,507" "-DFORBID_OUTPUT=\\[error\\]|add menu")
+kast_graph_shot(sim_inset_space "${KAST_GRAPH_ARGS} --sim-mouse 30,none,0,0,0,320,155 --sim-key 40,Space"
+  "-DEXPECT_OUTPUT=--sim-mouse: press at 1120,507" "-DFORBID_OUTPUT=\\[error\\]|add menu")
 # - sim_revert: an unsaved live edit, then opening another graph and clicking Discard: the library drops the edit and
 #   recompiles graph_demo from its file (the Scene goes back to it).
 kast_graph_shot(sim_revert "${KAST_GRAPH_UPDATE_ARGS} --graph-add constant_vec3,900,500 --graph-set 12.value=[1,0,0] --graph-link 12.out,1.EMISSION --open-graph shaders/empty.kshadergraph --sim-mouse 45,left,0,0,0,-176,121,1"
