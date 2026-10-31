@@ -21,7 +21,7 @@
 #include <string>
 #include <vector>
 
-// Hierarchy (tree, create/delete/rename/duplicate, drag-drop reparent), Inspector, Systems (the scene's Lua
+// Entities (tree, create/delete/rename/duplicate, drag-drop reparent), Inspector, Systems (the scene's Lua
 // systems: list, status while playing, add/remove/reorder, new from template) and Components (the project's Lua
 // component definitions: list with status, new from template), State Machines (the project's state machine
 // definitions: status, Global toggle, live game states, new from template) and Events (the Play session's recently
@@ -70,7 +70,7 @@ public:
     // Opens the selected entity's Inspector context menu of field ("Component.field") with its Apply submenu, for
     // screenshots.
     void openApplyMenu(std::string field) { applyMenuRequest_ = std::move(field); }
-    // The Assets folder new prefabs go to (Hierarchy > Create Prefab): the selected folder, else the selected file's
+    // The Assets folder new prefabs go to (Entities > Create Prefab): the selected folder, else the selected file's
     // folder; "" = the project root.
     std::string assetFolder() const;
     // files: the prefab edit mode breadcrumb's Back.
@@ -152,10 +152,10 @@ private:
         enum class Op { None, NewFolder, NewSystem, NewStateMachine, NewGui, NewMaterial, NewShader, NewShaderGraph, NewPrefab, Rename, Move, Delete } op = Op::None;
         std::string path;   // the entry acted on (NewFolder and New*: the folder to create in)
         std::string target; // Rename: the new name; Move: the destination folder
-        entt::entity entity = entt::null; // NewPrefab: the entity dropped from the Hierarchy
+        entt::entity entity = entt::null; // NewPrefab: the entity dropped from the Entities panel
     };
 
-    // After doc.scene was replaced: drops the Hierarchy rename and the active ImGui item (an edit in progress).
+    // After doc.scene was replaced: drops the Entities panel rename and the active ImGui item (an edit in progress).
     void forgetStaleScene(const Document& doc);
     void drawNode(Document& doc, entt::entity entity);
     // The Inspector's prefab card (link, Revert All / Apply All / Unpack, removed components, deleted and added

@@ -295,11 +295,11 @@ Text.</td>
 </tr>
 <tr>
 <td><code>--create-prefab &lt;folder&gt;|/</code></td>
-<td>Hierarchy &gt; <strong>Create Prefab</strong> on the <code>--select</code> entity: writes <code>&lt;folder&gt;/&lt;name&gt;.prefab</code> (<code>/</code> = the project root) and makes the entity an instance of it.</td>
+<td>Entities &gt; <strong>Create Prefab</strong> on the <code>--select</code> entity: writes <code>&lt;folder&gt;/&lt;name&gt;.prefab</code> (<code>/</code> = the project root) and makes the entity an instance of it.</td>
 </tr>
 <tr>
 <td><code>--drop-prefab &lt;path&gt;[,&lt;parentId&gt;]</code></td>
-<td>Drop the prefab on the Hierarchy: a new instance at the root, or as the last child of <code>parentId</code> (selected).</td>
+<td>Drop the prefab on the Entities panel: a new instance at the root, or as the last child of <code>parentId</code> (selected).</td>
 </tr>
 <tr>
 <td><code>--drop-prefab-view &lt;path&gt;,&lt;u&gt;,&lt;v&gt;</code></td>
@@ -337,11 +337,11 @@ Text.</td>
 <td><code>--open-additive &lt;file&gt;</code> (repeatable), <code>--active-scene &lt;N&gt;</code>, <code>--move-to-scene &lt;ID&gt;,&lt;N&gt;</code></td>
 <td>Right after <code>--scene</code> / <code>--project</code>: open each file as <strong>File &gt; Open Scene Additive...</strong> does, make open
 scene N (0 = the first) active, and move entity ID (its in-memory id: file id + slot &times; 4294967296) into open scene N
-as a Hierarchy drop does (an undo step). See <a href="multi-scene.html">Multi-scene editing</a>.</td>
+as an Entities drop does (an undo step). See <a href="multi-scene.html">Multi-scene editing</a>.</td>
 </tr>
 <tr>
 <td><code>--scene-menu &lt;N&gt;</code>, <code>--remove-scene &lt;N&gt;</code></td>
-<td>After 10 frames: open the context menu of the Hierarchy's scene header N, or its <strong>Remove Scene</strong> (with the
+<td>After 10 frames: open the context menu of the Entities panel's scene header N, or its <strong>Remove Scene</strong> (with the
 unsaved-changes prompt if that scene has unsaved changes), for screenshots.</td>
 </tr>
 <tr>
@@ -354,7 +354,7 @@ unsaved-changes prompt if that scene has unsaved changes), for screenshots.</td>
 </tr>
 <tr>
 <td><code>--prefab-back-prompt</code></td>
-<td>In prefab edit mode (<code>--edit-prefab</code>): press the Hierarchy's <strong>Back</strong> after 12 frames, so unsaved prefab changes (e.g. from <code>--set-field</code>) show the Save / Don't Save / Cancel prompt, for screenshots.</td>
+<td>In prefab edit mode (<code>--edit-prefab</code>): press the Entities panel's <strong>Back</strong> after 12 frames, so unsaved prefab changes (e.g. from <code>--set-field</code>) show the Save / Don't Save / Cancel prompt, for screenshots.</td>
 </tr>
 <tr>
 <td><code>--inspector-apply-menu &lt;Component&gt;.&lt;field&gt;</code></td>

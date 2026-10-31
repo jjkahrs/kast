@@ -96,7 +96,7 @@ camera</strong>, the first entity with a <code>Camera</code> component in hierar
 No grid, axes, gizmos or frustum lines. It renders live in edit mode too; systems only tick while playing, so it
 animates while playing and holds still while paused. With no camera it shows "No Camera in scene", and Play logs a
 warning but still runs. Layouts saved before the Game panel existed get it docked beside Scene automatically.</p>
-<p>While the Game panel is focused and playing, editor shortcuts (W/E/R, X, F, Delete, Ctrl+D, Hierarchy keys) don't
+<p>While the Game panel is focused and playing, editor shortcuts (W/E/R, X, F, Delete, Ctrl+D, Entities keys) don't
 apply, since they need their own panel focused; Ctrl+P still stops Play. Keyboard and mouse input then goes to
 <code>Document::input</code> (<code>kast::Input</code> in <code>engine/input.h</code>: scancodes and mouse buttons held down, mouse delta and wheel
 notches this frame) for game systems to read; Lua systems read it through <code>kast.input</code>. It is cleared (keys and buttons
@@ -126,14 +126,14 @@ panel focused, and Stop hides the overlay. It is off at every start and never sa
 draws it as bgfx debug text at the window's bottom-left (bgfx debug text always lands at the window's corner, not over a
 panel). <code>kast_player --sim-key frame,key</code> (repeatable) presses a key on that frame (tests, e.g.
 <code>--sim-key 30,F3</code>), like the editor's <code>--sim-key</code>.</p>
-<p><strong>Systems panel</strong> (below Hierarchy): the scene's Lua systems in run order. <strong>Add Script...</strong> picks an existing <code>.lua</code>
+<p><strong>Systems panel</strong> (below Entities): the scene's Lua systems in run order. <strong>Add Script...</strong> picks an existing <code>.lua</code>
 file inside the active project (a file outside it is rejected with an error), <strong>New from Template</strong> writes
 <code>&lt;project&gt;/scripts/new_system.lua</code> (then <code>new_system_2.lua</code>, ...) and adds it; both store project-relative paths. The
 arrows reorder and <strong>Remove</strong> drops an entry (the file stays). With no active project both add buttons are disabled
 (tooltip "Open a scene inside a project"); New from Template also needs a saved scene (tooltip "Save the scene
 first"). The list can't be edited during Play. Each edit marks the scene dirty. While playing,
 each entry shows <strong>OK</strong> or <strong>Disabled</strong> with its last error. Layouts saved before the panel existed get it docked as a
-tab beside Hierarchy.</p>
+tab beside Entities.</p>
 <p><strong>Components panel</strong> (below Systems): the active project's <a href="../engine/lua-components.html#lua-components">Lua components</a>, one row per definition
 file: <strong>OK</strong> or <strong>Error</strong>, the type name and its project-relative path, and the error message for a rejected file.
 <strong>New from Template</strong> writes <code>&lt;project&gt;/components/new_component.lua</code> (type <code>NewComponent</code>; then
@@ -189,7 +189,7 @@ New from Template definition with that type name to <code>&lt;project&gt;/compon
 and Create disabled: empty, not an identifier (letters, digits, <code>_</code>; not starting with a digit), a built-in name, the
 name of any listed definition (even one in error), or a file that already exists (case-insensitive). It never
 overwrites a file. Disabled with the same tooltips as New from Template.</p>
-<p>Hierarchy: click to select, right-click for Create / Rename (F2) / Duplicate (Ctrl+D) / Delete (Del). Creating from an
+<p>Entities: click to select, right-click for Create / Rename (F2) / Duplicate (Ctrl+D) / Delete (Del). Creating from an
 entity's menu makes the new entity its child; right-click empty space creates at the root. Drag an entity onto another
 to reparent it (world transform kept; dropping onto a descendant is rejected), or onto empty space to move it to the
 root. The <strong>GameObject</strong> menu creates at the root.</p>
@@ -197,7 +197,7 @@ root. The <strong>GameObject</strong> menu creates at the root.</p>
 registered fields (rotation as Euler degrees, colors as color pickers, enums as combos). The <strong>x</strong> on a section header
 removes that component (not shown for Transform); <strong>Add Component</strong> lists the registered types the entity doesn't have.</p>
 <p id="particles"><strong>Particles</strong> (<a href="../engine/particles.html">ParticleEmitter</a>): <strong>GameObject &gt; Particle System</strong> (also
-in the Hierarchy's Create menu) creates an entity named "Particle System" with a Transform and a default ParticleEmitter
+in the Entities panel's Create menu) creates an entity named "Particle System" with a Transform and a default ParticleEmitter
 (an upward cone of soft white particles), selected, as one undo step like the other GameObject entries. Emitters play
 in the Scene and Game views in edit mode too (a preview; nothing about it is saved). The selected entity's emitter
 shows its emission shape as orange (#ffaa00) lines in the Scene view, in the entity's transform (scale included): a
@@ -208,7 +208,7 @@ continues the simulation, and <strong>N alive</strong> is the live count, the sa
 (<a href="../engine/particles.html#alive">Alive count</a>). These work in edit mode and during Play, are not undo steps and never
 mark the scene dirty. Field edits are ordinary undoable edits and show in the preview at once.</p>
 <p id="reflection-probes"><strong>Reflection probes</strong> (<a href="../engine/ibl-reflection-probes.html#probes">ReflectionProbe</a>):
-<strong>GameObject &gt; Reflection Probe</strong> (also in the Hierarchy's Create menu) creates an entity named "Reflection Probe"
+<strong>GameObject &gt; Reflection Probe</strong> (also in the Entities panel's Create menu) creates an entity named "Reflection Probe"
 with a default probe (a 10 x 4 x 10 m box, resolution 128, not baked), selected, as one undo step. The selected probe's
 box shows as yellow (#ffcc00) lines in the Scene view, axis-aligned around its position (rotation and scale don't apply
 to it). Its Inspector section: <strong>Box Size</strong> (floored at 0.01 m per axis), a <strong>Resolution</strong> combo (64, 128,
@@ -241,7 +241,7 @@ unsaved-changes flag, selection by id; the editor camera stays where it is). Pla
 brings the Game tab to the front; Stop brings the Scene tab back; Pause and resume leave the tabs alone. While
 playing, the Scene panel has an orange border and the title says <code>(Playing)</code> or <code>(Paused)</code>. Edits during Play are allowed and are discarded on Stop;
 they never mark the scene dirty. File New/Open/Save/Save As are disabled during Play; Exit or
-closing the window stops Play first. A Lua <code>kast.loadScene</code> switch replaces the running scene: Hierarchy, Inspector,
+closing the window stops Play first. A Lua <code>kast.loadScene</code> switch replaces the running scene: Entities, Inspector,
 Scene, Game and the Systems panel status show the new scene, the selection is cleared, the editor camera stays, and the
 title shows <code>(Playing: &lt;scene&gt;)</code> / <code>(Paused: &lt;scene&gt;)</code>. The edited scene's file and path are never touched; Stop
 restores the pre-Play scene, path, project, dirty flag and selection however many switches happened.</p>

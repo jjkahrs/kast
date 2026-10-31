@@ -241,7 +241,7 @@ entt::entity createObject(Document& doc, ObjectKind kind, entt::entity parent,
                           std::optional<kast::SceneSlot> scene = std::nullopt);
 // Adds an entity named after the model file (a project-relative .glb/.gltf/.fbx/.obj) under parent with a
 // ModelRenderer, plus an Animator playing kast::defaultClip if the model has clips; selects it and marks the document
-// dirty. What dropping a model from the Assets panel on the viewport or the Hierarchy does.
+// dirty. What dropping a model from the Assets panel on the viewport or the Entities panel does.
 entt::entity createModelEntity(Document& doc, const std::string& path, entt::entity parent);
 void deleteSelected(Document& doc);
 void duplicateSelected(Document& doc); // instances inside the copy stay linked (kast::duplicateLinked)

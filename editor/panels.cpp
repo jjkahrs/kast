@@ -86,7 +86,7 @@ void Panels::forgetStaleScene(const Document& doc)
 void Panels::drawHierarchy(Document& doc, FileActions& files)
 {
     forgetStaleScene(doc);
-    if (ImGui::Begin("Hierarchy")) {
+    if (ImGui::Begin("Entities")) {
         if (doc.prefabEdit) { // prefab edit mode: where we are, and the way back
             if (ImGui::SmallButton("Back"))
                 files.backFromPrefab();

@@ -2842,7 +2842,7 @@ end })");
     lua.stop();
 }
 
-// The editor: several open scenes, each its own Hierarchy section, file and unsaved changes; one shared undo history.
+// The editor: several open scenes, each its own Entities section, file and unsaved changes; one shared undo history.
 void checkAdditiveEditor()
 {
     const std::filesystem::path dir = additiveTestDir("kast_additive_editor");
@@ -2876,7 +2876,7 @@ void checkAdditiveEditor()
 
     // Move a's cube (with its child) into b: undoable, both scenes unsaved, each saves to its own file.
     check(moveToScene(doc, named(doc.scene, "A Cube"), slotB) && doc.scene.sceneOf(named(doc.scene, "A Child")) == slotB,
-          "the Hierarchy drop moves the subtree into b");
+          "the Entities panel drop moves the subtree into b");
     check(sceneDirty(doc, slotA) && sceneDirty(doc, slotB), "the move changes both scenes");
     undoScene(doc);
     check(doc.scene.sceneOf(named(doc.scene, "A Cube")) == slotA && doc.scene.sceneOf(named(doc.scene, "A Child")) == slotA &&
@@ -13007,7 +13007,7 @@ void checkModelEditor()
     Document doc;
     entt::registry& registry = doc.scene.registry();
 
-    // Dropping a model from the Assets panel (viewport or Hierarchy): an entity named after the file.
+    // Dropping a model from the Assets panel (viewport or Entities panel): an entity named after the file.
     const entt::entity hero = createModelEntity(doc, "models/female-128-anim.glb", entt::null);
     check(registry.get<kast::Name>(hero).value == "female-128-anim" &&
               registry.get<kast::ModelRenderer>(hero).model == "models/female-128-anim.glb" && doc.selected == hero &&
@@ -13017,7 +13017,7 @@ void checkModelEditor()
           "an animated model gets an Animator playing the default clip");
     const entt::entity cube = createModelEntity(doc, "models/cube.obj", hero);
     check(!registry.all_of<kast::Animator>(cube) && doc.scene.parent(cube) == hero,
-          "a static model gets no Animator; a Hierarchy drop parents it");
+          "a static model gets no Animator; an Entities drop parents it");
 
     // Create > Model: an empty ModelRenderer to fill in the Inspector.
     const entt::entity empty = createObject(doc, ObjectKind::Model, entt::null);
@@ -15700,14 +15700,14 @@ void checkSceneUndo()
     doc.selected = entity(ground);
     checkUndoRedo(doc, "duplicate", [&] { duplicateSelected(doc); });
 
-    // Reparent (Hierarchy drag) keeps the world transform: undo puts back the parent, place and local transform.
+    // Reparent (Entities drag) keeps the world transform: undo puts back the parent, place and local transform.
     checkUndoRedo(doc, "reparent", [&] {
         beginSceneEdit(doc, "Move Cube", {.entities = {cube}, .deep = true});
         doc.scene.reparent(entity(cube), entity(id("Main Camera")));
         markDirty(doc);
         endSceneEdit(doc);
     });
-    checkUndoRedo(doc, "rename", [&] { // Hierarchy F2
+    checkUndoRedo(doc, "rename", [&] { // Entities F2
         beginSceneEdit(doc, "Rename Cube", {.entities = {cube}});
         doc.scene.registry().get<kast::Name>(entity(cube)).value = "Box";
         markDirty(doc);

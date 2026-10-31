@@ -8,21 +8,21 @@ set(map_copy "${CMAKE_CURRENT_SOURCE_DIR}/cmake/map_test.cmake")
 set(map_orphan "Map: maps/tilegrid/scenes/3_1.scene is an orphan: tile 3_1 is not a zone tile")
 set(map_bounds "Map: maps/tilegrid/scenes/0_1.scene: root entity 'Stray Rock' at \\(600, 400\\) is in tile 2_1, outside tile 0_1")
 
-# The tab docked beside Hierarchy and Zone (default layout, and a layout saved before the tab existed: tests/layouts/
+# The tab docked beside Entities and Zone (default layout, and a layout saved before the tab existed: tests/layouts/
 # pre_map.ini, the default layout of the editor before it), the 3 x 3 grid in its 8 x 8 bounds.
 add_test(NAME editor_map_tab
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/map_tab.png"
-          "-DEXTRA_ARGS=--scene ${KAST_TILEGRID} --size 1600x1000" -DFOCUS_PANEL=Map "-DLAYOUT_SAME_DOCK=Hierarchy;Zone;Map"
+          "-DEXTRA_ARGS=--scene ${KAST_TILEGRID} --size 1600x1000" -DFOCUS_PANEL=Map "-DLAYOUT_SAME_DOCK=Entities;Zone;Map"
           "-DEXPECT_OUTPUT=Map: maps/tilegrid \\(9 tiles, 5 tile scenes\\)" "-DFORBID_OUTPUT=\\[error\\]" -P "${map_smoke}")
 add_test(NAME editor_map_tab_old_layout
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/map_tab_old_layout.png"
           "-DEXTRA_ARGS=--scene ${KAST_TILEGRID} --size 1600x1000" -DFOCUS_PANEL=Map
-          "-DLAYOUT_FROM=${CMAKE_CURRENT_SOURCE_DIR}/tests/layouts/pre_map.ini" "-DLAYOUT_SAME_DOCK=Hierarchy;Zone;Map"
+          "-DLAYOUT_FROM=${CMAKE_CURRENT_SOURCE_DIR}/tests/layouts/pre_map.ini" "-DLAYOUT_SAME_DOCK=Entities;Zone;Map"
           "-DFORBID_OUTPUT=\\[error\\]" -P "${map_smoke}")
 add_test(NAME editor_map_tab_pre_zone_layout
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/map_tab_pre_zone_layout.png"
           "-DEXTRA_ARGS=--scene ${KAST_TILEGRID} --size 1600x1000" -DFOCUS_PANEL=Map
-          "-DLAYOUT_FROM=${CMAKE_CURRENT_SOURCE_DIR}/tests/layouts/pre_zone.ini" "-DLAYOUT_SAME_DOCK=Hierarchy;Zone;Map;Systems"
+          "-DLAYOUT_FROM=${CMAKE_CURRENT_SOURCE_DIR}/tests/layouts/pre_zone.ini" "-DLAYOUT_SAME_DOCK=Entities;Zone;Map;Systems"
           "-DFORBID_OUTPUT=\\[error\\]" -P "${map_smoke}")
 # No Terrain entity, no project: the tab says so (as the Zone tab), and nothing is logged.
 add_test(NAME editor_map_no_terrain
@@ -34,7 +34,7 @@ add_test(NAME editor_map_no_project
           "-DEXTRA_ARGS=--scene ${CMAKE_CURRENT_BINARY_DIR}/no_project_basic.scene" -DFOCUS_PANEL=Map
           "-DFORBID_OUTPUT=Map: |\\[error\\]" -P "${map_smoke}")
 
-# A click on 1_0 (it has a scene) opens it additively, not active (the Hierarchy's new header); a second click closes it.
+# A click on 1_0 (it has a scene) opens it additively, not active (the Entities panel's new header); a second click closes it.
 add_test(NAME editor_map_click_open
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/map_click_open.png"
           "-DEXTRA_ARGS=--scene ${KAST_TILEGRID} --size 1600x1000 --map-click 1,0" -DFOCUS_PANEL=Map
@@ -42,7 +42,7 @@ add_test(NAME editor_map_click_open
           "-DFORBID_OUTPUT=\\[error\\]|Active scene" -P "${map_smoke}")
 add_test(NAME editor_map_click_open_hierarchy
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/map_click_open_hierarchy.png"
-          "-DEXTRA_ARGS=--scene ${KAST_TILEGRID} --size 1600x1000 --map-click 1,0" -DFOCUS_PANEL=Hierarchy
+          "-DEXTRA_ARGS=--scene ${KAST_TILEGRID} --size 1600x1000 --map-click 1,0" -DFOCUS_PANEL=Entities
           "-DEXPECT_OUTPUT=Map: opened tile 1_0" "-DFORBID_OUTPUT=\\[error\\]|Active scene" -P "${map_smoke}")
 add_test(NAME editor_map_click_close
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/map_click_close.png"
