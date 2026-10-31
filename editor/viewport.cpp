@@ -91,7 +91,7 @@ void outlineOverlayPanel(const Document& doc, const float* viewProj, ImVec2 orig
     const float halfWidth = static_cast<float>(ui->width) * 0.5f / scale, height = static_cast<float>(ui->height) / scale;
     const ImVec2 bottom(origin.x + anchor->x, origin.y + anchor->y);
     ImGui::GetWindowDrawList()->AddRect(ImVec2(bottom.x - halfWidth, bottom.y - height), ImVec2(bottom.x + halfWidth, bottom.y),
-                                        IM_COL32(0xff, 0xcc, 0x00, 0xff), 0.0f, 0, 3.0f);
+                                        kHighlight, 0.0f, 0, 3.0f);
 }
 
 constexpr float kDropDistance = 10.0f; // a prefab dropped where the cursor ray hits nothing: this far along it
@@ -338,8 +338,8 @@ void SceneViewport::draw(Document& doc)
                 const ImVec2 min(max.x - insetWidth, max.y - insetHeight);
                 ImDrawList* draw = ImGui::GetWindowDrawList();
                 draw->AddImage(static_cast<ImTextureID>(hiz.idx), min, max);
-                draw->AddRect(min, max, IM_COL32(0xff, 0xaa, 0x00, 0xff));
-                draw->AddText(ImVec2(min.x + 4.0f, min.y + 2.0f), IM_COL32(0xff, 0xcc, 0x00, 0xff),
+                draw->AddRect(min, max, kAccent);
+                draw->AddText(ImVec2(min.x + 4.0f, min.y + 2.0f), kHighlight,
                               std::format("Hi-Z mip {}", debug_.hizMip).c_str());
             }
 

@@ -1,5 +1,7 @@
 #include "zone_render.h"
 
+#include "ui_common.h"
+
 #include <zone/terrain_edit.h>
 
 #include <log.h>
@@ -13,8 +15,8 @@
 namespace {
 
 namespace km = kast::map;
-constexpr ImU32 kTileLine = IM_COL32(255, 170, 0, 140); // the palette's accent, see-through
-constexpr ImU32 kSpawnColor = IM_COL32(255, 204, 0, 255); // its highlight
+constexpr ImU32 kTileLine = withAlpha(kAccent, 140); // see-through
+constexpr ImU32 kSpawnColor = kHighlight;
 constexpr float kBorderStep = 4.0f; // metres between the points of a tile border line
 constexpr float kLift = 0.2f;       // overlay lines float this far over the ground so it does not hide them
 

@@ -13,7 +13,7 @@ namespace {
 
 using State = OnlineProbe::State;
 
-constexpr ImVec4 kWarnColor{1.0f, 0.8f, 0.0f, 1.0f}; // the palette's highlight, #ffcc00
+constexpr ImVec4 kWarnColor = toVec4(kHighlight);
 constexpr const char* kRealmStatuses[] = {"online", "offline", "maintenance"};
 constexpr const char* kRoles[] = {"player", "gm", "admin"};
 

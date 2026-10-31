@@ -209,14 +209,16 @@ set_tests_properties(player_shader_graphs_matches_editor PROPERTIES
                      FIXTURES_REQUIRED "player_shader_graphs_shot;shader_graphs_play_shot")
 
 # The panels exist only while a graph is open (Assets > Edit, the canvas tab's X, deleting the open graph). Probes on the
-# 1600x900 default layout: the Shader Graph tab's header (620,40) and the Graph Inspector's (1478,40) are orange
-# (#ffaa00 / #ff9900) while their window is submitted, the dock's #313131 without it. Clicks are --sim-mouse offsets
+# 1600x900 default layout: the Shader Graph tab's header (620,40) and the Graph Inspector's (1478,40) are
+# grey tabs (#222227) while their window is submitted, the dock's empty tab bar (#0c0c0e) without it. Clicks are --sim-mouse offsets
 # from the Scene view's center (800,352): the canvas tab's X (717,33: the tab follows Scene and Game, with no GUI Preview
 # tab while no GUI is open), the close prompt's Save / Discard / Cancel (631 / 686 / 746,473), the Delete Asset modal's
 # Delete (718,483).
-set(KAST_GRAPH_TABS_SHOWN 0.3875,0.0444,255,160,0,12 0.92375,0.0444,255,160,0,12)
-set(KAST_GRAPH_TABS_HIDDEN 0.3875,0.0444,49,49,49,10 0.92375,0.0444,49,49,49,10)
-# kast_graph_tabs(<name> SHOWN|HIDDEN): shader_graph_<name>_tabs probes shader_graph_<name>.png.
+set(KAST_GRAPH_TABS_SHOWN 0.3875,0.0444,34,34,39,6 0.92375,0.0444,34,34,39,6)
+set(KAST_GRAPH_TABS_HIDDEN 0.3875,0.0444,12,12,14,6 0.92375,0.0444,12,12,14,6)
+# BEHIND: the canvas tab behind another (an inactive tab, #151518), the Graph Inspector in front.
+set(KAST_GRAPH_TABS_BEHIND 0.3875,0.0444,21,21,24,6 0.92375,0.0444,34,34,39,6)
+# kast_graph_tabs(<name> SHOWN|HIDDEN|BEHIND): shader_graph_<name>_tabs probes shader_graph_<name>.png.
 function(kast_graph_tabs name expect)
   add_test(NAME shader_graph_${name}_tabs
     COMMAND kast_self_check --probe-png "${CMAKE_CURRENT_BINARY_DIR}/shader_graph_${name}.png" ${KAST_GRAPH_TABS_${expect}})
@@ -246,7 +248,7 @@ kast_graph_shot(inspector_button "${KAST_GRAPH_PROJECT_ARGS} --assets-select sha
 kast_graph_tabs(inspector_button SHOWN)
 # - scene_front: Scene in front of the canvas tab: the Graph Inspector stays.
 kast_graph_shot(scene_front "${KAST_GRAPH_ARGS}" "-DFOCUS_PANEL=Scene" "-DFORBID_OUTPUT=\\[error\\]")
-kast_graph_tabs(scene_front SHOWN)
+kast_graph_tabs(scene_front BEHIND)
 # - close_x: the tab's X on a clean graph closes it: both panels go.
 kast_graph_shot(close_x "${KAST_GRAPH_ARGS} --sim-mouse 30,left,0,0,0,-83,-319,3"
   "-DEXPECT_OUTPUT=Closed shader graph '[^']*graph_demo" "-DFORBID_OUTPUT=\\[error\\]")

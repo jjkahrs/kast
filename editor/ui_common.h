@@ -23,13 +23,44 @@ void loadFont();
 constexpr const char* kIconPlay = "\xee\x80\xb7";  // U+E037 play_arrow
 constexpr const char* kIconPause = "\xee\x80\xb4"; // U+E034 pause
 constexpr const char* kIconStop = "\xee\x81\x87";  // U+E047 stop
-// The editor palette (see CLAUDE.md) on top of ImGui's dark style. Call before UiScale::init.
-void applyTheme();
-// ImGui has one text color, and white text on the accent fills (buttons, tabs, headers, selection) is unreadable: turns
-// text drawn over an accent fill black. Call after ImGui::Render, before rendering the draw data.
-void darkenTextOnAccent(ImDrawData* drawData);
+// The editor palette (see CLAUDE.md): every editor color comes from here.
+constexpr ImU32 kAccent = IM_COL32(0xff, 0xa1, 0x00, 0xff);    // buttons, checks; text on tabs, headers, selection
+constexpr ImU32 kHighlight = IM_COL32(0xff, 0xd0, 0x00, 0xff); // hovered button, links, viewport labels
+constexpr ImU32 kPressed = IM_COL32(0xe0, 0x8d, 0x00, 0xff);   // pressed button
+constexpr ImU32 kWarning = IM_COL32(0xff, 0xb7, 0x03, 0xff);
+constexpr ImU32 kError = IM_COL32(0xe6, 0x39, 0x46, 0xff);
+constexpr ImU32 kText = IM_COL32(0xf3, 0xf4, 0xf6, 0xff);
+constexpr ImU32 kTextSecondary = IM_COL32(0x9e, 0x9e, 0xa8, 0xff); // disabled text, inactive tabs
+constexpr ImU32 kBackground = IM_COL32(0x0c, 0x0c, 0x0e, 0xff);
+constexpr ImU32 kCard = IM_COL32(0x15, 0x15, 0x18, 0xff);  // cards, popups, inactive tabs
+constexpr ImU32 kField = IM_COL32(0x22, 0x22, 0x27, 0xff); // text fields, borders, active tab, headers, selection
+constexpr ImU32 kRowHover = IM_COL32(0x1c, 0x1c, 0x20, 0xff);
+constexpr ImU32 kFieldHighlight = IM_COL32(0x3a, 0x3a, 0x41, 0xff);
+
+// An IM_COL32 (ABGR) color as bgfx's RGBA, e.g. for a clear color.
+constexpr uint32_t toRgba(ImU32 color)
+{
+    return ((color >> IM_COL32_R_SHIFT) & 0xff) << 24 | ((color >> IM_COL32_G_SHIFT) & 0xff) << 16 |
+           ((color >> IM_COL32_B_SHIFT) & 0xff) << 8 | ((color >> IM_COL32_A_SHIFT) & 0xff);
+}
+constexpr ImU32 withAlpha(ImU32 color, unsigned alpha)
+{
+    return (color & ~IM_COL32_A_MASK) | (static_cast<ImU32>(alpha) << IM_COL32_A_SHIFT);
+}
+constexpr ImVec4 toVec4(ImU32 color)
+{
+    const auto channel = [&](int shift) { return static_cast<float>((color >> shift) & 0xff) / 255.0f; };
+    return {channel(IM_COL32_R_SHIFT), channel(IM_COL32_G_SHIFT), channel(IM_COL32_B_SHIFT), channel(IM_COL32_A_SHIFT)};
+}
 constexpr ImVec4 kOkColor{0.4f, 0.85f, 0.4f, 1.0f};
-constexpr ImVec4 kErrorColor{1.0f, 0.45f, 0.4f, 1.0f};
+constexpr ImVec4 kErrorColor = toVec4(kError);
+
+// The editor palette on top of ImGui's dark style. Call before UiScale::init.
+void applyTheme();
+// ImGui has one text color per style: recolors text by the fill it is drawn on. Black on the accent fills (buttons and
+// other controls), the accent on tabs, headers and selected rows, secondary on inactive tabs. Call after ImGui::Render,
+// before rendering the draw data.
+void darkenTextOnAccent(ImDrawData* drawData);
 
 // Explains why the last (disabled) item is disabled, if it is.
 void disabledTooltip(const char* reason);
@@ -43,9 +74,9 @@ bool acceptPrefabDrop(std::string& path);
 // The same for a .guiprefab.
 bool acceptGuiPrefabDrop(std::string& path);
 // A small cube (top face and two sides) at x in a row from y, height tall: marks prefab instance roots in the Entities
-// panel and GUI Hierarchy. Accent colored, black on a selected (accent-filled) row.
-void drawPrefabIcon(float x, float y, float height, bool selected);
-// The #ffcc00 bar at the window's left edge beside an overridden prefab value, from y top to bottom (screen).
+// panel and GUI Hierarchy. Accent colored.
+void drawPrefabIcon(float x, float y, float height);
+// The kHighlight bar at the window's left edge beside an overridden prefab value, from y top to bottom (screen).
 void markOverride(float top, float bottom);
 
 // A card: a rounded, tinted, bordered panel behind everything drawn between beginCard and endCard, spanning the window's

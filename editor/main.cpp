@@ -76,7 +76,7 @@ constexpr bgfx::ViewId kShaderPreviewView = kGuiPreviewView + kast::gui::kViews;
 constexpr bgfx::ViewId kModelPreviewView = kShaderPreviewView + ShaderPreview::kViews; // the Model Preview
 constexpr bgfx::ViewId kImGuiView = 255; // last, so the UI draws over everything
 static_assert(kModelPreviewView + ModelPreview::kViews <= kImGuiView, "the preview views must end before ImGui's");
-constexpr uint32_t kBackbufferClearColor = 0x202020ff;
+constexpr uint32_t kBackbufferClearColor = toRgba(kBackground);
 // --add-component-popup, --open-menu, --open-build-settings, --open-online-settings, --open-preferences, --focus-panel and --assets-* wait this long: focus changes while the first frames dock the windows close
 // popups.
 constexpr int kAddComponentPopupFrame = 10;
@@ -1551,8 +1551,14 @@ void drawConsole()
     if (ImGui::Begin("Console")) {
         ImGui::BeginChild("lines", ImVec2(0.0f, 0.0f), ImGuiChildFlags_None, ImGuiWindowFlags_HorizontalScrollbar);
         // ponytail: draws every line each frame; switch to ImGuiListClipper when logs get long.
-        for (const std::string& line : kast::log::lines())
+        for (const std::string& line : kast::log::lines()) {
+            const ImU32 color = line.starts_with("[warn] ") ? kWarning : line.starts_with("[error] ") ? kError : 0;
+            if (color)
+                ImGui::PushStyleColor(ImGuiCol_Text, color);
             ImGui::TextUnformatted(line.c_str(), line.c_str() + line.size());
+            if (color)
+                ImGui::PopStyleColor();
+        }
         if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY())
             ImGui::SetScrollHereY(1.0f);
         ImGui::EndChild();

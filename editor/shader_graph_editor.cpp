@@ -44,13 +44,7 @@ constexpr uintptr_t kPinIds = uintptr_t(1) << 48;
 constexpr uintptr_t kLinkIds = uintptr_t(1) << 50;
 constexpr uintptr_t kRefusedLinkId = uintptr_t(1) << 52;
 
-// The editor palette (CLAUDE.md), and pin colors readable on #000000 and #313131.
-constexpr ImU32 kHeader = IM_COL32(0xff, 0xaa, 0x00, 0xff);
-constexpr ImU32 kHighlight = IM_COL32(0xff, 0xcc, 0x00, 0xff);
-constexpr ImU32 kDarken = IM_COL32(0xff, 0x99, 0x00, 0xff);
-constexpr ImU32 kCard = IM_COL32(0x31, 0x31, 0x31, 0xff);
-constexpr ImU32 kFieldHighlight = IM_COL32(0x81, 0x81, 0x81, 0xff);
-constexpr ImU32 kRefusedColor = IM_COL32(0xff, 0x40, 0x40, 0xff);
+// Pin colors readable on the palette's background and card.
 
 ImU32 pinColor(PinType type)
 {
@@ -418,7 +412,7 @@ void ShaderGraphEditor::drawIssues(int node) const
     ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + ImGui::GetFontSize() * 30.0f); // the Inspector's width or less
     for (const kast::GraphIssue& issue : issues_)
         if (issue.node == node) {
-            ImGui::PushStyleColor(ImGuiCol_Text, ImColor(issue.warning ? kHighlight : kRefusedColor).Value);
+            ImGui::PushStyleColor(ImGuiCol_Text, ImColor(issue.warning ? kHighlight : kError).Value);
             ImGui::TextWrapped("%s: %s", issue.warning ? "Warning" : "Error", issue.message.c_str());
             ImGui::PopStyleColor();
         }
@@ -468,7 +462,7 @@ void ShaderGraphEditor::drawCanvas(float time)
     if (livePath_.empty())
         summary = "Not in the project: no live preview";
     ImGui::SetCursorPos(ImVec2(ImGui::GetCursorPosX() + 8.0f, ImGui::GetCursorPosY() + 2.0f));
-    ImGui::TextColored(ImColor(errors ? kRefusedColor : !issues_.empty() ? kHighlight : kFieldHighlight), "%s",
+    ImGui::TextColored(ImColor(errors ? kError : !issues_.empty() ? kHighlight : kTextSecondary), "%s",
                        summary.c_str());
     const ImVec2 areaMin = ImGui::GetCursorScreenPos(); // the canvas area, under the summary line
     const ImVec2 areaMax(areaMin.x + ImGui::GetContentRegionAvail().x, areaMin.y + ImGui::GetContentRegionAvail().y);
@@ -479,9 +473,9 @@ void ShaderGraphEditor::drawCanvas(float time)
     style.Colors[ed::StyleColor_Grid] = ImColor(kCard);
     style.Colors[ed::StyleColor_NodeBg] = ImColor(kCard);
     style.Colors[ed::StyleColor_NodeBorder] = ImColor(kFieldHighlight);
-    style.Colors[ed::StyleColor_HovNodeBorder] = ImColor(kDarken);
+    style.Colors[ed::StyleColor_HovNodeBorder] = ImColor(kPressed);
     style.Colors[ed::StyleColor_SelNodeBorder] = ImColor(kHighlight);
-    style.Colors[ed::StyleColor_HovLinkBorder] = ImColor(kDarken);
+    style.Colors[ed::StyleColor_HovLinkBorder] = ImColor(kPressed);
     style.Colors[ed::StyleColor_SelLinkBorder] = ImColor(kHighlight);
     style.Colors[ed::StyleColor_NodeSelRect] = ImColor(255, 204, 0, 48);
     style.Colors[ed::StyleColor_NodeSelRectBorder] = ImColor(kHighlight);
@@ -525,9 +519,9 @@ void ShaderGraphEditor::drawCanvas(float time)
         refused_.reset();
     if (refused_) {
         ed::Link(ed::LinkId(kRefusedLinkId), canvasPin(graph, refused_->from, true), canvasPin(graph, refused_->to, false),
-                 ImColor(kRefusedColor), 3.0f);
+                 ImColor(kError), 3.0f);
         const ImVec2 at = ed::GetNodePosition(refused_->to.node);
-        ImGui::GetWindowDrawList()->AddText(ImVec2(at.x, at.y - ImGui::GetTextLineHeightWithSpacing()), kRefusedColor,
+        ImGui::GetWindowDrawList()->AddText(ImVec2(at.x, at.y - ImGui::GetTextLineHeightWithSpacing()), kError,
                                             std::format("Can't link: {}", refused_->why).c_str());
     }
     handleCreate();
@@ -606,16 +600,16 @@ void ShaderGraphEditor::drawNodes()
             heading += ": " + node.settings.at("param").get<std::string>();
         else if (node.type == "swizzle")
             heading += " ." + node.settings.at("mask").get<std::string>();
-        // Errors outline the node red, warnings #ffcc00 (an error wins).
+        // Errors outline the node red, warnings kHighlight (an error wins).
         const auto issue = std::ranges::find_if(issues_, [&](const kast::GraphIssue& i) { return i.node == node.id; });
         const bool error = std::ranges::any_of(issues_, [&](const kast::GraphIssue& i) { return i.node == node.id && !i.warning; });
         if (issue != issues_.end()) {
-            ed::PushStyleColor(ed::StyleColor_NodeBorder, ImColor(error ? kRefusedColor : kHighlight));
+            ed::PushStyleColor(ed::StyleColor_NodeBorder, ImColor(error ? kError : kHighlight));
             ed::PushStyleVar(ed::StyleVar_NodeBorderWidth, 3.0f);
         }
         ed::BeginNode(node.id);
         ImGui::PushID(node.id);
-        ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32_BLACK);
+        ImGui::PushStyleColor(ImGuiCol_Text, kAccent);
         ImGui::TextUnformatted(heading.c_str());
         ImGui::PopStyleColor();
         const float headerBottom = ImGui::GetItemRectMax().y + 2.0f;
@@ -677,7 +671,7 @@ void ShaderGraphEditor::drawNodes()
         const ImVec2 min = ed::GetNodePosition(node.id);
         const ImVec2 size = ed::GetNodeSize(node.id);
         ed::GetNodeBackgroundDrawList(node.id)->AddRectFilled(
-            ImVec2(min.x + 1.0f, min.y + 1.0f), ImVec2(min.x + size.x - 1.0f, headerBottom), kHeader,
+            ImVec2(min.x + 1.0f, min.y + 1.0f), ImVec2(min.x + size.x - 1.0f, headerBottom), kField,
             ed::GetStyle().NodeRounding, ImDrawFlags_RoundCornersTop);
     }
 }
@@ -726,11 +720,11 @@ void ShaderGraphEditor::handleCreate()
             if (start && end && !start->second && end->second)
                 std::swap(start, end); // dragged from an input
             if (!start || !end || start->second == end->second) {
-                tooltip("Link an output to an input", kRefusedColor);
-                ed::RejectNewItem(ImColor(kRefusedColor), 2.0f);
+                tooltip("Link an output to an input", kError);
+                ed::RejectNewItem(ImColor(kError), 2.0f);
             } else if (const kast::LinkCheck check = kast::canLink(doc_.graph(), start->first, end->first); !check.allowed) {
-                tooltip("Can't link: " + check.message, kRefusedColor); // why, while the drag is over the pin
-                ed::RejectNewItem(ImColor(kRefusedColor), 3.0f);
+                tooltip("Can't link: " + check.message, kError); // why, while the drag is over the pin
+                ed::RejectNewItem(ImColor(kError), 3.0f);
             } else {
                 if (check.warning)
                     tooltip(check.message, kHighlight);
@@ -1259,13 +1253,13 @@ void ShaderGraphEditor::drawPreviewInset(ImVec2 areaMin, ImVec2 areaMax, float t
             }
         }
     }
-    // The header strip: the collapse arrow and the title, black on #ffaa00.
-    draw->AddRectFilled(min, ImVec2(max.x, min.y + header), kHeader);
+    // The header strip: the collapse arrow and the title, the accent on grey.
+    draw->AddRectFilled(min, ImVec2(max.x, min.y + header), kField);
     ImGui::SetCursorScreenPos(ImVec2(min.x + kGrip, min.y));
-    ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32_BLACK);
+    ImGui::PushStyleColor(ImGuiCol_Text, kAccent);
     ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(0, 0, 0, 0));
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, kHighlight);
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive, kDarken);
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, kRowHover);
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, kField);
     if (ImGui::ArrowButton("##collapse", previewCollapsed_ ? ImGuiDir_Up : ImGuiDir_Down))
         previewCollapsed_ = !previewCollapsed_;
     ImGui::PopStyleColor(3);
@@ -1277,7 +1271,7 @@ void ShaderGraphEditor::drawPreviewInset(ImVec2 areaMin, ImVec2 areaMax, float t
         // Between the left grip and a margin as wide on the right: a child window there would take the grip's mouse.
         ImGui::SetCursorScreenPos(ImVec2(min.x + kGrip, min.y + header));
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, kGrip));
-        ImGui::PushStyleColor(ImGuiCol_ChildBg, IM_COL32(0, 0, 0, 0)); // the inset's #313131 shows through
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, IM_COL32(0, 0, 0, 0)); // the inset's kCard shows through
         ImGui::BeginChild("body", ImVec2(std::max(size.x - kGrip * 2.0f, 1.0f), 0.0f), ImGuiChildFlags_AlwaysUseWindowPadding, kFlags);
         ImGui::PopStyleColor();
         ImGui::PopStyleVar();
