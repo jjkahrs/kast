@@ -27,6 +27,12 @@ namespace {
 constexpr double kRcssApplyDelaySeconds = 0.3;
 constexpr const char* kNodePayload = "GUI_NODE";
 constexpr ImU32 kOutlineColor = IM_COL32(255, 200, 0, 255);
+// The editor palette, for the GUI Hierarchy inset.
+constexpr ImU32 kHeader = IM_COL32(0xff, 0xaa, 0x00, 0xff);
+constexpr ImU32 kHighlight = IM_COL32(0xff, 0xcc, 0x00, 0xff);
+constexpr ImU32 kDarken = IM_COL32(0xff, 0x99, 0x00, 0xff);
+constexpr ImU32 kCard = IM_COL32(0x31, 0x31, 0x31, 0xff);
+constexpr ImU32 kFieldHighlight = IM_COL32(0x81, 0x81, 0x81, 0xff);
 
 std::filesystem::file_time_type modified(const std::filesystem::path& file)
 {
@@ -595,43 +601,122 @@ void GuiBuilder::saveShortcut()
         save();
 }
 
-void GuiBuilder::drawHierarchy()
+// --- GUI Hierarchy inset ---
+
+void GuiBuilder::drawHierarchyInset(ImVec2 areaMin, ImVec2 areaMax)
 {
-    if (focusStep_ == 4)
-        ImGui::SetNextWindowFocus();
-    if (ImGui::Begin(title("GUI Hierarchy", kHierarchyWindow).c_str()) && !rml_.empty()) {
-        saveShortcut();
+    constexpr float kGrip = 6.0f; // the resize edges' thickness
+    constexpr ImVec2 kMinSize(160.0f, 120.0f);
+    const float header = ImGui::GetFrameHeight();
+    const ImVec2 area(areaMax.x - areaMin.x, areaMax.y - areaMin.y);
+    // At most 80% of the area (never under the minimum); an area too small for that clips it.
+    const ImVec2 limit(std::max(kMinSize.x, area.x * 0.8f), std::max(kMinSize.y, area.y * 0.8f));
+    const ImVec2 full(std::clamp(hierarchySize_.x, kMinSize.x, limit.x),
+                      hierarchyCollapsed_ ? header : std::clamp(hierarchySize_.y, kMinSize.y, limit.y));
+    // Kept inside the area, also after the panel shrinks.
+    hierarchyPos_ = ImVec2(std::clamp(hierarchyPos_.x, 0.0f, std::max(area.x - full.x, 0.0f)),
+                           std::clamp(hierarchyPos_.y, 0.0f, std::max(area.y - full.y, 0.0f)));
+    const ImVec2 min(areaMin.x + hierarchyPos_.x, areaMin.y + hierarchyPos_.y);
+    const ImVec2 size(std::min(full.x, area.x), std::min(full.y, area.y));
+    const ImVec2 max(min.x + size.x, min.y + size.y);
+    hierarchyMin_ = hierarchyMax_ = ImVec2();
+    if (size.x <= 0.0f || size.y <= 0.0f)
+        return;
+    hierarchyMin_ = min;
+    hierarchyMax_ = max;
+    // A child window drawn over the preview.
+    ImGui::SetCursorScreenPos(min);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, kCard);
+    constexpr ImGuiWindowFlags kFlags = ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse;
+    ImGui::BeginChild("GUI Hierarchy", size, ImGuiChildFlags_None, kFlags);
+    ImGui::PopStyleColor();
+    ImGui::PopStyleVar();
+    ImDrawList* draw = ImGui::GetWindowDrawList();
+    if (!hierarchyCollapsed_) {
+        // Resize grips, first so they win over the header: the bottom-right corner, the right and bottom edges.
+        struct Grip {
+            const char* id;
+            ImVec2 pos, size;
+            bool x, y;
+            ImGuiMouseCursor cursor;
+        };
+        for (const Grip& grip :
+             {Grip{"##corner", ImVec2(max.x - kGrip * 2.0f, max.y - kGrip * 2.0f), ImVec2(kGrip * 2.0f, kGrip * 2.0f), true,
+                   true, ImGuiMouseCursor_ResizeNWSE},
+              Grip{"##right", ImVec2(max.x - kGrip, min.y), ImVec2(kGrip, size.y), true, false, ImGuiMouseCursor_ResizeEW},
+              Grip{"##bottom", ImVec2(min.x, max.y - kGrip), ImVec2(size.x, kGrip), false, true, ImGuiMouseCursor_ResizeNS}}) {
+            ImGui::SetCursorScreenPos(grip.pos);
+            ImGui::InvisibleButton(grip.id, grip.size);
+            if (ImGui::IsItemHovered() || ImGui::IsItemActive())
+                ImGui::SetMouseCursor(grip.cursor);
+            if (ImGui::IsItemActive()) { // the top-left corner stays put
+                const ImVec2 mouse = ImGui::GetIO().MousePos;
+                if (grip.x)
+                    hierarchySize_.x = std::clamp(mouse.x - min.x, kMinSize.x, limit.x);
+                if (grip.y)
+                    hierarchySize_.y = std::clamp(mouse.y - min.y, kMinSize.y, limit.y);
+            }
+        }
+    }
+    // The header strip: the collapse arrow and the title, black on #ffaa00; dragged, it moves the inset.
+    draw->AddRectFilled(min, ImVec2(max.x, min.y + header), kHeader);
+    ImGui::SetCursorScreenPos(ImVec2(min.x + kGrip, min.y));
+    ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32_BLACK);
+    ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(0, 0, 0, 0));
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, kHighlight);
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, kDarken);
+    if (ImGui::ArrowButton("##collapse", hierarchyCollapsed_ ? ImGuiDir_Right : ImGuiDir_Down))
+        hierarchyCollapsed_ = !hierarchyCollapsed_;
+    ImGui::PopStyleColor(3);
+    ImGui::SameLine();
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted("GUI Hierarchy");
+    ImGui::PopStyleColor();
+    ImGui::SetCursorScreenPos(min);
+    ImGui::InvisibleButton("##move", ImVec2(size.x, header));
+    if (ImGui::IsItemActive()) {
+        const ImVec2 delta = ImGui::GetIO().MouseDelta; // clamped to the area next frame
+        hierarchyPos_ = ImVec2(hierarchyPos_.x + delta.x, hierarchyPos_.y + delta.y);
+    }
+    if (ImGui::IsItemHovered() || ImGui::IsItemActive())
+        ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeAll);
+    if (!hierarchyCollapsed_) {
+        // Inside the grips: a child window over them would take their mouse.
+        ImGui::SetCursorScreenPos(ImVec2(min.x + kGrip, min.y + header));
+        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, kGrip));
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, IM_COL32(0, 0, 0, 0)); // the inset's #313131 shows through
+        ImGui::BeginChild("body", ImVec2(std::max(size.x - kGrip * 2.0f, 1.0f), std::max(size.y - header - kGrip, 1.0f)),
+                          ImGuiChildFlags_AlwaysUseWindowPadding, kFlags);
+        ImGui::PopStyleColor();
+        ImGui::PopStyleVar();
+        // One row while it fits: a button that doesn't goes to the next line.
+        const auto flow = [](const char* label) {
+            ImGui::SameLine();
+            if (ImGui::GetContentRegionAvail().x < ImGui::CalcTextSize(label).x + ImGui::GetStyle().FramePadding.x * 2.0f)
+                ImGui::NewLine();
+            return label;
+        };
         if (ImGui::Button("Save"))
             save();
-        for (GuiKind kind : kGuiCreatableKinds) { // wrapped to the panel's width
-            const std::string label = std::format("+ {}", guiKindLabel(kind));
-            const float width = ImGui::CalcTextSize(label.c_str()).x + ImGui::GetStyle().FramePadding.x * 2.0f;
-            if (ImGui::GetItemRectMax().x + ImGui::GetStyle().ItemSpacing.x + width <=
-                ImGui::GetWindowPos().x + ImGui::GetWindowContentRegionMax().x)
-                ImGui::SameLine();
-            ImGui::BeginDisabled(!doc_.canAddInto(addParent())); // nothing goes into a prefab instance
-            if (ImGui::Button(label.c_str()))
-                edit_ = {Edit::Op::Add, addParent(), {}, kind};
-            ImGui::EndDisabled();
-        }
         const bool movable = selected_ && selected_ != doc_.body() && !GuiDoc::prefabLocked(selected_);
         ImGui::BeginDisabled(!movable);
-        if (ImGui::Button("Delete"))
+        if (ImGui::Button(flow("Delete")))
             edit_ = {Edit::Op::Delete, selected_};
-        ImGui::SameLine();
-        if (ImGui::Button("Up"))
+        if (ImGui::Button(flow("Up")))
             edit_ = {Edit::Op::Move, selected_, {}, GuiKind::Panel, -1};
-        ImGui::SameLine();
-        if (ImGui::Button("Down"))
+        if (ImGui::Button(flow("Down")))
             edit_ = {Edit::Op::Move, selected_, {}, GuiKind::Panel, 1};
         ImGui::EndDisabled();
         ImGui::Separator();
+        ImGui::BeginChild("tree"); // scrolls under the toolbar
         drawNode(doc_.body());
+        ImGui::EndChild();
         applyEdit();
-    } else if (rml_.empty()) {
-        ImGui::TextDisabled("Double-click a .rml file in Assets to open it.");
+        ImGui::EndChild();
     }
-    ImGui::End();
+    draw->AddRect(min, max, kFieldHighlight); // the 1 px border, over the header and body's edges
+    ImGui::EndChild();
 }
 
 void GuiBuilder::drawNode(pugi::xml_node node)
@@ -1246,6 +1331,17 @@ void GuiBuilder::drawPreview()
             ImGui::EndCombo();
         }
         const ImVec2 avail = ImGui::GetContentRegionAvail();
+        const ImVec2 areaMin = ImGui::GetCursorScreenPos(); // the preview area, under the Resolution / UI scale row
+        // The mouse is the GUI Hierarchy inset's while over it, or while a press made in it is held: no pick, no drop.
+        const ImGuiIO& io = ImGui::GetIO();
+        const auto inInset = [&](ImVec2 p) {
+            return p.x >= hierarchyMin_.x && p.y >= hierarchyMin_.y && p.x < hierarchyMax_.x && p.y < hierarchyMax_.y;
+        };
+        const bool overInset = inInset(io.MousePos);
+        bool insetMouse = overInset;
+        for (int button = 0; button < ImGuiMouseButton_COUNT; ++button)
+            if (ImGui::IsMouseDown(button))
+                insetMouse = inInset(io.MouseClickedPos[button]);
         const float fbScale = ImGui::GetIO().DisplayFramebufferScale.x;
         auto [width, height] = resolutions_[static_cast<size_t>(resolution_)];
         if (width == 0) {
@@ -1276,11 +1372,14 @@ void GuiBuilder::drawPreview()
             ImGui::SetCursorScreenPos(min);
             if (target_.valid())
                 ImGui::Image(static_cast<ImTextureID>(target_.texture().idx), size);
-            if (ImGui::IsItemClicked()) {
+            if (!insetMouse && ImGui::IsItemClicked()) {
                 const ImVec2 mouse = ImGui::GetMousePos();
                 pick((mouse.x - min.x) / scale, (mouse.y - min.y) / scale);
+                kast::log::info(
+                    std::format("GUI Preview: click at {:.0f},{:.0f} selected '{}'", mouse.x, mouse.y, selectedId()));
             }
-            if (std::string dropped; acceptGuiPrefabDrop(dropped)) { // into the deepest Panel under the cursor, else <body>
+            // A .guiprefab dropped outside the inset: into the deepest Panel under the cursor, else <body>.
+            if (std::string dropped; !overInset && acceptGuiPrefabDrop(dropped)) {
                 const ImVec2 mouse = ImGui::GetMousePos();
                 Rml::Element* hit = preview_.context()->GetElementAtPoint({(mouse.x - min.x) / scale, (mouse.y - min.y) / scale});
                 pugi::xml_node parent = doc_.body();
@@ -1310,6 +1409,7 @@ void GuiBuilder::drawPreview()
                 }
             }
         }
+        drawHierarchyInset(areaMin, ImVec2(areaMin.x + avail.x, areaMin.y + avail.y));
     } else if (visible) {
         ImGui::TextDisabled("Double-click a .rml file in Assets to open it.");
     }
@@ -1321,7 +1421,7 @@ void GuiBuilder::drawModals()
     if (focusStep_ > 0)
         --focusStep_;
     if (!rml_.empty())
-        applyEdit(); // a drop on the Preview or the Assets panel, with the GUI Hierarchy hidden behind another tab
+        applyEdit(); // a drop on the Assets panel, or a step, while the GUI Preview (and its inset) is behind a tab
     if (std::exchange(prefabErrorRequested_, false))
         ImGui::OpenPopup("GUI Prefab");
     if (ImGui::BeginPopupModal("GUI Prefab", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {

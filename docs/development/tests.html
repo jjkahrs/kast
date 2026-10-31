@@ -655,7 +655,7 @@ its three refusals, nested instantiation, and a prefab edit hot-reloading the do
 </tr>
 <tr>
 <td><code>gui_builder_screenshot</code></td>
-<td><code>--project tests/project --open-gui ui/main_menu.rml --gui-select start_button --size 1600x1000</code>, writing <code>gui_builder.png</code>: GUI Hierarchy (with the Unknown <code>&lt;span&gt;</code>), GUI Inspector (id, text, data-event, <code>title</code> kept), GUI Style and GUI Preview with the outline.</td>
+<td><code>--project tests/project --open-gui ui/main_menu.rml --gui-select start_button --size 1600x1000</code>, writing <code>gui_builder.png</code>: the GUI Hierarchy inset (with the Unknown <code>&lt;span&gt;</code>), GUI Inspector (id, text, data-event, <code>title</code> kept), GUI Style and GUI Preview with the outline.</td>
 </tr>
 <tr>
 <td><code>gui_builder_restyled_screenshot</code>, <code>gui_builder_restyle_differs</code></td>
@@ -664,6 +664,10 @@ its three refusals, nested instantiation, and a prefab edit hot-reloading the do
 <tr>
 <td><code>gui_builder_pick_screenshot</code>, <code>gui_builder_pick_differs</code></td>
 <td><code>--gui-pick 640,277</code> (the Quit button): the log must have <code>selected 'quit_button'</code>, and <code>gui_builder_pick.png</code> must differ from <code>gui_builder.png</code>.</td>
+</tr>
+<tr>
+<td><code>gui_builder_inset</code>, <code>gui_builder_inset_collapsed</code>, <code>gui_builder_sim_preview_click</code>, <code>gui_builder_sim_inset_click</code>, <code>gui_builder_sim_inset_drag</code>, <code>gui_builder_sim_inset_resize</code>, <code>gui_builder_sim_inset_resize_min</code>, <code>gui_builder_sim_inset_menu</code>, <code>gui_builder_sim_inset_save</code> (and their <code>_probe</code>s)</td>
+<td>The GUI Hierarchy inset over the GUI Preview of <code>main_menu.rml</code>: probes of its default place and of <code>--gui-hierarchy-collapse</code>; through <code>--sim-mouse</code>, a click on Quit outside it picks (<code>GUI Preview: click ... selected 'quit_button'</code>), a click in it doesn't; its header dragged far stops at the preview area's corner, its corner dragged out / in stops at 80% of the area / 160x120 (probes), none of them picking; a right-click on Body opens the Add menu; a click in it then <code>--sim-key ctrl+S</code> saves (on <code>gui_inset_project</code>, a copy).</td>
 </tr>
 <tr>
 <td><code>gui_builder_add_screenshot</code></td>

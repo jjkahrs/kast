@@ -118,15 +118,15 @@ kast_gui_prefab_file(apply_host "${KAST_GUI_PREFAB_PROJECT}/ui/prefab_host.rml"
                      gui_prefab_applied)
 
 # Unpack b: plain markup (ids as expanded) that renders exactly as the instance did (the preview before and after,
-# nothing selected, compared pixel for pixel).
-kast_gui_prefab_shot(unpack_before "${KAST_GUI_PREFAB_UNPACK}" "--open-gui ui/prefab_host.rml" FORBID "\\[warn\\] RmlUi"
+# nothing selected, the GUI Hierarchy inset collapsed off it, compared pixel for pixel).
+kast_gui_prefab_shot(unpack_before "${KAST_GUI_PREFAB_UNPACK}" "--open-gui ui/prefab_host.rml --gui-hierarchy-collapse" FORBID "\\[warn\\] RmlUi"
                      REQUIRES gui_prefab_unpack_project_copied SETUP gui_prefab_unpack_shot_before)
 kast_gui_prefab_shot(unpack "${KAST_GUI_PREFAB_UNPACK}" "--open-gui ui/prefab_host.rml --gui-select b --gui-unpack --gui-save"
                      EXPECT "--gui-unpack 'b'.*Saved GUI" REQUIRES gui_prefab_unpack_shot_before SETUP gui_prefab_unpacked)
 kast_gui_prefab_file(unpack "${KAST_GUI_PREFAB_UNPACK}/ui/prefab_host.rml"
                      "<div id=\"b\" class=\"prefab-card\">[\r\n ]*<p id=\"b_title\" class=\"prefab-title big\">Overridden</p>[\r\n ]*<button id=\"b_button\" class=\"prefab-button\" data-event=\"prefab.clicked\">Press</button>"
                      gui_prefab_unpacked)
-kast_gui_prefab_shot(unpack_after "${KAST_GUI_PREFAB_UNPACK}" "--open-gui ui/prefab_host.rml" FORBID "\\[warn\\] RmlUi"
+kast_gui_prefab_shot(unpack_after "${KAST_GUI_PREFAB_UNPACK}" "--open-gui ui/prefab_host.rml --gui-hierarchy-collapse" FORBID "\\[warn\\] RmlUi"
                      REQUIRES gui_prefab_unpacked SETUP gui_prefab_unpack_shot_after)
 add_test(NAME gui_builder_prefab_unpack_matches
   COMMAND kast_self_check --diff-png "${CMAKE_CURRENT_BINARY_DIR}/gui_builder_prefab_unpack_before.png"

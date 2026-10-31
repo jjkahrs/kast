@@ -3117,12 +3117,63 @@ add_test(NAME gui_builder_pick_differs
           "-DB=${CMAKE_CURRENT_BINARY_DIR}/gui_builder_pick.png" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/differs_test.cmake")
 set_tests_properties(gui_builder_pick_screenshot PROPERTIES FIXTURES_SETUP gui_builder_pick_shot)
 set_tests_properties(gui_builder_pick_differs PROPERTIES FIXTURES_REQUIRED "gui_builder_shot;gui_builder_pick_shot")
+# The GUI Hierarchy inset over the GUI Preview, on main_menu.rml at 1600x1000: the preview area's top-left is 321,69, the
+# inset 329,77 .. 589,437 (260x360, a 22 px #ffaa00 header, #313131 body), the preview's background #2b3440; --sim-mouse
+# presses go from the Scene view's center, 800,387.
+# - gui_builder_inset: the default inset; gui_builder_inset_collapsed (--gui-hierarchy-collapse): its header only.
+# - sim_preview_click: a click on Quit (800,321), outside the inset, picks it; sim_inset_click: a click in the inset's
+#   tree over the preview (450,400) doesn't pick.
+# - sim_inset_drag: the header dragged 2000 px right and down stops at the area's bottom-right corner; letting go over
+#   the preview picks nothing.
+# - sim_inset_resize / sim_inset_resize_min: the bottom-right corner dragged out / in: 80% of the area (765x502) / the
+#   160x120 minimum.
+# - sim_inset_menu: a right-click on Body opens its Add menu (shot), picking nothing.
+# - sim_inset_save: a click in the inset's tree, then Ctrl+S, saves the GUI (on a copy of tests/project).
+function(kast_gui_inset_shot name args)
+  add_test(NAME gui_builder_${name}
+    COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/gui_builder_${name}.png"
+            "-DEXTRA_ARGS=${args}" -DFRAMES=60 ${ARGN} -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+endfunction()
+function(kast_gui_inset_probe name)
+  add_test(NAME gui_builder_${name}_probe COMMAND kast_self_check --probe-png "${CMAKE_CURRENT_BINARY_DIR}/gui_builder_${name}.png" ${ARGN})
+  set_tests_properties(gui_builder_${name} PROPERTIES FIXTURES_SETUP gui_builder_${name}_shot)
+  set_tests_properties(gui_builder_${name}_probe PROPERTIES FIXTURES_REQUIRED gui_builder_${name}_shot)
+endfunction()
+set(inset_args "--project ${KAST_TEST_PROJECT} ${builder_args}")
+set(inset_forbid "-DFORBID_OUTPUT=\\[error\\]|GUI Preview: click")
+kast_gui_inset_shot(inset "${inset_args}" "-DFORBID_OUTPUT=\\[error\\]")
+kast_gui_inset_probe(inset 0.3125,0.088,255,170,0,6 0.28125,0.3,49,49,49,6)
+kast_gui_inset_shot(inset_collapsed "${inset_args} --gui-hierarchy-collapse" "-DFORBID_OUTPUT=\\[error\\]")
+kast_gui_inset_probe(inset_collapsed 0.3125,0.088,255,170,0,6 0.28125,0.3,43,52,64,6)
+kast_gui_inset_shot(sim_preview_click "${inset_args} --sim-mouse 30,left,0,0,0,0,-66"
+  "-DEXPECT_OUTPUT=GUI Preview: click at [0-9]+,321 selected 'quit_button'" "-DFORBID_OUTPUT=\\[error\\]")
+kast_gui_inset_shot(sim_inset_click "${inset_args} --sim-mouse 30,left,0,0,0,-350,13"
+  "-DEXPECT_OUTPUT=--sim-mouse: press at 450,400" "${inset_forbid}")
+kast_gui_inset_shot(sim_inset_drag "${inset_args} --sim-mouse 30,left,2000,2000,0,-350,-299"
+  "-DEXPECT_OUTPUT=--sim-mouse: press at 450,88" "${inset_forbid}")
+kast_gui_inset_probe(sim_inset_drag 0.78125,0.348,255,170,0,6 0.71875,0.6,49,49,49,6 0.28125,0.3,43,52,64,6)
+kast_gui_inset_shot(sim_inset_resize "${inset_args} --sim-mouse 30,left,2000,2000,0,-214,47"
+  "-DEXPECT_OUTPUT=--sim-mouse: press at 586,434" "${inset_forbid}")
+kast_gui_inset_probe(sim_inset_resize 0.68,0.5,49,49,49,6 0.6875,0.5,43,52,64,6 0.4375,0.57,49,49,49,6 0.4375,0.59,43,52,64,6)
+kast_gui_inset_shot(sim_inset_resize_min "${inset_args} --sim-mouse 30,left,-2000,-2000,0,-214,47"
+  "-DEXPECT_OUTPUT=--sim-mouse: press at 586,434" "${inset_forbid}")
+kast_gui_inset_probe(sim_inset_resize_min 0.25,0.19,49,49,49,6 0.25,0.205,43,52,64,6 0.3125,0.15,43,52,64,6)
+kast_gui_inset_shot(sim_inset_menu "${inset_args} --sim-mouse 30,right,0,0,0,-420,-243"
+  "-DEXPECT_OUTPUT=--sim-mouse: press at 380,144" "${inset_forbid}")
+set(KAST_GUI_INSET_PROJECT "${CMAKE_CURRENT_BINARY_DIR}/gui_inset_project")
+add_test(NAME gui_inset_project_clean COMMAND "${CMAKE_COMMAND}" -E rm -rf "${KAST_GUI_INSET_PROJECT}")
+add_test(NAME gui_inset_project_copy COMMAND "${CMAKE_COMMAND}" -E copy_directory "${KAST_TEST_PROJECT}" "${KAST_GUI_INSET_PROJECT}")
+kast_gui_inset_shot(sim_inset_save "--project ${KAST_GUI_INSET_PROJECT} ${builder_args} --sim-mouse 30,left,0,0,0,-350,13 --sim-key 40,ctrl+S"
+  "-DEXPECT_OUTPUT=Saved GUI" "${inset_forbid}")
+set_tests_properties(gui_inset_project_clean PROPERTIES FIXTURES_SETUP gui_inset_cleaned)
+set_tests_properties(gui_inset_project_copy PROPERTIES FIXTURES_REQUIRED gui_inset_cleaned FIXTURES_SETUP gui_inset_copied)
+set_tests_properties(gui_builder_sim_inset_save PROPERTIES FIXTURES_REQUIRED gui_inset_copied)
 # The GUI Builder previews ui/effects.rml through the same renderer: no RmlUi or GUI renderer warning, and probes
 # (preview at 1280x720 scaled into the panel) show the glow outside the box, the box keeping #313131, and the linear
-# gradient's ends.
+# gradient's ends; the GUI Hierarchy inset collapsed off them.
 add_test(NAME gui_builder_effects_screenshot
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/gui_builder_effects.png"
-          "-DEXTRA_ARGS=--project ${KAST_TEST_PROJECT} --open-gui ui/effects.rml --size 1600x1000"
+          "-DEXTRA_ARGS=--project ${KAST_TEST_PROJECT} --open-gui ui/effects.rml --size 1600x1000 --gui-hierarchy-collapse"
           "-DEXPECT_OUTPUT=GUI layer framebuffer 1 created" "-DFORBID_OUTPUT=\\[warn\\] RmlUi|GUI filter|GUI shader|GUI effects need|GUI base layer"
           -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
 set_tests_properties(gui_builder_effects_screenshot PROPERTIES FIXTURES_SETUP gui_builder_effects_shot)
@@ -3131,10 +3182,10 @@ add_test(NAME gui_builder_effects_probe COMMAND kast_self_check --probe-png "${C
          0.4734,0.1675,247,0,8,10 0.5266,0.1675,5,0,250,10)
 set_tests_properties(gui_builder_effects_probe PROPERTIES FIXTURES_REQUIRED gui_builder_effects_shot)
 # The GUI Builder previews ui/masks.rml the same way: the 1280x720 preview drawn 0.7477x from (321, 115) of the
-# 1600x1000 window, probed at the masks' GUI pixels (KAST_MASKS_PROBES).
+# 1600x1000 window, probed at the masks' GUI pixels (KAST_MASKS_PROBES), the GUI Hierarchy inset collapsed off them.
 add_test(NAME gui_builder_masks_screenshot
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/gui_builder_masks.png"
-          "-DEXTRA_ARGS=--project ${KAST_TEST_PROJECT} --open-gui ui/masks.rml --size 1600x1000"
+          "-DEXTRA_ARGS=--project ${KAST_TEST_PROJECT} --open-gui ui/masks.rml --size 1600x1000 --gui-hierarchy-collapse"
           "-DEXPECT_OUTPUT=GUI base layer redirected for clip masks" "-DFORBID_OUTPUT=${masks_forbid}"
           -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
 set_tests_properties(gui_builder_masks_screenshot PROPERTIES FIXTURES_SETUP gui_builder_masks_shot)
