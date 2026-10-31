@@ -41,9 +41,15 @@ and Build ships it. The file format, the type rules and the code generation are 
   writes <code>new_shader_graph.kshadergraph</code> (<code>new_shader_graph_2.kshadergraph</code>, ... if taken) and logs
   <code>Created shader graph '...'</code>. The starter compiles as is: a <code>tint</code> color param, through a Swizzle
   (<code>rgb</code>), into the Fragment Output's ALBEDO.</li>
-<li><strong>Open</strong>: double-click a <code>.kshadergraph</code> in the Assets panel. Selecting one (single click) shows its
+<li><strong>Open</strong>: double-click a <code>.kshadergraph</code> in the Assets panel, or right-click it and choose
+  <strong>Edit</strong> (only <code>.kshadergraph</code> files have it; it works in Play too). Selecting one (single click) shows its
   compile status and params in the Inspector, with an <strong>Open in Shader Graph</strong> button. From the command line:
-  <code>--open-graph &lt;file&gt;</code>.</li>
+  <code>--open-graph &lt;file&gt;</code> or <code>--assets-edit &lt;file&gt;</code>. The <strong>Shader Graph</strong> tab opens
+  beside Scene and takes the focus.</li>
+<li><strong>Close</strong>: the <strong>X</strong> on the Shader Graph tab. With no unsaved changes the graph closes at once; with
+  some, Kast asks <em>Save changes to x.kshadergraph before closing it?</em> <strong>Save</strong> (writes the file, then
+  closes) / <strong>Discard</strong> (closes without writing) / <strong>Cancel</strong> (the graph stays open, its tab in
+  front). Deleting the open graph (or a folder holding it) in the Assets panel closes it too, without a second prompt.</li>
 <li>One graph is open at a time. Opening another while the open one has unsaved changes asks
   <strong>Save</strong> / <strong>Discard</strong> / <strong>Cancel</strong>. Renaming or moving the open graph in the Assets panel keeps
   it open under its new path.</li>
@@ -51,8 +57,10 @@ and Build ships it. The file format, the type rules and the code generation are 
 
 <h2 id="sg-panels">Panels</h2>
 <p>Two dockable panels, docked by default next to the views (<strong>Shader Graph</strong> with Scene and Game,
-<strong>Graph Inspector</strong> with the Inspector), and the <strong>Shader Preview</strong>, an inset inside the canvas. Opening a
-graph brings the panels to the front. Their titles show the file name, with a <code>*</code> while it has unsaved changes.</p>
+<strong>Graph Inspector</strong> with the Inspector), and the <strong>Shader Preview</strong>, an inset inside the canvas. They exist
+only while a graph is open: with none open neither tab is there, and closing the graph hides both. Opening a graph brings the
+panels to the front; the Graph Inspector stays while another tab (Scene, say) is in front of the canvas, and has no X of its
+own. Their titles show the file name, with a <code>*</code> while it has unsaved changes.</p>
 <ul>
 <li><strong>Shader Graph</strong>: the canvas. A summary line at its top reads <em>Compiled</em>, <em>Compiling...</em>, or in red
   <em>Errors: the last good version renders - 1 error, 1 warning - node 12: ...</em>.</li>
@@ -133,7 +141,7 @@ graph brings the panels to the front. Their titles show the file name, with a <c
   some, Kast asks <em>... changed on disk, and the Shader Graph has unsaved changes</em> <strong>Reload</strong> / <strong>Keep
   mine</strong>.</li>
 <li><strong>Quitting</strong> with unsaved changes asks <strong>Save</strong> / <strong>Discard</strong> / <strong>Cancel</strong>, as opening
-  another graph does.</li>
+  another graph or closing the tab does.</li>
 </ul>
 
 <h2 id="sg-preview">Preview and live update</h2>
@@ -148,7 +156,7 @@ the edit (13 frames drawn while it compiled)</code>. Moving nodes and editing co
   from it.</li>
 <li>While a compile runs, and after one fails, the <strong>last good version keeps rendering</strong>. A graph that has never
   compiled renders magenta, like a broken <code>.kshader</code>.</li>
-<li>Closing the graph without saving (<strong>Discard</strong>, or the file being removed) drops the unsaved version: the library
+<li>Closing the graph without saving (<strong>Discard</strong>, or the file being removed or deleted) drops the unsaved version: the library
   compiles the file on disk again and the views go back to it.</li>
 </ul>
 
@@ -402,9 +410,9 @@ in the Scene view and in Play.</p>
 <h2 id="sg-cli">Command line</h2>
 <p>For tests and screenshots, the panels' edits run from flags: <code>--open-graph</code>, <code>--graph-add</code>,
 <code>--graph-link</code>, <code>--graph-unlink</code>, <code>--graph-select</code>, <code>--graph-delete</code>, <code>--graph-set</code>,
-<code>--graph-comment</code>, <code>--graph-paste</code>, <code>--graph-undo</code>, <code>--graph-redo</code>, <code>--graph-save</code>,
+<code>--graph-comment</code>, <code>--graph-paste</code>, <code>--graph-undo</code>, <code>--graph-redo</code>, <code>--graph-save</code>, <code>--graph-close</code>,
 <code>--graph-add-menu</code>, <code>--graph-preview</code>, <code>--graph-preview-collapse</code>, <code>--graph-view-code</code>, plus <code>--assets-create
-shadergraph:&lt;folder&gt;</code> and canvas gestures with <code>--sim-mouse</code> / <code>--sim-key</code>. See
+shadergraph:&lt;folder&gt;</code>, <code>--assets-edit &lt;file&gt;</code> and canvas gestures with <code>--sim-mouse</code> / <code>--sim-key</code>. See
 <a href="command-line.html#shader-graph-flags">Command line: Shader Graph</a>.</p>
 </main>
 </div>

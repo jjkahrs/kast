@@ -207,3 +207,87 @@ set_tests_properties(player_shader_graphs_screenshot PROPERTIES FIXTURES_REQUIRE
                      FIXTURES_SETUP player_shader_graphs_shot TIMEOUT 90)
 set_tests_properties(player_shader_graphs_matches_editor PROPERTIES
                      FIXTURES_REQUIRED "player_shader_graphs_shot;shader_graphs_play_shot")
+
+# The panels exist only while a graph is open (Assets > Edit, the canvas tab's X, deleting the open graph). Probes on the
+# 1600x900 default layout: the Shader Graph tab's header (620,40) and the Graph Inspector's (1478,40) are orange
+# (#ffaa00 / #ff9900) while their window is submitted, the dock's #313131 without it. Clicks are --sim-mouse offsets
+# from the Scene view's center (800,352): the canvas tab's X (804,33), the close prompt's Save / Discard / Cancel
+# (631 / 686 / 746,473), the Delete Asset modal's Delete (718,483).
+set(KAST_GRAPH_TABS_SHOWN 0.3875,0.0444,255,160,0,12 0.92375,0.0444,255,160,0,12)
+set(KAST_GRAPH_TABS_HIDDEN 0.3875,0.0444,49,49,49,10 0.92375,0.0444,49,49,49,10)
+# kast_graph_tabs(<name> SHOWN|HIDDEN): shader_graph_<name>_tabs probes shader_graph_<name>.png.
+function(kast_graph_tabs name expect)
+  add_test(NAME shader_graph_${name}_tabs
+    COMMAND kast_self_check --probe-png "${CMAKE_CURRENT_BINARY_DIR}/shader_graph_${name}.png" ${KAST_GRAPH_TABS_${expect}})
+  set_tests_properties(shader_graph_${name}_screenshot PROPERTIES FIXTURES_SETUP shader_graph_${name}_shot)
+  set_tests_properties(shader_graph_${name}_tabs PROPERTIES FIXTURES_REQUIRED shader_graph_${name}_shot)
+endfunction()
+set(KAST_GRAPH_PROJECT_ARGS --project ${KAST_SHADER_TEST_PROJECT} --size 1600x900)
+# - tabs_none: a project, no graph: neither panel.
+kast_graph_shot(tabs_none "${KAST_GRAPH_PROJECT_ARGS}" "-DFORBID_OUTPUT=Opened shader graph|\\[error\\]")
+kast_graph_tabs(tabs_none HIDDEN)
+# - edit_menu: a .kshadergraph's Assets menu has Edit (first); edit_menu_other: a .kshader's doesn't.
+kast_graph_shot(edit_menu "${KAST_GRAPH_PROJECT_ARGS} --assets-select shaders/graph_demo.kshadergraph --assets-menu shaders/graph_demo.kshadergraph"
+  "-DFOCUS_PANEL=Assets" "-DFORBID_OUTPUT=\\[error\\]")
+kast_graph_shot(edit_menu_other "${KAST_GRAPH_PROJECT_ARGS} --assets-select shaders/water.kshader --assets-menu shaders/water.kshader"
+  "-DFOCUS_PANEL=Assets" "-DFORBID_OUTPUT=\\[error\\]")
+# - edit_click: clicking that menu's Edit (434,708) opens the graph: both panels, the canvas in front.
+kast_graph_shot(edit_click "${KAST_GRAPH_PROJECT_ARGS} --assets-select shaders/graph_demo.kshadergraph --assets-menu shaders/graph_demo.kshadergraph --sim-mouse 20,left,0,0,0,-366,356"
+  "-DFOCUS_PANEL=Assets" "-DEXPECT_OUTPUT=Opened shader graph '[^']*graph_demo" "-DFORBID_OUTPUT=\\[error\\]")
+kast_graph_tabs(edit_click SHOWN)
+# - edit: --assets-edit, the menu item's call.
+kast_graph_shot(edit "${KAST_GRAPH_PROJECT_ARGS} --assets-edit shaders/graph_demo.kshadergraph"
+  "-DEXPECT_OUTPUT=Opened shader graph '[^']*graph_demo" "-DFORBID_OUTPUT=\\[error\\]")
+kast_graph_tabs(edit SHOWN)
+# - inspector_button: the Inspector's "Open in Shader Graph" (1366,217) for a selected .kshadergraph.
+kast_graph_shot(inspector_button "${KAST_GRAPH_PROJECT_ARGS} --assets-select shaders/graph_demo.kshadergraph --sim-mouse 20,left,0,0,0,566,-135,3"
+  "-DEXPECT_OUTPUT=Opened shader graph '[^']*graph_demo" "-DFORBID_OUTPUT=\\[error\\]")
+kast_graph_tabs(inspector_button SHOWN)
+# - scene_front: Scene in front of the canvas tab: the Graph Inspector stays.
+kast_graph_shot(scene_front "${KAST_GRAPH_ARGS}" "-DFOCUS_PANEL=Scene" "-DFORBID_OUTPUT=\\[error\\]")
+kast_graph_tabs(scene_front SHOWN)
+# - close_x: the tab's X on a clean graph closes it: both panels go.
+kast_graph_shot(close_x "${KAST_GRAPH_ARGS} --sim-mouse 30,left,0,0,0,4,-319,3"
+  "-DEXPECT_OUTPUT=Closed shader graph '[^']*graph_demo" "-DFORBID_OUTPUT=\\[error\\]")
+kast_graph_tabs(close_x HIDDEN)
+# - close_prompt: the X on a dirty graph asks Save / Discard / Cancel ("before closing it?"), the canvas still open.
+kast_graph_shot(close_prompt "${KAST_GRAPH_ARGS} --graph-add multiply,560,330 --sim-mouse 30,left,0,0,0,4,-319,3" -DFRAMES=45
+  "-DFORBID_OUTPUT=Closed shader graph|\\[error\\]")
+# - close_cancel / close_discard: --graph-close (the X's call) on a dirty graph, then Cancel (kept, the canvas in front)
+#   or Discard (closed, not written).
+kast_graph_shot(close_cancel "${KAST_GRAPH_ARGS} --graph-add multiply,560,330 --graph-close --sim-mouse 30,left,0,0,0,-54,121,3"
+  "-DFORBID_OUTPUT=Closed shader graph|Saved shader graph|\\[error\\]")
+kast_graph_tabs(close_cancel SHOWN)
+kast_graph_shot(close_discard "${KAST_GRAPH_ARGS} --graph-add multiply,560,330 --graph-close --sim-mouse 30,left,0,0,0,-114,121,3"
+  "-DEXPECT_OUTPUT=Closed shader graph '[^']*graph_demo" "-DFORBID_OUTPUT=Saved shader graph|\\[error\\]")
+kast_graph_tabs(close_discard HIDDEN)
+# - reopen: closed, then opened again: a fresh canvas and the preview inset's sphere (probe, not the sky behind it).
+kast_graph_shot(reopen "${KAST_GRAPH_ARGS} --graph-close --open-graph shaders/graph_demo.kshadergraph"
+  "-DEXPECT_OUTPUT=Closed shader graph.*Opened shader graph '[^']*graph_demo" "-DFORBID_OUTPUT=\\[error\\]")
+kast_graph_tabs(reopen SHOWN)
+add_test(NAME shader_graph_reopen_preview COMMAND kast_self_check --probe-png "${CMAKE_CURRENT_BINARY_DIR}/shader_graph_reopen.png"
+         0.7,0.5556,221,178,137,30)
+set_tests_properties(shader_graph_reopen_preview PROPERTIES FIXTURES_REQUIRED shader_graph_reopen_shot)
+# On a fresh copy (they write): close_save, Save in the close prompt writes the edit, then closes; delete_open, Assets >
+# Delete of the open (dirty) graph closes it without a prompt.
+set(KAST_GRAPH_CLOSE_PROJECT "${CMAKE_CURRENT_BINARY_DIR}/shader_graph_close_project")
+add_test(NAME shader_graph_close_project_copy
+  COMMAND "${CMAKE_COMMAND}" -E copy_directory "${KAST_TEST_PROJECT}" "${KAST_GRAPH_CLOSE_PROJECT}")
+add_test(NAME shader_graph_close_project_clean COMMAND "${CMAKE_COMMAND}" -E rm -rf "${KAST_GRAPH_CLOSE_PROJECT}")
+set_tests_properties(shader_graph_close_project_clean PROPERTIES FIXTURES_SETUP shader_graph_close_clean)
+set_tests_properties(shader_graph_close_project_copy PROPERTIES FIXTURES_REQUIRED shader_graph_close_clean
+                     FIXTURES_SETUP shader_graph_close_copy)
+kast_graph_shot(close_save "--project ${KAST_GRAPH_CLOSE_PROJECT} --size 1600x900 --open-graph shaders/graph_demo.kshadergraph --graph-add one_minus,560,330 --graph-close --sim-mouse 30,left,0,0,0,-169,121,3"
+  "-DEXPECT_OUTPUT=Saved shader graph.*Closed shader graph '[^']*graph_demo" "-DFORBID_OUTPUT=\\[error\\]")
+kast_graph_tabs(close_save HIDDEN)
+add_test(NAME shader_graph_close_saved_file COMMAND "${CMAKE_COMMAND}" -E cat "${KAST_GRAPH_CLOSE_PROJECT}/shaders/graph_demo.kshadergraph")
+set_tests_properties(shader_graph_close_saved_file PROPERTIES PASS_REGULAR_EXPRESSION "\"id\": 12,[^}]*\"type\": \"one_minus\""
+                     FIXTURES_REQUIRED shader_graph_close_save_shot)
+# The deleted graph's override drops and the library logs that its file is gone ([error]): not forbidden here.
+kast_graph_shot(delete_open "--project ${KAST_GRAPH_CLOSE_PROJECT} --size 1600x900 --open-graph shaders/empty.kshadergraph --graph-add multiply,560,330 --assets-delete shaders/empty.kshadergraph --sim-mouse 25,left,0,0,0,-82,131,3"
+  "-DFOCUS_PANEL=Assets" "-DMUST_NOT_EXIST=${KAST_GRAPH_CLOSE_PROJECT}/shaders/empty.kshadergraph"
+  "-DEXPECT_OUTPUT=Moved 'shaders/empty.kshadergraph' to the Recycle Bin.*Closed shader graph '[^']*empty"
+  "-DFORBID_OUTPUT=Saved shader graph")
+kast_graph_tabs(delete_open HIDDEN)
+set_tests_properties(shader_graph_close_save_screenshot shader_graph_delete_open_screenshot PROPERTIES
+                     FIXTURES_REQUIRED shader_graph_close_copy)

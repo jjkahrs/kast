@@ -85,12 +85,12 @@ constexpr const char* kUsage =
     "Usage: kast_editor [--frames N] [--screenshot out.png] [--screenshot-on-log frames,text] [--size WxH] [--window-pos X,Y] [--ui-scale F] [--projects-file list.json] "
     "[--scene in.scene] [--project dir] [--save-scene out.scene] [--select ID] [--play] [--select-network-entity] [--no-scene-post] [--no-scene-world-ui] [--add-component-popup] "
     "[--new-component-prompt Name] [--new-component Name] [--new-state-machine-prompt Name] [--build dir] "
-    "[--open-menu Name] [--open-build-settings] [--open-online-settings] [--open-gui-settings] [--gui-settings-set json] [--game-resolution WxH] [--game-display-scale S] [--gui-preview-scale PERCENT] [--assets-menu path|/] [--assets-create system|fsm|gui|material|shader|shadergraph:folder] [--assets-rename path=name] [--assets-select path] [--material-set field=json] [--material-undo N] [--material-redo N] "
+    "[--open-menu Name] [--open-build-settings] [--open-online-settings] [--open-gui-settings] [--gui-settings-set json] [--game-resolution WxH] [--game-display-scale S] [--gui-preview-scale PERCENT] [--assets-menu path|/] [--assets-create system|fsm|gui|material|shader|shadergraph:folder] [--assets-rename path=name] [--assets-select path] [--assets-edit path] [--material-set field=json] [--material-undo N] [--material-redo N] "
     "[--focus-panel Window] [--map-click tx,tz]... [--grid-view tx,tz,zoom] [--zone-section Map[,Problems...]] [--zone-tool Raise|Lower|Flatten|SetSpawn|...] [--zone-select id|object:tx,tz,index] [--bake] [--mapbake exe] [--open-gui file.rml|file.guiprefab] [--gui-select id] [--gui-preview-size WxH] [--gui-pick X,Y] "
     "[--gui-add Panel|Text|RichText|Button|Toggle|Slider|Dropdown|Spinbox|Progress|ListBox|VirtualList] [--gui-set-attr name=value] [--gui-set-prop name=value] [--gui-rich-wrap tag[=value],start,end] [--gui-undo N] [--gui-redo N] [--gui-save] [--gui-create-prefab folder|/] [--gui-place-prefab path]... [--gui-revert name|*] [--gui-apply name|*] [--gui-unpack] [--gui-delete] [--gui-move up|down] [--gui-reparent id|/] [--gui-click id] "
     "[--open-graph file.kshadergraph] [--graph-add type[,x,y]] [--graph-link N.pin,M.pin] [--graph-unlink N.pin] [--graph-select N[,M...]] "
     "[--graph-delete N[,M...]] [--graph-set N.setting=json] [--graph-comment title,x,y,w,h] [--graph-paste x,y] [--graph-undo N] [--graph-redo N] "
-    "[--graph-save] [--graph-add-menu N.pin|/] [--graph-preview sphere|cube|plane] [--graph-preview-collapse] [--graph-view-code] [--preview-model path] [--preview-clip name] [--preview-lod N] "
+    "[--graph-save] [--graph-close] [--graph-add-menu N.pin|/] [--graph-preview sphere|cube|plane] [--graph-preview-collapse] [--graph-view-code] [--preview-model path] [--preview-clip name] [--preview-lod N] "
     "[--sim-mouse frame,none|left|right[+shift],dx,dy,wheel[,sx,sy[,hold]]] [--sim-key frame,[ctrl+]key]... [--sim-gamepad frame,frames,control=value[+...]]... [--sim-on-log text] [--settings-file settings.json] [--open-preferences] "
     "[--open-external path] [--drop-model path] [--create-prefab folder|/] [--drop-prefab path[,parentId]] [--drop-prefab-view path,u,v] "
     "[--set-field ID,Component.field,json] [--prefab-revert spec] [--prefab-apply spec] [--prefab-unpack ID] [--edit-prefab path] "
@@ -146,6 +146,7 @@ struct Options {
     std::optional<std::string> assetsMenu; // open this Assets entry's context menu + Create submenu ("" = background)
     std::optional<std::pair<std::string, std::string>> assetsRename; // rename this Assets entry (project-relative) to a name
     std::string assetsSelect; // select this Assets entry (project-relative) as a click does: a .mat shows in the Inspector
+    std::string assetsEdit;   // Assets > Edit on this .kshadergraph (project-relative): opens it in the Shader Graph
     std::vector<std::pair<std::string, nlohmann::ordered_json>> materialSets; // --material-set: Inspector edits of that .mat, in order
     int materialUndo = 0, materialRedo = 0; // --material-undo N / --material-redo N: then material Undo N times, then Redo N times
     std::optional<std::pair<Panels::AssetCreate, std::string>> assetsCreate; // run Assets Create in that folder
@@ -569,8 +570,8 @@ std::optional<Options> parseArgs(int argc, char** argv)
         } else if (arg == "--assets-rename" && hasValue && std::string_view(argv[i + 1]).find('=') != std::string_view::npos) {
             const std::string_view text = argv[++i];
             options.assetsRename.emplace(text.substr(0, text.find('=')), text.substr(text.find('=') + 1));
-        } else if (arg == "--assets-select" && hasValue) {
-            options.assetsSelect = argv[++i];
+        } else if ((arg == "--assets-select" || arg == "--assets-edit") && hasValue) { // one branch: the chain is at MSVC's nesting limit
+            (arg == "--assets-select" ? options.assetsSelect : options.assetsEdit) = argv[++i];
         } else if (arg == "--material-set" && hasValue) {
             const std::string_view text = argv[++i];
             const size_t equals = text.find('=');
@@ -615,7 +616,8 @@ std::optional<Options> parseArgs(int argc, char** argv)
             }
             for (int n = 0; n < count; ++n)
                 options.graphSteps.emplace_back(arg, "");
-        } else if (arg == "--graph-save" || arg == "--graph-view-code" || arg == "--graph-preview-collapse") {
+        } else if (arg == "--graph-save" || arg == "--graph-view-code" || arg == "--graph-preview-collapse" ||
+                   arg == "--graph-close") {
             options.graphSteps.emplace_back(arg, "");
         } else if (arg == "--graph-preview" && hasValue) {
             options.graphSteps.emplace_back(arg, argv[++i]);
@@ -920,6 +922,7 @@ std::optional<Options> parseArgs(int argc, char** argv)
                              options.guiSettingsSet || options.gameResolution || options.gameDisplayScale ||
                              options.guiPreviewScale || !options.focusPanel.empty() || !options.scrollPostSection.empty() || !options.zoneSections.empty() || options.zoneTool || !options.zoneSelect.empty() || options.bake || !options.mapbake.empty() || options.newStateMachinePrompt ||
                              options.assetsMenu || options.assetsCreate || options.assetsRename || !options.assetsSelect.empty() ||
+                             !options.assetsEdit.empty() ||
                              !options.materialSets.empty() || options.materialUndo || options.materialRedo ||
                              !options.openGui.empty() ||
                              !options.guiSelect.empty() || options.guiPreviewSize || options.guiPick ||
@@ -943,7 +946,7 @@ std::optional<Options> parseArgs(int argc, char** argv)
                          "--new-state-machine-prompt, --open-menu, --open-build-settings, --open-online-settings, --open-gui-settings, "
                          "--gui-settings-set, --game-resolution, --game-display-scale, --gui-preview-scale, --focus-panel, --map-click, --grid-view, --zone-section, --zone-tool, --zone-select, --bake, --mapbake, "
                          "--assets-menu, "
-                         "--assets-create, --assets-rename, --assets-select, --open-gui, --gui-select, --gui-preview-size, --gui-pick, --gui-add, --gui-save, "
+                         "--assets-create, --assets-rename, --assets-select, --assets-edit, --open-gui, --gui-select, --gui-preview-size, --gui-pick, --gui-add, --gui-save, "
                          "--gui-click, --open-graph, --preview-model, --open-preferences, --open-external, --world-address, --online-login-env, --online-compose, the prefab "
                          "steps, --open-additive, --active-scene, --move-to-scene, --scene-menu, --remove-scene, --scene-undo, --scene-redo, --assets-delete, --inspector-apply-menu, --file-save, --bake-probes, --bake-lightmaps[-async], --cancel-lightmaps, --bake-voxelgi and the zone flags require "
                          "--project <dir> or --scene <file>");
@@ -1238,12 +1241,15 @@ void drawGuiBuilder(GuiBuilder& builder)
     builder.drawModals();
 }
 
-// The Shader Graph panels, docked beside their scene counterparts in layouts saved before they existed: Shader Graph by
-// Scene, Graph Inspector by Inspector. time: the canvas' preview inset's TIME.
+// The Shader Graph panels, only while a graph is open, docked beside their scene counterparts in layouts saved before
+// they existed: Shader Graph by Scene, Graph Inspector by Inspector (only when they draw, or the dock request would go
+// to the next window). time: the canvas' preview inset's TIME.
 void drawShaderGraph(ShaderGraphEditor& graphs, float time)
 {
     for (const auto& [existing, window] : {std::pair{"Scene", ShaderGraphEditor::kCanvasWindow},
                                            std::pair{"Inspector", ShaderGraphEditor::kInspectorWindow}}) {
+        if (!graphs.isOpen()) // the canvas' X may close it between the two
+            break;
         if (const ImGuiWindowSettings* settings = ImGui::FindWindowSettingsByID(ImHashStr(existing));
             settings && !ImGui::FindWindowSettingsByID(ImHashStr(window)))
             ImGui::SetNextWindowDockID(settings->DockId, ImGuiCond_FirstUseEver);
@@ -1369,6 +1375,9 @@ bool runGraphStep(ShaderGraphEditor& graphs, const std::filesystem::path& projec
     } else if (flag == "--graph-save") {
         error = "the write failed";
         ok = graphs.save();
+    } else if (flag == "--graph-close") {
+        graphs.close(); // as the canvas tab's X
+        ok = true;
     } else if (flag == "--graph-view-code") {
         graphs.showGeneratedCode();
         ok = true;
@@ -2078,7 +2087,8 @@ int main(int argc, char** argv)
             kast::log::error(std::format("--gui-click {}: no such element in a visible game GUI", options->guiClick));
         if (options->assetsMenu && frames.frame() == kAddComponentPopupFrame + 2) // after --focus-panel, which closes popups
             panels.openAssetMenu(*options->assetsMenu);
-        if (!options->assetsDelete.empty() && frames.frame() == kAddComponentPopupFrame + 2)
+        // After --focus-panel (two frames later with --open-graph), which closes popups.
+        if (!options->assetsDelete.empty() && frames.frame() == kAddComponentPopupFrame + (options->openGraph.empty() ? 2 : 4))
             panels.openAssetDelete(doc, options->assetsDelete);
         if (!options->inspectorApplyMenu.empty() && frames.frame() == kAddComponentPopupFrame + 2)
             panels.openApplyMenu(options->inspectorApplyMenu);
@@ -2090,6 +2100,8 @@ int main(int argc, char** argv)
             panels.requestAssetRename(options->assetsRename->first, options->assetsRename->second);
         if (!options->assetsSelect.empty() && frames.frame() == kAddComponentPopupFrame)
             panels.selectAsset(options->assetsSelect);
+        if (!options->assetsEdit.empty() && frames.frame() == kAddComponentPopupFrame)
+            panels.editAsset(options->assetsEdit);
         if (frames.frame() == kAddComponentPopupFrame + 1) { // the Inspector has shown --assets-select's material
             for (const auto& [field, value] : options->materialSets)
                 if (std::string error; panels.editMaterial(field, value, error))

@@ -2438,7 +2438,7 @@ void Panels::drawAssets(Document& doc, FileActions& files, GuiBuilder& gui, Shad
 {
     if ((doc.project ? doc.project->root : std::filesystem::path()) != assetsRoot_)
         refreshAssets(doc);
-    if (!openGraph_.empty()) // the Inspector's "Open in Shader Graph"
+    if (!openGraph_.empty()) // the Inspector's "Open in Shader Graph", Assets > Edit
         graphs.open(assetsRoot_ / fromUtf8(std::exchange(openGraph_, {})));
     if (ImGui::Begin("Assets")) {
         if (!doc.project) {
@@ -2627,6 +2627,11 @@ void Panels::drawAssetNode(const Document& doc, FileActions& files, GuiBuilder& 
 
 void Panels::drawAssetItems(const Document& doc, ExternalEditor& editor, const AssetEntry& entry, const char* blocker)
 {
+    if (!entry.folder && hasExtension(entry.name, kast::kShaderGraphExtension)) {
+        if (ImGui::MenuItem("Edit")) // as a double-click; during Play too
+            editAsset(entry.path);
+        ImGui::Separator();
+    }
     if (!entry.folder && isTextAsset(entry.name)) {
         if (ImGui::MenuItem("Open in External Editor"))
             editor.open(assetsRoot_ / fromUtf8(entry.path));
@@ -2852,6 +2857,7 @@ void Panels::applyAssetEdit(Document& doc, GuiBuilder& gui, ShaderGraphEditor& g
         error = deleteBlocker(source, openScenePath(doc)); // the scene may have changed since the prompt opened
         if (error.empty() && recycleAsset(source, error)) { // its .meta too
             kast::log::info(std::format("Moved '{}' to the Recycle Bin", edit.path));
+            graphs.closeIfDeleted(source); // the open graph, or a folder holding it: closed unasked (confirmed already)
             refreshPrefabs(doc); // instances of a deleted prefab become placeholders
         }
         break;
