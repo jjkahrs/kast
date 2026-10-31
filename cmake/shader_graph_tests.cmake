@@ -211,8 +211,9 @@ set_tests_properties(player_shader_graphs_matches_editor PROPERTIES
 # The panels exist only while a graph is open (Assets > Edit, the canvas tab's X, deleting the open graph). Probes on the
 # 1600x900 default layout: the Shader Graph tab's header (620,40) and the Graph Inspector's (1478,40) are orange
 # (#ffaa00 / #ff9900) while their window is submitted, the dock's #313131 without it. Clicks are --sim-mouse offsets
-# from the Scene view's center (800,352): the canvas tab's X (804,33), the close prompt's Save / Discard / Cancel
-# (631 / 686 / 746,473), the Delete Asset modal's Delete (718,483).
+# from the Scene view's center (800,352): the canvas tab's X (717,33: the tab follows Scene and Game, with no GUI Preview
+# tab while no GUI is open), the close prompt's Save / Discard / Cancel (631 / 686 / 746,473), the Delete Asset modal's
+# Delete (718,483).
 set(KAST_GRAPH_TABS_SHOWN 0.3875,0.0444,255,160,0,12 0.92375,0.0444,255,160,0,12)
 set(KAST_GRAPH_TABS_HIDDEN 0.3875,0.0444,49,49,49,10 0.92375,0.0444,49,49,49,10)
 # kast_graph_tabs(<name> SHOWN|HIDDEN): shader_graph_<name>_tabs probes shader_graph_<name>.png.
@@ -247,11 +248,11 @@ kast_graph_tabs(inspector_button SHOWN)
 kast_graph_shot(scene_front "${KAST_GRAPH_ARGS}" "-DFOCUS_PANEL=Scene" "-DFORBID_OUTPUT=\\[error\\]")
 kast_graph_tabs(scene_front SHOWN)
 # - close_x: the tab's X on a clean graph closes it: both panels go.
-kast_graph_shot(close_x "${KAST_GRAPH_ARGS} --sim-mouse 30,left,0,0,0,4,-319,3"
+kast_graph_shot(close_x "${KAST_GRAPH_ARGS} --sim-mouse 30,left,0,0,0,-83,-319,3"
   "-DEXPECT_OUTPUT=Closed shader graph '[^']*graph_demo" "-DFORBID_OUTPUT=\\[error\\]")
 kast_graph_tabs(close_x HIDDEN)
 # - close_prompt: the X on a dirty graph asks Save / Discard / Cancel ("before closing it?"), the canvas still open.
-kast_graph_shot(close_prompt "${KAST_GRAPH_ARGS} --graph-add multiply,560,330 --sim-mouse 30,left,0,0,0,4,-319,3" -DFRAMES=45
+kast_graph_shot(close_prompt "${KAST_GRAPH_ARGS} --graph-add multiply,560,330 --sim-mouse 30,left,0,0,0,-83,-319,3" -DFRAMES=45
   "-DFORBID_OUTPUT=Closed shader graph|\\[error\\]")
 # - close_cancel / close_discard: --graph-close (the X's call) on a dirty graph, then Cancel (kept, the canvas in front)
 #   or Discard (closed, not written).

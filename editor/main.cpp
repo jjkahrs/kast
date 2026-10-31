@@ -87,7 +87,7 @@ constexpr const char* kUsage =
     "[--new-component-prompt Name] [--new-component Name] [--new-state-machine-prompt Name] [--build dir] "
     "[--open-menu Name] [--open-build-settings] [--open-online-settings] [--open-gui-settings] [--gui-settings-set json] [--game-resolution WxH] [--game-display-scale S] [--gui-preview-scale PERCENT] [--assets-menu path|/] [--assets-create system|fsm|gui|material|shader|shadergraph:folder] [--assets-rename path=name] [--assets-select path] [--assets-edit path] [--material-set field=json] [--material-undo N] [--material-redo N] "
     "[--focus-panel Window] [--map-click tx,tz]... [--grid-view tx,tz,zoom] [--zone-section Map[,Problems...]] [--zone-tool Raise|Lower|Flatten|SetSpawn|...] [--zone-select id|object:tx,tz,index] [--bake] [--mapbake exe] [--open-gui file.rml|file.guiprefab] [--gui-select id] [--gui-preview-size WxH] [--gui-pick X,Y] "
-    "[--gui-add Panel|Text|RichText|Button|Toggle|Slider|Dropdown|Spinbox|Progress|ListBox|VirtualList] [--gui-set-attr name=value] [--gui-set-prop name=value] [--gui-rich-wrap tag[=value],start,end] [--gui-undo N] [--gui-redo N] [--gui-save] [--gui-create-prefab folder|/] [--gui-place-prefab path]... [--gui-revert name|*] [--gui-apply name|*] [--gui-unpack] [--gui-delete] [--gui-move up|down] [--gui-reparent id|/] [--gui-hierarchy-collapse] [--gui-click id] "
+    "[--gui-add Panel|Text|RichText|Button|Toggle|Slider|Dropdown|Spinbox|Progress|ListBox|VirtualList] [--gui-set-attr name=value] [--gui-set-prop name=value] [--gui-rich-wrap tag[=value],start,end] [--gui-undo N] [--gui-redo N] [--gui-save] [--gui-close] [--gui-create-prefab folder|/] [--gui-place-prefab path]... [--gui-revert name|*] [--gui-apply name|*] [--gui-unpack] [--gui-delete] [--gui-move up|down] [--gui-reparent id|/] [--gui-hierarchy-collapse] [--gui-click id] "
     "[--open-graph file.kshadergraph] [--graph-add type[,x,y]] [--graph-link N.pin,M.pin] [--graph-unlink N.pin] [--graph-select N[,M...]] "
     "[--graph-delete N[,M...]] [--graph-set N.setting=json] [--graph-comment title,x,y,w,h] [--graph-paste x,y] [--graph-undo N] [--graph-redo N] "
     "[--graph-save] [--graph-close] [--graph-add-menu N.pin|/] [--graph-preview sphere|cube|plane] [--graph-preview-collapse] [--graph-view-code] [--preview-model path] [--preview-clip name] [--preview-lod N] "
@@ -207,6 +207,7 @@ struct Options {
     std::optional<GuiRichWrap> guiRichWrap; // then wrap the selected Rich Text's bytes start..end as its toolbar does
     int guiUndo = 0, guiRedo = 0;  // then GUI Undo N times, then Redo N times
     bool guiSave = false;          // then save the GUI as its Save button does
+    bool guiClose = false;         // then close the GUI as the GUI Preview tab's X does (the prompt if dirty)
     // GUI prefabs, after the edits above (at the same frame, in this order): Create GUI Prefab from the selection in this
     // project folder ("/" the root), place these prefabs (project paths) in the selected Panel, else <body>, Revert / Apply a
     // field of the selection ("*": all of its instance), Unpack its instance; then delete, move or reparent the selection as
@@ -675,8 +676,8 @@ std::optional<Options> parseArgs(int argc, char** argv)
             ++i;
         } else if (arg == "--gui-redo" && hasValue && parsePositive(argv[i + 1], options.guiRedo)) {
             ++i;
-        } else if (arg == "--gui-save") {
-            options.guiSave = true;
+        } else if (arg == "--gui-save" || arg == "--gui-close") { // one branch: MSVC's else-if nesting limit
+            (arg == "--gui-save" ? options.guiSave : options.guiClose) = true;
         } else if (arg == "--gui-create-prefab" && hasValue) {
             const std::string folder = argv[++i];
             options.guiCreatePrefab = folder == "/" ? "" : folder;
@@ -927,7 +928,7 @@ std::optional<Options> parseArgs(int argc, char** argv)
                              !options.materialSets.empty() || options.materialUndo || options.materialRedo ||
                              !options.openGui.empty() ||
                              !options.guiSelect.empty() || options.guiPreviewSize || options.guiPick ||
-                             options.guiAdd || options.guiSetAttr || options.guiSetProp || options.guiRichWrap || options.guiSave || !options.guiClick.empty() || options.openPreferences ||
+                             options.guiAdd || options.guiSetAttr || options.guiSetProp || options.guiRichWrap || options.guiSave || options.guiClose || !options.guiClick.empty() || options.openPreferences ||
                              !options.openGraph.empty() || !options.previewModel.empty() ||
                              !options.openExternal.empty() || !options.dropModel.empty() || options.logFps ||
                              !options.prefabSteps.empty() || !options.assetsDelete.empty() || !options.inspectorApplyMenu.empty() ||
@@ -947,7 +948,7 @@ std::optional<Options> parseArgs(int argc, char** argv)
                          "--new-state-machine-prompt, --open-menu, --open-build-settings, --open-online-settings, --open-gui-settings, "
                          "--gui-settings-set, --game-resolution, --game-display-scale, --gui-preview-scale, --focus-panel, --map-click, --grid-view, --zone-section, --zone-tool, --zone-select, --bake, --mapbake, "
                          "--assets-menu, "
-                         "--assets-create, --assets-rename, --assets-select, --assets-edit, --open-gui, --gui-select, --gui-preview-size, --gui-pick, --gui-add, --gui-save, "
+                         "--assets-create, --assets-rename, --assets-select, --assets-edit, --open-gui, --gui-select, --gui-preview-size, --gui-pick, --gui-add, --gui-save, --gui-close, "
                          "--gui-click, --open-graph, --preview-model, --open-preferences, --open-external, --world-address, --online-login-env, --online-compose, the prefab "
                          "steps, --open-additive, --active-scene, --move-to-scene, --scene-menu, --remove-scene, --scene-undo, --scene-redo, --assets-delete, --inspector-apply-menu, --file-save, --bake-probes, --bake-lightmaps[-async], --cancel-lightmaps, --bake-voxelgi and the zone flags require "
                          "--project <dir> or --scene <file>");
@@ -958,12 +959,12 @@ std::optional<Options> parseArgs(int argc, char** argv)
         return std::nullopt;
     }
     if ((!options.guiSelect.empty() || options.guiPick || options.guiAdd || options.guiSetAttr || options.guiSetProp ||
-         options.guiRichWrap || options.guiUndo || options.guiRedo || options.guiSave || options.guiCreatePrefab ||
+         options.guiRichWrap || options.guiUndo || options.guiRedo || options.guiSave || options.guiClose || options.guiCreatePrefab ||
          !options.guiPlacePrefabs.empty() || !options.guiRevert.empty() || !options.guiApply.empty() || options.guiUnpack ||
          options.guiDelete || options.guiMove || options.guiReparent || options.guiHierarchyCollapse) &&
         options.openGui.empty()) {
         kast::log::error("--gui-select, --gui-pick, --gui-add, --gui-set-attr, --gui-set-prop, --gui-rich-wrap, --gui-undo, "
-                         "--gui-redo, --gui-save and the GUI prefab and hierarchy flags require --open-gui <file.rml>");
+                         "--gui-redo, --gui-save, --gui-close and the GUI prefab and hierarchy flags require --open-gui <file.rml>");
         return std::nullopt;
     }
     if (!options.graphSteps.empty() && options.openGraph.empty()) {
@@ -1233,21 +1234,24 @@ void drawPreferences(ExternalEditor& editor, OnlineModel& online, std::string& d
     ImGui::EndPopup();
 }
 
-// The GUI Builder's panels, each docked beside its scene counterpart in layouts saved before the builder existed:
-// GUI Inspector by Inspector, GUI Style by Console, GUI Preview (with the GUI Hierarchy inset) by Scene.
+// The GUI Builder's panels, only while a GUI is open, each docked beside its scene counterpart in layouts saved before
+// the builder existed (only when it draws, or the dock request would go to the next window): GUI Inspector by Inspector,
+// GUI Style by Console, GUI Preview (with the GUI Hierarchy inset) by Scene.
 void drawGuiBuilder(GuiBuilder& builder)
 {
-    const auto dockBeside = [](const char* existing, const char* window) {
-        if (const ImGuiWindowSettings* settings = ImGui::FindWindowSettingsByID(ImHashStr(existing));
-            settings && !ImGui::FindWindowSettingsByID(ImHashStr(window)))
-            ImGui::SetNextWindowDockID(settings->DockId, ImGuiCond_FirstUseEver);
-    };
-    dockBeside("Inspector", GuiBuilder::kInspectorWindow);
-    builder.drawInspector();
-    dockBeside("Console", GuiBuilder::kStyleWindow);
-    builder.drawStyle();
-    dockBeside("Scene", GuiBuilder::kPreviewWindow);
-    builder.drawPreview();
+    if (builder.isOpen()) {
+        const auto dockBeside = [](const char* existing, const char* window) {
+            if (const ImGuiWindowSettings* settings = ImGui::FindWindowSettingsByID(ImHashStr(existing));
+                settings && !ImGui::FindWindowSettingsByID(ImHashStr(window)))
+                ImGui::SetNextWindowDockID(settings->DockId, ImGuiCond_FirstUseEver);
+        };
+        dockBeside("Inspector", GuiBuilder::kInspectorWindow);
+        builder.drawInspector();
+        dockBeside("Console", GuiBuilder::kStyleWindow);
+        builder.drawStyle();
+        dockBeside("Scene", GuiBuilder::kPreviewWindow);
+        builder.drawPreview(); // last: its X may close the GUI
+    }
     builder.drawModals();
 }
 
@@ -2095,6 +2099,8 @@ int main(int argc, char** argv)
         }
         if (options->guiSave && frames.frame() == kAddComponentPopupFrame + 9)
             guiBuilder.save();
+        if (options->guiClose && frames.frame() == kAddComponentPopupFrame + 10) // after --gui-save
+            guiBuilder.requestClose();
         if (!options->guiClick.empty() && frames.frame() == kAddComponentPopupFrame && !game.gui().click(options->guiClick))
             kast::log::error(std::format("--gui-click {}: no such element in a visible game GUI", options->guiClick));
         if (options->assetsMenu && frames.frame() == kAddComponentPopupFrame + 2) // after --focus-panel, which closes popups

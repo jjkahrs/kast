@@ -263,6 +263,10 @@ Text.</td>
 <td>With <code>--open-gui</code>: save the GUI as its <strong>Save</strong> button does, after 19 frames.</td>
 </tr>
 <tr>
+<td><code>--gui-close</code></td>
+<td>With <code>--open-gui</code>: close the GUI as the GUI Preview tab's X does, after 20 frames (after <code>--gui-save</code>): closed at once when clean (logs <code>Closed GUI '...'</code>, the three panels go); with unsaved changes the Save / Discard / Cancel prompt opens (answer it with <code>--sim-mouse</code>).</td>
+</tr>
+<tr>
 <td><code>--gui-create-prefab &lt;folder&gt;|/</code></td>
 <td>With <code>--open-gui</code>: <a href="gui-builder.html#prefabs">Create GUI Prefab</a> from the selection into that project folder (<code>/</code> = the project root) after 17 frames, before the field edits: writes <code>&lt;id or kind&gt;.guiprefab</code> + <code>.rcss</code> (<code>_2</code>, ... if taken) and makes the element an instance; logs <code>Created GUI prefab '&lt;file&gt;' (and its .rcss); #&lt;id&gt; is an instance of it</code>, or the refusal (also shown in a <strong>GUI Prefab</strong> modal).</td>
 </tr>
