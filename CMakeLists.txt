@@ -726,6 +726,8 @@ kast_plain_asset_refs(point_shadows_scene)
 # kast_shadow_variant(<name> <scene text> <regex> <replacement>): writes <name>.scene into the project (so models and
 # materials resolve) under the build folder.
 set(KAST_SHADOW_PROJECT "${CMAKE_CURRENT_BINARY_DIR}/shadow_project")
+# A fresh copy: files renamed or deleted in tests/project must not linger (stale copies clash on asset ids).
+file(REMOVE_RECURSE "${KAST_SHADOW_PROJECT}")
 file(COPY "${KAST_TEST_PROJECT}/" DESTINATION "${KAST_SHADOW_PROJECT}")
 function(kast_shadow_variant name scene regex replacement)
   string(REGEX REPLACE "${regex}" "${replacement}" variant "${scene}")
