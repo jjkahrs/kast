@@ -2416,7 +2416,7 @@ void Renderer::render(const Scene& scene, const std::filesystem::path& projectRo
     if (sdfgiOn) {
         SdfgiRenderer::Frame frame{.eye = eye, .settings = sdfgiSettings, .shapes = std::move(sdfgiShapes)};
         std::map<std::pair<int, int>, const TerrainTileData*> tiles;
-        std::vector<const TerrainTile*> streamed; // the scene's tiles, and the extra scene's (the editor's open zone)
+        std::vector<const TerrainTile*> streamed; // the scene's tiles, and the extra scene's (the editor's open map)
         for (const Scene* from : {&scene, extra})
             if (from)
                 for (auto [entity, tile] : from->registry().view<TerrainTile>().each())

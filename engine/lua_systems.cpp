@@ -17,6 +17,7 @@
 #include "scene_io.h"
 #include "shader.h"
 #include "tile_scenes.h"
+#include "zone_scenes.h"
 
 #include <SDL3/SDL.h>
 #include <sol/sol.hpp>
@@ -91,9 +92,11 @@ struct SceneRequest {
 struct LuaSystems::State {
     State(Scene& scene, const std::optional<std::filesystem::path>& projectRoot, const std::string& scenePath, Input* input,
           EventBus& bus, StateMachines& fsm, Physics& physics, Audio& audio, Network& network, AuthClient& auth,
-          WorldClient& world, ChatClient& chat, GuiAccess* gui, DisplayAccess* display, InputActions& actions)
+          WorldClient& world, ChatClient& chat, GuiAccess* gui, DisplayAccess* display, InputActions& actions,
+          const TerrainStreamer& terrain)
         : scene(scene), projectRoot(projectRoot), input(input), bus(bus), fsm(fsm), physics(physics), audio(audio),
-          network(network), auth(auth), world(world), chat(chat), gui(gui), display(display), actions(actions)
+          network(network), auth(auth), world(world), chat(chat), gui(gui), display(display), actions(actions),
+          terrain(terrain)
     {
         for (const LoadedScene& loaded : scene.loadedScenes())
             scenePaths[loaded.slot] = loaded.slot == scene.activeSlot() ? scenePath : projectPath(loaded.path);
@@ -114,6 +117,7 @@ struct LuaSystems::State {
     GuiAccess* gui; // null: no game GUIs here, kast.gui is nil
     DisplayAccess* display; // null: no window here, kast.display is nil
     InputActions& actions;  // kast.input.action / axis / bind
+    const TerrainStreamer& terrain; // kast.map.zone / zoneAt
     std::unordered_map<entt::entity, AudioHandle> sources; // the last voice each AudioSource started (kast.audio.stopSource)
     MaterialLibrary materials; // shared .mat files, for kast.get/setMaterialProperty
     std::vector<SceneRequest> sceneRequests; // this frame's, in call order (a switch drops the ones before it)
@@ -133,6 +137,7 @@ struct LuaSystems::State {
     sol::table dofApi;       // kast.dof.*
     sol::table volumetricFogApi; // kast.volumetricFog.*
     sol::table particlesApi; // kast.particles.*
+    sol::table mapApi;       // kast.map.*
     sol::table authApi;    // kast.auth.*, only while Online Services are enabled
     sol::table worldApi;   // kast.world.*, likewise
     sol::table chatApi;    // kast.chat.*, likewise
@@ -196,6 +201,7 @@ struct LuaSystems::State {
     void bindSdfgiApi();
     sol::table postBlockApi(const char* luaName, const char* block);
     void bindParticlesApi();
+    void bindMapApi();
     void bindAuthApi();
     void bindWorldApi();
     void bindGuiApi();
@@ -487,6 +493,7 @@ sol::environment LuaSystems::State::environment()
     kast["dof"] = readOnly(dofApi);
     kast["volumetricFog"] = readOnly(volumetricFogApi);
     kast["particles"] = readOnly(particlesApi);
+    kast["map"] = readOnly(mapApi);
     kast["items"] = itemTable();
     if (auth.enabled())
         kast["auth"] = readOnly(authApi);
@@ -769,7 +776,7 @@ void LuaSystems::State::bindApi()
         return sol::make_object(lua, registry.get<PersistentId>(e).value);
     });
 
-    // Zone objects (docs/engine/terrain.html#objects): the game binds the keys. kast.nearestInteractable(position,
+    // Map objects (docs/engine/terrain.html#objects): the game binds the keys. kast.nearestInteractable(position,
     // maxDistance) -> {id, name, pos = {x, y, z}, distance} of the streamed interactable nearest by the horizontal
     // distance to its shape's edge, or nil. kast.interact(id) sends Interact while in the world (true), else false;
     // the server's Lua answers, if it does, with an event.
@@ -1087,6 +1094,7 @@ void LuaSystems::State::bindApi()
     dofApi = postBlockApi("dof", "depthOfField");
     volumetricFogApi = postBlockApi("volumetricFog", "volumetricFog");
     bindParticlesApi();
+    bindMapApi();
     bindAuthApi();
     bindWorldApi();
     chatApi = makeChatApi(lua, chat); // kast.chat.*: see lua_chat_api.h
@@ -1829,6 +1837,28 @@ void LuaSystems::State::bindDisplayApi()
 // Runtime only: never saved, and Stop restores the scene's own.
 // kast.particles.*(entity, ...): runtime control of an entity's ParticleEmitter (see particles.h); an invalid entity, one
 // without an emitter or a bad argument raises.
+// kast.map (docs/engine/zones.html#lua): the zone of the streaming focus, or of a point, on the current Terrain map.
+void LuaSystems::State::bindMapApi()
+{
+    const auto toLua = [this](const map::Zone* zone) -> sol::object {
+        if (!zone)
+            return sol::lua_nil;
+        sol::table table = lua.create_table();
+        table["id"] = zone->id;
+        table["name"] = zone->name;
+        table["flags"] = jsonToLua(lua, zone->flags);
+        return table;
+    };
+    mapApi = lua.create_table();
+    mapApi.set_function("zone", [this, toLua] { return toLua(terrain.zone()); });
+    mapApi.set_function("zoneAt", [this, toLua](sol::this_state L, const sol::object& x, const sol::object& z) {
+        for (const sol::object* value : {&x, &z})
+            if (value->get_type() != sol::type::number || !std::isfinite(value->as<double>()))
+                raise(L, std::format("kast.map.zoneAt: x and z must be finite numbers, got {}", toString(L, *value)));
+        return toLua(terrain.zoneAt(x.as<float>(), z.as<float>()));
+    });
+}
+
 void LuaSystems::State::bindParticlesApi()
 {
     // The entity's emitter and its state (made on first use, as particleSystem would).
@@ -2287,6 +2317,7 @@ void LuaSystems::start(Scene& scene, const std::optional<std::filesystem::path>&
     audio_.start(projectRoot);
     terrain_.start(projectRoot);
     tileSceneFiles_.clear();
+    zoneSceneFiles_.clear();
     failedTileScenes_.clear();
     actions_.reset(inputMap_);
     launch(scene, projectRoot, scenePath, input);
@@ -2303,7 +2334,7 @@ void LuaSystems::launch(Scene& scene, const std::optional<std::filesystem::path>
     if (gui_)
         gui_->reset(); // the old scene's documents and writes; the inits' writes apply as the new documents load
     state_ = std::make_unique<State>(scene, projectRoot, scenePath, input, bus_, fsm_, physics_, audio_, network_, auth_,
-                                     world_, chat_, gui_, display_, actions_);
+                                     world_, chat_, gui_, display_, actions_, terrain_);
     state_->playOnStart(); // before the inits, which may stop them
     std::vector<std::string> systems; // every loaded scene's, in load order, each once
     for (const LoadedScene& loaded : scene.loadedScenes())
@@ -2374,37 +2405,50 @@ bool LuaSystems::streamTileScenes()
     const std::optional<TerrainStreamer::Streamed>& streamed = terrain_.streamed();
     if (!streamed || !state_->projectRoot)
         return false;
-    const std::string folder = terrain_.folder(streamed->map)->filename().string();
+    const std::filesystem::path& mapFolder = *terrain_.folder(streamed->map);
+    const std::string folder = mapFolder.filename().string();
     auto files = tileSceneFiles_.find(streamed->map);
     if (files == tileSceneFiles_.end())
-        files = tileSceneFiles_.emplace(streamed->map, listTileScenes(*terrain_.folder(streamed->map)).tiles).first;
+        files = tileSceneFiles_.emplace(streamed->map, listTileScenes(mapFolder).tiles).first;
+    auto zoneFiles = zoneSceneFiles_.find(streamed->map);
+    if (zoneFiles == zoneSceneFiles_.end())
+        zoneFiles = zoneSceneFiles_.emplace(streamed->map, listZoneScenes(mapFolder).zones).first;
     Scene& scene = state_->scene;
     std::vector<std::string> loaded;
     for (const LoadedScene& each : scene.loadedScenes())
         loaded.push_back(state_->scenePaths.at(each.slot));
     const TileScenePlan plan = planTileScenes(folder, streamed->tiles, files->second, loaded,
-                                              state_->scenePaths.at(scene.activeSlot()), failedTileScenes_);
+                                              state_->scenePaths.at(scene.activeSlot()), failedTileScenes_,
+                                              zonesOf(*terrain_.zones(streamed->map), streamed->tiles), zoneFiles->second);
+    // map.tileScene.* {map, tx, tz, path} or map.zoneScene.* {map, zone, path}
+    const auto publish = [this](const std::string& path, const char* what) {
+        if (const std::optional<TileSceneRef> tile = parseTileScenePath(path))
+            bus_.publish(std::format("map.tileScene.{}", what),
+                         tileSceneEvent(terrain_.mapNamed(tile->folder).value_or(0), *tile), "kast.terrain");
+        else if (const std::optional<ZoneSceneRef> zone = parseZoneScenePath(path))
+            bus_.publish(std::format("map.zoneScene.{}", what),
+                         zoneSceneEvent(terrain_.mapNamed(zone->folder).value_or(0), *zone), "kast.terrain");
+    };
     for (const std::string& path : plan.unload) {
         state_->unloadScene(path);
-        const TileSceneRef ref = *parseTileScenePath(path);
-        bus_.publish("map.tileScene.unloaded", tileSceneEvent(terrain_.mapNamed(ref.folder).value_or(0), ref),
-                     "kast.terrain");
+        publish(path, "unloaded");
     }
     if (!plan.load)
         return !plan.unload.empty();
-    // ponytail: at most one tile scene file read and applied per frame (a sync load on the main thread), so a tile
-    // crossing with many scenes in range spreads over frames; read on a worker thread if one big scene hitches.
+    // ponytail: at most one tile or zone scene file read and applied per frame (a sync load on the main thread), so a
+    // tile crossing with many scenes in range spreads over frames; read on a worker thread if one big scene hitches.
     std::string error;
     Scene tile;
     const std::optional<std::filesystem::path> file = resolveProjectPath(*state_->projectRoot, *plan.load, error);
     if (!file || !loadScene(file->string(), tile, error, nullptr, *state_->projectRoot)) {
         failedTileScenes_.insert(*plan.load);
-        log::error(std::format("Map: tile scene '{}' did not load: {}; streaming goes on without it", *plan.load, error));
+        log::error(std::format("Map: {} scene '{}' did not load: {}; streaming goes on without it",
+                               parseTileScenePath(*plan.load) ? "tile" : "zone", *plan.load, error));
         return !plan.unload.empty();
     }
     SceneRequest request{SceneRequest::Kind::Add, *plan.load, std::move(tile)};
     state_->addScene(request);
-    bus_.publish("map.tileScene.loaded", tileSceneEvent(streamed->map, *parseTileScenePath(*plan.load)), "kast.terrain");
+    publish(*plan.load, "loaded");
     return true;
 }
 

@@ -1743,7 +1743,7 @@ void FileActions::saveTo(const std::string& path, Pending after)
 {
     std::string error;
     if (saveFile(doc_, path, error)) {
-        // Then the extra (a dirty zone). Blocked (it logs why): the action waits, so its changes aren't lost.
+        // Then the extra (a dirty map). Blocked (it logs why): the action waits, so its changes aren't lost.
         if (const std::string what = extraUnsaved(); !what.empty() && extra.save && !extra.save()) {
             if (after == Pending::None)
                 return;

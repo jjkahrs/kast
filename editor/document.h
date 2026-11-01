@@ -307,7 +307,7 @@ std::string newProjectError(std::string_view name, const std::string& dir);
 bool createProject(std::string_view name, const std::string& dir, std::filesystem::path& created, std::string& error);
 std::string displayName(const Document& doc);
 // "Kast Editor - [<project> - ]<scene>[*][ (Playing|Paused[: <switched scene>])]"; "*" when the scene or (extraDirty,
-// FileActions::extra: the open zone) has unsaved changes.
+// FileActions::extra: the open map) has unsaved changes.
 std::string windowTitle(const Document& doc, bool extraDirty = false);
 
 // File menu behavior: New/Open/Save/Save As with native dialogs, unsaved-changes and error modals, window title.
@@ -363,7 +363,7 @@ public:
     // Call once per frame inside the ImGui frame: shortcuts, dialog results, modals, title.
     void update();
 
-    // Unsaved work kept outside the scene (main wires the Zone tab's map): the unsaved-changes prompt covers it, Save
+    // Unsaved work kept outside the scene (main wires the Map tab's map): the unsaved-changes prompt covers it, Save
     // writes it after the scene, Don't Save drops it. Not while a prefab is open (it belongs to the scene behind it).
     // Unset members: nothing extra.
     struct Extra {

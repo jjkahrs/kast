@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "zones": [
+    {"id": "west", "name": "West Vale", "tiles": [[0, 0, 1, 2]], "flags": {"pvp": false}, "note": "unknown keys are kept"},
+    {"id": "east", "name": "East March", "tiles": [[2, 0, 2, 2]], "flags": {"pvp": true}}
+  ]
+}

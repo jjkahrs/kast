@@ -2434,7 +2434,7 @@ void Panels::refreshAssets(const Document& doc)
 }
 
 void Panels::drawAssets(Document& doc, FileActions& files, GuiBuilder& gui, ShaderGraphEditor& graphs, ModelPreview& preview,
-                        ExternalEditor& editor, ZoneSession& zone)
+                        ExternalEditor& editor, MapSession& session)
 {
     if ((doc.project ? doc.project->root : std::filesystem::path()) != assetsRoot_)
         refreshAssets(doc);
@@ -2524,7 +2524,7 @@ void Panels::drawAssets(Document& doc, FileActions& files, GuiBuilder& gui, Shad
         }
     }
     ImGui::End();
-    applyAssetEdit(doc, gui, graphs, preview, zone);
+    applyAssetEdit(doc, gui, graphs, preview, session);
 }
 
 void Panels::drawAssetNode(const Document& doc, FileActions& files, GuiBuilder& gui, ShaderGraphEditor& graphs, ModelPreview& preview,
@@ -2731,7 +2731,7 @@ void Panels::assetsFailed(std::string error)
 }
 
 void Panels::applyAssetEdit(Document& doc, GuiBuilder& gui, ShaderGraphEditor& graphs, ModelPreview& preview,
-                            ZoneSession& zone)
+                            MapSession& session)
 {
     const AssetEdit edit = std::exchange(assetEdit_, AssetEdit{});
     if (edit.op == AssetEdit::Op::None || !doc.project || doc.play != PlayState::Stopped)
@@ -2899,7 +2899,7 @@ void Panels::applyAssetEdit(Document& doc, GuiBuilder& gui, ShaderGraphEditor& g
             gui.remap(source, dest);
             graphs.remap(source, dest);
             preview.remap(edit.path, selected);
-            zone.remap(edit.path, selected);
+            session.remap(edit.path, selected);
             if (scenePath)
                 doc.path = std::move(*scenePath); // same project; the title follows, the dirty flag stays
             for (const kast::LoadedScene& loaded : doc.scene.loadedScenes()) { // the other open scenes follow theirs too

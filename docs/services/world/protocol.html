@@ -39,7 +39,7 @@
 </tr>
 <tr>
 <td>5</td>
-<td>Zone objects: new <code>Interact</code> (<code>0x0023</code>). See <a href="#interact">Interact</a></td>
+<td>Map objects: new <code>Interact</code> (<code>0x0023</code>). See <a href="#interact">Interact</a></td>
 </tr>
 <tr>
 <td>4</td>
@@ -230,7 +230,7 @@
 <td><code>0x0023</code></td>
 <td>Interact</td>
 <td>C</td>
-<td><code>u32 objectId</code> (activates an interactable zone object, see <a href="#interact">Interact</a>)</td>
+<td><code>u32 objectId</code> (activates an interactable map object, see <a href="#interact">Interact</a>)</td>
 </tr>
 <tr>
 <td><code>0x0030</code></td>
@@ -556,7 +556,7 @@
 <li><strong>Trust:</strong> <code>data</code> comes from the client. Handlers must check every field (<a href="security.html#client-events">Security, Client events</a>).</li>
 </ul>
 <h3 id="interact">Interact</h3>
-<p>A client activates an interactable zone object (a shrine, a lever) with <code>Interact{u32 objectId}</code>: the object's <code>id</code> from
+<p>A client activates an interactable map object (a shrine, a lever) with <code>Interact{u32 objectId}</code>: the object's <code>id</code> from
 the map's <code>objects/&lt;tx&gt;_&lt;tz&gt;.json</code> (the engine's <code>kast.interact(id)</code>, <a href="../../engine/terrain.html#objects">Engine, Terrain</a>).
 Client-to-server only.</p>
 <ul>

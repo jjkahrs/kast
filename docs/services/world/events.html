@@ -50,7 +50,7 @@ only the three send functions put anything on the network.</p>
 </li>
 </ul>
 <h2 id="interactables">Interactables</h2>
-<p>An interactable zone object (<a href="maps.html#objects">Maps, Objects</a>) names the event its activation publishes. When a
+<p>An interactable map object (<a href="maps.html#objects">Maps, Objects</a>) names the event its activation publishes. When a
 player's <code>Interact</code> (<a href="protocol.html#interact">protocol</a>) passes the server's checks (an interactable of the player's
 map, the player within its range), the server publishes that event on this bus, from C++, in the tick after the
 message arrived; the drain after that tick's Lua <code>update</code> delivers it:</p>

@@ -14,7 +14,7 @@
 
 // Tile scenes (docs/engine/terrain.html#tile-scenes, docs/editor/map-builder.html): each 256 m tile of a map may have
 // its own scene file, maps/<folder>/scenes/<tx>_<tz>.scene (project-relative; the file exists <=> the tile has one),
-// its entities in world coordinates. The zone's root scene (the one with the Terrain entity) stays the active scene; tile
+// its entities in world coordinates. The map's root scene (the one with the Terrain entity) stays the active scene; tile
 // scenes load additively: opened from the editor's Map tab, streamed around the player in Play (LuaSystems). Pure: the
 // paths, the cell states and the streaming diff, no window and no Scene.
 namespace kast {
@@ -38,8 +38,9 @@ struct TileSceneFiles {
 };
 TileSceneFiles listTileScenes(const std::filesystem::path& mapFolder);
 
-// One frame of tile scene streaming: unload every loaded tile scene (of any map) that is not one of folder's wanted
-// tiles, except the active scene; load the first wanted tile (in wanted order) that has a scene file, isn't loaded
+// One frame of tile and zone scene streaming (zone_scenes.h): unload every loaded tile scene (of any map) that is not
+// one of folder's wanted tiles and every loaded zone scene that is not one of folder's wanted zones, except the active
+// scene; load the first wanted tile (in wanted order), else the first wanted zone, that has a scene file, isn't loaded
 // and isn't in skip (failed loads).
 struct TileScenePlan {
     std::vector<std::string> unload; // project-relative paths
@@ -47,7 +48,9 @@ struct TileScenePlan {
 };
 TileScenePlan planTileScenes(const std::string& folder, const std::vector<map::TileKey>& wanted,
                              const std::vector<map::TileKey>& withScene, const std::vector<std::string>& loaded,
-                             const std::string& active, const std::set<std::string>& skip);
+                             const std::string& active, const std::set<std::string>& skip,
+                             const std::vector<std::string>& wantedZones = {},
+                             const std::vector<std::string>& zonesWithScene = {});
 
 // The payload of map.tileScene.loaded / map.tileScene.unloaded: {map, tx, tz, path}.
 nlohmann::json tileSceneEvent(uint16_t mapId, const TileSceneRef& ref);
