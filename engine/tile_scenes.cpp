@@ -1,5 +1,7 @@
 #include "tile_scenes.h"
 
+#include "zone_scenes.h"
+
 #include "files.h"
 
 #include <algorithm>
@@ -79,20 +81,33 @@ TileSceneFiles listTileScenes(const std::filesystem::path& mapFolder)
 
 TileScenePlan planTileScenes(const std::string& folder, const std::vector<map::TileKey>& wanted,
                              const std::vector<map::TileKey>& withScene, const std::vector<std::string>& loaded,
-                             const std::string& active, const std::set<std::string>& skip)
+                             const std::string& active, const std::set<std::string>& skip,
+                             const std::vector<std::string>& wantedZones, const std::vector<std::string>& zonesWithScene)
 {
     TileScenePlan plan;
     for (const std::string& path : loaded) {
-        const std::optional<TileSceneRef> ref = parseTileScenePath(path);
-        if (ref && path != active && (ref->folder != folder || std::ranges::find(wanted, ref->tile) == wanted.end()))
+        if (path == active)
+            continue;
+        if (const std::optional<TileSceneRef> ref = parseTileScenePath(path);
+            ref && (ref->folder != folder || std::ranges::find(wanted, ref->tile) == wanted.end()))
+            plan.unload.push_back(path);
+        if (const std::optional<ZoneSceneRef> ref = parseZoneScenePath(path);
+            ref && (ref->folder != folder || std::ranges::find(wantedZones, ref->zone) == wantedZones.end()))
             plan.unload.push_back(path);
     }
+    const auto loadable = [&](const std::string& path) {
+        return std::ranges::find(loaded, path) == loaded.end() && !skip.contains(path);
+    };
     for (const map::TileKey tile : wanted) {
-        const std::string path = tileScenePath(folder, tile);
-        if (std::ranges::find(withScene, tile) != withScene.end() && std::ranges::find(loaded, path) == loaded.end() &&
-            !skip.contains(path)) {
-            plan.load = path;
-            break;
+        if (std::ranges::find(withScene, tile) != withScene.end() && loadable(tileScenePath(folder, tile))) {
+            plan.load = tileScenePath(folder, tile);
+            return plan;
+        }
+    }
+    for (const std::string& zone : wantedZones) {
+        if (std::ranges::find(zonesWithScene, zone) != zonesWithScene.end() && loadable(zoneScenePath(folder, zone))) {
+            plan.load = zoneScenePath(folder, zone);
+            return plan;
         }
     }
     return plan;

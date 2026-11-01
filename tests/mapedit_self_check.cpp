@@ -1421,6 +1421,41 @@ void check_tile_scenes() {
                                 "maps/tilegrid/scenes/0_0.scene", {});
     CHECK(plan.unload.empty() && !plan.load);
 
+    // Zone scenes stream in the same plan: wanted while any of their zone's tiles is (west x 0..1, east x 2).
+    km::Zones zones;
+    zones.list = {{"west", "West", {{0, 0, 1, 2}}}, {"east", "East", {{2, 0, 2, 2}}}};
+    CHECK(km::validate_zones(zones, grid).empty());
+    CHECK((kast::zonesOf(zones, {{1, 1}}) == std::vector<std::string>{"west"}));
+    CHECK((kast::zonesOf(zones, {{2, 0}, {1, 0}, {2, 1}}) == std::vector<std::string>{"west", "east"}));
+    CHECK(kast::zonesOf(zones, {{5, 5}}).empty() && kast::zonesOf(zones, {}).empty());
+    const std::vector<std::string> zoneScenes{"west", "east"};
+    // Tiles first: 1_1's scene loads before west's; with 1_1 loaded, west's.
+    plan = kast::planTileScenes("tilegrid", {{1, 1}}, withScene, {"scenes/tilegrid.scene"}, "scenes/tilegrid.scene", {},
+                                {"west"}, zoneScenes);
+    CHECK(plan.unload.empty() && plan.load == "maps/tilegrid/scenes/1_1.scene");
+    plan = kast::planTileScenes("tilegrid", {{1, 1}}, withScene, {"scenes/tilegrid.scene", "maps/tilegrid/scenes/1_1.scene"},
+                                "scenes/tilegrid.scene", {}, {"west"}, zoneScenes);
+    CHECK(plan.unload.empty() && plan.load == "maps/tilegrid/zones/west.scene");
+    // Into east (2_0, no tile scene): 1_1 and west unload, so does another map's zone scene; east's loads.
+    plan = kast::planTileScenes("tilegrid", {{2, 0}}, withScene,
+                                {"scenes/tilegrid.scene", "maps/tilegrid/scenes/1_1.scene", "maps/tilegrid/zones/west.scene",
+                                 "maps/other/zones/west.scene"},
+                                "scenes/tilegrid.scene", {}, {"east"}, zoneScenes);
+    CHECK((plan.unload == std::vector<std::string>{"maps/tilegrid/scenes/1_1.scene", "maps/tilegrid/zones/west.scene",
+                                                   "maps/other/zones/west.scene"}));
+    CHECK(plan.load == "maps/tilegrid/zones/east.scene");
+    // No file, a failed load and an already loaded one are not loaded; the active scene is never unloaded.
+    plan = kast::planTileScenes("tilegrid", {}, {}, {"scenes/tilegrid.scene"}, "scenes/tilegrid.scene", {}, {"east"}, {"west"});
+    CHECK(!plan.load);
+    plan = kast::planTileScenes("tilegrid", {}, {}, {"scenes/tilegrid.scene"}, "scenes/tilegrid.scene",
+                                {"maps/tilegrid/zones/east.scene"}, {"east"}, zoneScenes);
+    CHECK(!plan.load);
+    plan = kast::planTileScenes("tilegrid", {}, {}, {"maps/tilegrid/zones/west.scene"}, "maps/tilegrid/zones/west.scene",
+                                {}, {}, zoneScenes);
+    CHECK(plan.unload.empty() && !plan.load);
+    CHECK(kast::zoneSceneEvent(7, {"tilegrid", "west"}) ==
+          nlohmann::json({{"map", 7}, {"zone", "west"}, {"path", "maps/tilegrid/zones/west.scene"}}));
+
     const nlohmann::json event = kast::tileSceneEvent(7, {"tilegrid", {2, 1}});
     CHECK(event == nlohmann::json({{"map", 7}, {"tx", 2}, {"tz", 1}, {"path", "maps/tilegrid/scenes/2_1.scene"}}));
 

@@ -65,8 +65,10 @@ public:
     // unload shuts down the systems no other loaded scene lists and destroys its entities; see
     // docs/engine/additive-scenes.html. Then (unless switched) streams tile scenes (tile_scenes.h) around the tiles
     // terrain() streamed this frame, through the same additive load and unload: out-of-range ones unload, at most one
-    // in-range one loads, each publishing map.tileScene.loaded / unloaded {map, tx, tz, path} on bus(). A tile scene
-    // that fails to load logs one error and is skipped for the session. Returns true if the scene was switched.
+    // in-range one loads, each publishing map.tileScene.loaded / unloaded {map, tx, tz, path} on bus(); zone scenes
+    // (zone_scenes.h) likewise, wanted while any of their zone's tiles is streamed, with map.zoneScene.loaded /
+    // unloaded {map, zone, path}. A tile or zone scene that fails to load logs one error and is skipped for the
+    // session. Returns true if the scene was switched.
     bool tick(float dt);
     // Bumped by every tick that applied scene requests (a switch, additive loads and unloads, active scene changes) or
     // streamed a tile scene in or out:
@@ -143,7 +145,8 @@ private:
     // Tile scene streaming, for the session (start() clears them).
     // ponytail: each map's scenes/ listed once per session; a tile scene saved during Play streams from the next one.
     std::map<uint16_t, std::vector<map::TileKey>> tileSceneFiles_;
-    std::set<std::string> failedTileScenes_; // logged once, never retried
+    std::map<uint16_t, std::vector<std::string>> zoneSceneFiles_; // likewise zones/
+    std::set<std::string> failedTileScenes_; // tile and zone scenes: logged once, never retried
 
     EventBus bus_; // declared before state_: the systems' subscriptions unsubscribe from it when state_ goes
     Physics physics_; // publishes on bus_

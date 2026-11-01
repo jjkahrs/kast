@@ -292,8 +292,9 @@ Each action logs a line: <code>Map: opened zone west (maps/tilegrid/zones/west.s
 zone (an <strong>orphan</strong>: deleting a zone leaves its scene file), a root entity outside its zone's tiles (<code>root entity 'West
 Gate' at (300, 300) is in zone east, outside zone west</code>), a file in <code>zones/</code> that is not <code>&lt;zoneId&gt;.scene</code>
 (ignored), and a scene file that does not read.</p>
-<p>The Zones section is read-only during Play and in prefab edit mode, as the rest of the tab. The engine does not stream zone
-scenes yet.</p>
+<p>The Zones section is read-only during Play and in prefab edit mode, as the rest of the tab. In Play (and <code>kast_player</code>)
+a zone's scene streams in while any of its tiles is within <code>Terrain.radius</code> of the player or camera and out when none is,
+and Lua gets <code>zone.left</code> / <code>zone.entered</code> and <code>kast.map.zone()</code>: see <a href="../engine/zones.html">Zones</a>.</p>
 
 <h2 id="tile-scenes">Tile scenes</h2>
 <p>Each 256 m tile of a map can have its own scene file; in Play the engine streams them in and out around the player like

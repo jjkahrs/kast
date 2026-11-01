@@ -29,7 +29,7 @@
       }
     }
   ],
-  "systems": ["scripts/map_stream.lua"],
+  "systems": ["scripts/map_stream.lua", "scripts/map_zones.lua"],
   "lighting": { "ambientColor": [0.6, 0.7, 1], "ambientIntensity": 0.3 },
   "editor": {
     "camera": { "pivot": [384, 20, 384], "yaw": 0, "pitch": -55, "distance": 900 }

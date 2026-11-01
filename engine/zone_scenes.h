@@ -1,5 +1,9 @@
 #pragma once
 
+#include <zones.h>
+
+#include <nlohmann/json.hpp>
+
 #include <filesystem>
 #include <optional>
 #include <string>
@@ -30,5 +34,11 @@ struct ZoneSceneFiles {
     std::vector<std::string> badNames;
 };
 ZoneSceneFiles listZoneScenes(const std::filesystem::path& mapFolder);
+
+// The ids of the zones (in zones.list order) holding any of tiles: the zones whose scenes stream (planTileScenes).
+std::vector<std::string> zonesOf(const map::Zones& zones, const std::vector<map::TileKey>& tiles);
+
+// The payload of map.zoneScene.loaded / map.zoneScene.unloaded: {map, zone, path}.
+nlohmann::json zoneSceneEvent(uint16_t mapId, const ZoneSceneRef& ref);
 
 } // namespace kast

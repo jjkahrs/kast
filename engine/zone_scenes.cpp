@@ -59,4 +59,22 @@ ZoneSceneFiles listZoneScenes(const std::filesystem::path& mapFolder)
     return files;
 }
 
+std::vector<std::string> zonesOf(const map::Zones& zones, const std::vector<map::TileKey>& tiles)
+{
+    std::vector<bool> in(zones.list.size());
+    for (const map::TileKey tile : tiles)
+        if (const int16_t zone = map::zone_at(zones, tile); zone >= 0)
+            in[static_cast<size_t>(zone)] = true;
+    std::vector<std::string> ids;
+    for (size_t i = 0; i < in.size(); ++i)
+        if (in[i])
+            ids.push_back(zones.list[i].id);
+    return ids;
+}
+
+nlohmann::json zoneSceneEvent(uint16_t mapId, const ZoneSceneRef& ref)
+{
+    return {{"map", mapId}, {"zone", ref.zone}, {"path", zoneScenePath(ref.folder, ref.zone)}};
+}
+
 } // namespace kast

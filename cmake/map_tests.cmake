@@ -155,8 +155,9 @@ add_test(NAME editor_map_zone_play_locked
           -DFOCUS_PANEL=Map "-DFORBID_OUTPUT=\\[error\\]|Map: (opened|close|created) zone" -P "${map_smoke}")
 
 # Play (scripts/map_stream.lua moves the camera 0_0 -> 1_0 -> 1_1 -> 2_0 -> 1_0): the open 1_1 unloads (out of range),
-# tile scenes stream in and out with their events and kast.loadedScenes(); Ctrl+P stops and the open set comes back.
-set(map_stream_head "map stream: loaded map 7 tile 0,0 maps/tilegrid/scenes/0_0.scene.*map stream: unloaded map 7 tile 0,0 maps/tilegrid/scenes/0_0.scene.*map stream: loaded map 7 tile 1,0 maps/tilegrid/scenes/1_0.scene.*map stream: unloaded map 7 tile 1,0.*map stream: loaded map 7 tile 1,1.*map stream: scenes scenes/tilegrid.scene,maps/tilegrid/scenes/1_1.scene")
+# tile scenes stream in and out with their events and kast.loadedScenes() (west's zone scene, loaded on the second
+# frame, among them); Ctrl+P stops and the open set comes back.
+set(map_stream_head "map stream: loaded map 7 tile 0,0 maps/tilegrid/scenes/0_0.scene.*map stream: unloaded map 7 tile 0,0 maps/tilegrid/scenes/0_0.scene.*map stream: loaded map 7 tile 1,0 maps/tilegrid/scenes/1_0.scene.*map stream: unloaded map 7 tile 1,0.*map stream: loaded map 7 tile 1,1.*map stream: scenes scenes/tilegrid.scene,maps/tilegrid/zones/west.scene,maps/tilegrid/scenes/1_1.scene")
 set(map_stream_tail "map stream: unloaded map 7 tile 1,1.*map stream: loaded map 7 tile 1,0.*map stream: scenes scenes/tilegrid.scene,maps/tilegrid/scenes/1_0.scene")
 add_test(NAME editor_map_play_stream
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/map_play_stream.png"
@@ -164,6 +165,19 @@ add_test(NAME editor_map_play_stream
           -DFOCUS_PANEL=Map -DFRAMES=230
           "-DEXPECT_OUTPUT=Unloaded scene 'maps/tilegrid/scenes/1_1.scene'.*map stream: unloaded map 7 tile 1,1 .*${map_stream_head}.*${map_stream_tail}.*Stop"
           "-DFORBID_OUTPUT=\\[error\\]" -P "${map_smoke}")
+# Zones in Play (docs/engine/zones.html, scripts/map_zones.lua): zone.entered west alone at the start, with kast.map.zone();
+# west's zone scene streams in; kast.map.zoneAt() in each zone and off the map; into east (frame 80) zone.left then
+# zone.entered and west's scene unloads (east has none); back to west; off the map (frame 130) zone.left alone and
+# kast.map.zone() is nil. Nothing blocks: no scene switch.
+set(map_zones_start "map zones: entered map 7 zone west 'West Vale' pvp=false zone\\(\\)=west,West Vale,false.*map zones: scene loaded map 7 zone west maps/tilegrid/zones/west.scene.*map zones: zoneAt west,east,nil,nil")
+set(map_zones_east "map zones: left map 7 zone west.*map zones: entered map 7 zone east 'East March' pvp=true zone\\(\\)=east,East March,true")
+set(map_zones_back "map zones: left map 7 zone east.*map zones: entered map 7 zone west.*map zones: scene loaded map 7 zone west.*map zones: left map 7 zone west.*map zones: scene unloaded map 7 zone west.*map zones: off the map zone\\(\\)=nil")
+add_test(NAME editor_map_play_zones
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/map_play_zones.png"
+          "-DEXTRA_ARGS=--scene ${KAST_TILEGRID} --play --sim-key 170,ctrl+P --size 1600x1000" -DFOCUS_PANEL=Console -DFRAMES=230
+          "-DEXPECT_OUTPUT=${map_zones_start}.*${map_zones_east}.*map zones: scene unloaded map 7 zone west.*${map_zones_back}.*Stop"
+          "-DEXPECT_ONCE=map zones: entered map 7 zone east;map zones: left map 7 zone east;map zones: off the map"
+          "-DFORBID_OUTPUT=\\[error\\]|Switched to scene" -P "${map_smoke}")
 set_tests_properties(editor_map_tab editor_map_tab_old_layout editor_map_tab_pre_mapedit_layout editor_map_tab_zone_own_dock
                      editor_map_no_terrain
                      editor_map_no_project editor_map_click_open
@@ -172,6 +186,7 @@ set_tests_properties(editor_map_tab editor_map_tab_old_layout editor_map_tab_pre
                      editor_map_warnings editor_map_orphan_after_remove editor_map_play_stream editor_map_zones
                      editor_map_zone_scene_open_close editor_map_zone_scene_create editor_map_zone_scene_create_save
                      editor_map_zone_rename_save editor_map_zone_orphan editor_map_zone_root_outside editor_map_zone_play_locked
+                     editor_map_play_zones
                      PROPERTIES LABELS smoke)
 
 # The built player (game "tilegrid" in KAST_GAMES, its copy's 2_0.scene broken): the same streaming path; the broken
@@ -183,3 +198,17 @@ add_test(NAME player_tilegrid_stream
           -DEXPECT=0 "-DEXPECT_OUTPUT=${map_stream_head}.*Map: tile scene 'maps/tilegrid/scenes/2_0.scene' did not load.*${map_stream_tail}"
           "-DEXPECT_ONCE=Map: tile scene 'maps/tilegrid/scenes/2_0.scene' did not load" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/player_test.cmake")
 set_tests_properties(player_tilegrid_stream PROPERTIES FIXTURES_REQUIRED game_tilegrid_built TIMEOUT 90 LABELS integration)
+# The same zones in the player (run to frame 160), from game.pak's zones.json and zones/*.scene: its copy has an
+# east.scene too (the "East Post" on tile 2_0), which streams in on the crossing, after the broken 2_0 tile scene is skipped.
+file(READ "${KAST_TEST_PROJECT}/maps/tilegrid/zones/west.scene" east_scene)
+string(REPLACE "West Gate" "East Post" east_scene "${east_scene}")
+string(REPLACE "[300, 25, 300]" "[640, 25, 60]" east_scene "${east_scene}") # on tile 2_0, in view on the crossing
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/game_projects/tilegrid/maps/tilegrid/zones/east.scene" "${east_scene}")
+add_test(NAME player_tilegrid_zones
+  COMMAND "${CMAKE_COMMAND}" "-DGAME_DIR=${KAST_GAME_OUT}/tilegrid" "-DEXE=Tile Grid Test.exe"
+          "-DWORK_DIR=${KAST_GAME_OUT}/tilegrid_zones.run" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/player_tilegrid_zones.png"
+          -DEXPECT=0 "-DEXTRA_ARGS=--frames 160"
+          "-DEXPECT_OUTPUT=${map_zones_start}.*${map_zones_east}.*Map: tile scene 'maps/tilegrid/scenes/2_0.scene' did not load.*map zones: scene loaded map 7 zone east maps/tilegrid/zones/east.scene.*${map_zones_back}"
+          "-DEXPECT_ONCE=map zones: entered map 7 zone east;map zones: left map 7 zone east;map zones: off the map;map zones: scene unloaded map 7 zone east"
+          "-DFORBID_OUTPUT=zone scene '|Switched to scene" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/player_test.cmake")
+set_tests_properties(player_tilegrid_zones PROPERTIES FIXTURES_REQUIRED game_tilegrid_built TIMEOUT 90 LABELS integration)

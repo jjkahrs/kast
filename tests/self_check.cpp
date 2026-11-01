@@ -3008,6 +3008,7 @@ void checkTileSceneStreaming()
     root["systems"] = nlohmann::ordered_json::array();
     writeFile(dir / "scenes" / "tilegrid.scene", root.dump(2));
     writeFile(dir / "maps" / "tilegrid" / "scenes" / "2_0.scene", "{ not a scene");
+    std::filesystem::remove_all(dir / "maps" / "tilegrid" / "zones"); // tile scenes only: checkZoneSceneStreaming
 
     Document doc;
     std::string error;
@@ -3065,6 +3066,100 @@ void checkTileSceneStreaming()
     check(kast::scenesToJson(doc.scene) == before && doc.scene.activeSlot() == rootSlot && !doc.dirty &&
               doc.selected == named(doc.scene, "Main Camera"),
           "Stop restores the open set exactly: the root and 1_1, the active scene, no unsaved changes, the selection");
+}
+
+// Zones in Play (docs/engine/zones.html): the same copy of maps/tilegrid (zones.json: west x 0..1 with zones/west.scene,
+// east x 2), plus a zones/east.scene and a broken zones/bad.scene the zones.json doesn't name. Zone scenes stream with
+// their zone's tiles after the tile scenes (one load a frame) with map.zoneScene.* events; zone.left then zone.entered
+// on a border crossing, zone.entered alone at the start; TerrainStreamer::zone / zoneAt; Stop restores the open set.
+void checkZoneSceneStreaming()
+{
+    const std::filesystem::path source = KAST_TEST_PROJECT_DIR;
+    const std::filesystem::path dir = projectTestDir("kast_zone_scenes", "Zones");
+    std::filesystem::create_directories(dir / "maps");
+    std::filesystem::create_directories(dir / "scenes");
+    std::filesystem::copy(source / "maps" / "tilegrid", dir / "maps" / "tilegrid", std::filesystem::copy_options::recursive);
+    nlohmann::ordered_json root = nlohmann::ordered_json::parse(readText(source / "scenes" / "tilegrid.scene"));
+    root["systems"] = nlohmann::ordered_json::array();
+    writeFile(dir / "scenes" / "tilegrid.scene", root.dump(2));
+    std::string east = readText(source / "maps" / "tilegrid" / "zones" / "west.scene");
+    east.replace(east.find("West Gate"), 9, "East Post");
+    writeFile(dir / "maps" / "tilegrid" / "zones" / "east.scene", east);
+    writeFile(dir / "maps" / "tilegrid" / "zones" / "bad.scene", "{ not a scene"); // no zone "bad": never wanted
+
+    Document doc;
+    std::string error;
+    check(openFile(doc, (dir / "scenes" / "tilegrid.scene").string(), error) &&
+              openSceneAdditive(doc, (dir / "maps" / "tilegrid" / "zones" / "east.scene").string(), error),
+          "open the tile grid's root scene and zone east's scene");
+    const nlohmann::ordered_json before = kast::scenesToJson(doc.scene);
+    const auto open = [&] {
+        std::string names;
+        for (const kast::LoadedScene& loaded : doc.scene.loadedScenes())
+            names += (names.empty() ? "" : ",") + std::filesystem::path(loaded.path).filename().string();
+        return names;
+    };
+    const auto moveCamera = [&](float x, float z) {
+        doc.scene.registry().get<kast::Transform>(named(doc.scene, "Main Camera")).position = {x, 90.0f, z};
+    };
+    const auto at = [&](const std::string& name, const std::string& payload) { // its history index, or -1
+        const auto& history = doc.lua.bus().history();
+        const auto it = std::ranges::find_if(history, [&](const kast::EventBus::Delivered& d) {
+            return d.name == name && d.payload == payload;
+        });
+        return it == history.end() ? -1 : static_cast<int>(it - history.begin());
+    };
+    const auto count = [&](const std::string& name) {
+        return std::ranges::count_if(doc.lua.bus().history(), [&](const kast::EventBus::Delivered& d) { return d.name == name; });
+    };
+    const auto zoneId = [&](const kast::map::Zone* zone) { return zone ? zone->id : std::string("nil"); };
+    const kast::TerrainStreamer& terrain = doc.lua.terrain();
+    const std::string enteredWest = R"({"flags":{"pvp":false},"map":7,"name":"West Vale","zone":"west"})";
+    const std::string enteredEast = R"({"flags":{"pvp":true},"map":7,"name":"East March","zone":"east"})";
+
+    startPlay(doc); // the camera is over tile 0_0, in west
+    updatePlay(doc, 0.1f);
+    check(open() == "tilegrid.scene,0_0.scene", "Play: the open east (out of range) unloads; 0_0's tile scene loads first");
+    updatePlay(doc, 0.1f);
+    check(open() == "tilegrid.scene,0_0.scene,west.scene" && named(doc.scene, "West Gate") != entt::null,
+          "then west's zone scene, the next frame");
+    check(zoneId(terrain.zone()) == "west" && zoneId(terrain.zoneAt(10, 10)) == "west" &&
+              zoneId(terrain.zoneAt(600, 700)) == "east" && zoneId(terrain.zoneAt(-1, 10)) == "nil" &&
+              zoneId(terrain.zoneAt(800, 10)) == "nil",
+          "zone(): the camera's; zoneAt(): a point's, null off the map's tiles");
+    check(at("zone.entered", enteredWest) >= 0 && count("zone.entered") == 1 && count("zone.left") == 0,
+          "zone.entered {map, zone, name, flags} alone at the start");
+    updatePlay(doc, 0.1f); // the events published at the end of a frame are delivered in the next
+    check(at("map.zoneScene.unloaded", R"({"map":7,"path":"maps/tilegrid/zones/east.scene","zone":"east"})") >= 0 &&
+              at("map.zoneScene.loaded", R"({"map":7,"path":"maps/tilegrid/zones/west.scene","zone":"west"})") >= 0,
+          "map.zoneScene.loaded / unloaded with {map, zone, path}");
+
+    moveCamera(384.0f, 128.0f); // tile 1_0, still west
+    updatePlay(doc, 0.1f);
+    updatePlay(doc, 0.1f);
+    check(open() == "tilegrid.scene,west.scene,1_0.scene" && count("zone.entered") == 1,
+          "within west: its scene stays, only the tile scenes change, no zone events");
+
+    moveCamera(640.0f, 128.0f); // tile 2_0 (no tile scene), east
+    updatePlay(doc, 0.1f);
+    check(open() == "tilegrid.scene,east.scene" && named(doc.scene, "East Post") != entt::null &&
+              named(doc.scene, "West Gate") == entt::null && zoneId(terrain.zone()) == "east",
+          "crossing into east, in one frame: 1_0 and west unload, east's scene loads");
+    updatePlay(doc, 0.1f);
+    const int left = at("zone.left", R"({"map":7,"zone":"west"})"), entered = at("zone.entered", enteredEast);
+    check(left >= 0 && entered > left && count("zone.left") == 1 && count("zone.entered") == 2,
+          "zone.left {map, zone} then zone.entered on the border crossing");
+
+    moveCamera(-300.0f, 128.0f); // off the map's tiles
+    updatePlay(doc, 0.1f);
+    updatePlay(doc, 0.1f);
+    check(open() == "tilegrid.scene" && terrain.zone() == nullptr && at("zone.left", R"({"map":7,"zone":"east"})") >= 0 &&
+              count("zone.entered") == 2,
+          "off the map: every streamed scene unloads, zone.left alone, zone() is null");
+    check(countLogged("zones/bad.scene") == 0, "a zone scene no zone names is never loaded");
+
+    stopPlay(doc);
+    check(kast::scenesToJson(doc.scene) == before && !doc.dirty, "Stop restores the open set: the root and east");
 }
 
 } // namespace
@@ -3880,6 +3975,13 @@ void checkBuild()
     check(pakContents(root, root / "out") == std::vector<std::string>{"a.scene", "project.kast", "scripts/s.lua"},
           "pak contents skip dotfiles, dot-directories and an output folder inside the project");
     check(pakContents(root, dir).size() == 4, "an output folder above the project excludes nothing else");
+    {
+        const std::vector<std::string> shipped = pakContents(KAST_TEST_PROJECT_DIR, dir);
+        const auto ships = [&](const char* path) { return std::ranges::find(shipped, path) != shipped.end(); };
+        check(ships("maps/tilegrid/zones.json") && ships("maps/tilegrid/zones/west.scene") &&
+                  !ships("maps/tilegrid/zones/west.scene.meta"),
+              "game.pak ships a map's zones.json and zone scenes (docs/engine/zones.html)");
+    }
 
     // Validation writes nothing.
     kast::Project project{.root = root, .name = "Demo"};
@@ -18111,6 +18213,7 @@ int main(int argc, char** argv)
         checkAdditiveLua();
         checkAdditiveEditor();
         checkTileSceneStreaming();
+        checkZoneSceneStreaming();
         removeTree(testRoot());
         kast::log::info(g_failures == 0 ? "All additive scene checks passed" : std::format("{} additive scene check(s) failed", g_failures));
         return g_failures == 0 ? 0 : 1;
@@ -18325,6 +18428,7 @@ int main(int argc, char** argv)
     checkAdditiveLua();
     checkAdditiveEditor();
     checkTileSceneStreaming();
+    checkZoneSceneStreaming();
     checkEventBus();
     checkLuaEvents();
     checkLuaEventsFromCpp();

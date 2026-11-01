@@ -89,7 +89,9 @@ is seamless: same map, same context, no transfer. <code>zones.json</code> is opt
   zone, and a zone in pieces. <code>validate_zones</code> runs the same checks on an in-memory zone set and lists every
   problem; <code>zone_at</code> finds the zone of a tile or a world x, z.</li>
 <li><strong>Server:</strong> the world server and <code>kast_mapbake</code> never read <code>zones.json</code> (a bad one does not stop the
-  server); the parser is in the shared library for the client and the editor.</li>
+  server); the parser is in the shared library for the client and the editor. The client streams each zone's scene and
+  publishes <code>zone.left</code> / <code>zone.entered</code> locally (<a href="../../engine/zones.html">Engine, Zones</a>); there is no server
+  zone tracking.</li>
 </ul>
 
 <h2 id="map-contexts">Map contexts</h2>
