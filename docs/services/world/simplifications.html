@@ -76,7 +76,7 @@
 <li><strong>Off the navmesh is corrected at once:</strong> a player cannot fall off a cliff face. A grace period (or an allowance
   while falling) if drops are wanted.</li>
 <li><strong>Navmesh cell height:</strong> fixed at <code>cellSize / 2</code>; a manifest field if maps need finer vertical steps.</li>
-<li><strong>Zone objects block by navmesh only:</strong> the server has no shape collision; an obstacle's whole column under its
+<li><strong>Map objects block by navmesh only:</strong> the server has no shape collision; an obstacle's whole column under its
   footprint is cut from the bake, whatever its height. Bridges, overhangs or objects that stop blocking (doors) need the
   shapes' own y range in the bake and dynamic obstacles (Detour tile cache).</li>
 <li><strong>No interactable state:</strong> the server keeps no cooldown, enabled flag or per-object state, and sends nothing for a

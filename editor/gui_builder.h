@@ -44,11 +44,13 @@ class ElementDocument;
 //   move, delete, reparent or children); a missing prefab's node is red. Create GUI Prefab (node menu, or a node dropped
 //   on the Assets panel) and placing (a .guiprefab dropped on a Panel / Body or the Preview) are steps. The Inspector
 //   shows a Prefab card (Select Root, Open Prefab; on the root Revert All, Apply All, Unpack) and marks overridden
-//   fields #ffcc00 (right-click: Revert, Apply). A prefab saved on disk refreshes the open GUI's instances.
+//   fields kHighlight (right-click: Revert, Apply). A prefab saved on disk refreshes the open GUI's instances.
+// The three panels draw only while a GUI is open (isOpen); the GUI Preview tab's X (requestClose) closes it, and all three
+// go until another GUI opens, in the same dock spots.
 // Edits mark the GUI dirty ("*" in the titles) and are steps on its own undo history (gui_undo.h), cleared when a GUI is
 // opened or reloaded; an Inspector or Style text field is one step from activation to letting go. Save or Ctrl+S (a builder panel focused) writes both files. Files
-// changed on disk reload when clean, else Reload / Keep mine is asked. Opening another GUI or quitting while dirty asks
-// Save / Discard / Cancel first.
+// changed on disk reload when clean, else Reload / Keep mine is asked. Opening another GUI, closing it or quitting while
+// dirty asks Save / Discard / Cancel first.
 class GuiBuilder {
 public:
     // Window names (stable ids; the visible title adds the file name and dirty marker).
@@ -62,12 +64,18 @@ public:
 
     // Opens rml in the builder (after the unsaved-changes prompt if dirty) and brings its panels to the front.
     void open(const std::filesystem::path& rml);
+    // The GUI Preview tab's X, --gui-close: closes the GUI (after the unsaved-changes prompt if dirty); the panels go.
+    void requestClose();
+    bool isOpen() const { return !rml_.empty(); } // the panels draw only then
     void focusPanels() { focusStep_ = 3; } // brings the three panels to the front of their docks, one per frame
     // Selects the first element with this id attribute. False if there is none.
     bool selectById(const std::string& id);
     // Selects the deepest element at (x, y) in preview pixels, as a click there does (<body> if none). False if no
     // preview is laid out yet.
     bool pick(float x, float y);
+    // Moves the preview's mouse over the center of the element with this id, as the real one over the preview does
+    // (tests: its tooltip shows). False if there is none or no preview is laid out yet.
+    bool hover(const std::string& id);
     std::string selectedId() const { return GuiDoc::attribute(GuiDoc::widgetElement(selected_), "id"); } // "" if none
     // Adds an element of kind as the GUI Hierarchy's Add menu does, into the selected Panel, else <body> (applied when the
     // preview next draws).
@@ -133,8 +141,8 @@ public:
 
     void collapseHierarchy() { hierarchyCollapsed_ = true; } // the GUI Hierarchy inset, to its header
 
-    // The panels (the host docks each; the preview draws the GUI Hierarchy inset) and the builder's modals; call once
-    // per frame.
+    // The panels (the host docks each and draws them only while isOpen; the preview draws the GUI Hierarchy inset) and
+    // the builder's modals (every frame).
     void drawInspector();
     void drawStyle();
     void drawPreview();
@@ -157,7 +165,7 @@ private:
     };
 
     bool load(const std::filesystem::path& rml); // false (logged, nothing changed) if it can't be read or parsed
-    void close();
+    void close(); // unloads, unasked
     bool applyRcss(); // validates rcssText_; on success it becomes the preview's sheet
     void markRmlDirty();
     // Records the step that turned before into after (see pushGuiStep); false if it changed nothing.
@@ -178,7 +186,7 @@ private:
     std::filesystem::path projectRoot() const; // the open file's project, else its folder
     void prefabFailed(std::string error);      // logged and shown in a modal
     void drawPrefabCard(pugi::xml_node root);  // the Inspector's Prefab card (root null: a missing prefab)
-    // The #ffcc00 marker and the Revert / Apply menu after an Inspector field of the selection, if it is overridden.
+    // The kHighlight marker and the Revert / Apply menu after an Inspector field of the selection, if it is overridden.
     void overrideMarker(const std::string& field);
     void runPrefabOp(const PrefabOp& op);
     void reselect(const std::vector<size_t>& path); // after every node was replaced (refresh, Apply)
@@ -202,6 +210,7 @@ private:
     bool hierarchyCollapsed_ = false;
     ImVec2 hierarchyMin_{}, hierarchyMax_{}; // where the inset was drawn last (empty: nowhere)
     double previewRatio_ = 0.0; // the dp ratio last logged
+    bool previewMouse_ = false;  // the mouse was over the preview image last frame
 
     std::filesystem::path rml_; // empty = nothing open
     std::filesystem::path rcss_; // the linked sheet; empty if none
@@ -243,7 +252,7 @@ private:
     std::optional<Gesture> gesture_; // an Inspector field being edited
     std::string rcssCommitted_;      // rcssText_ as of the last Style step (or load)
 
-    std::filesystem::path pendingOpen_; // waits on the unsaved-changes prompt
+    std::filesystem::path pendingOpen_; // what the unsaved-changes prompt opens after Save / Discard; empty: close
     bool openPromptRequested_ = false;
     bool reloadPromptRequested_ = false;
     bool quitPromptRequested_ = false;

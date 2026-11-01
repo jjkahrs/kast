@@ -7,6 +7,7 @@
 #              [-DEXPECT_OUTPUT=<regex> [-DEXPECT_COUNT=<n>]] [-DFORBID_OUTPUT=<regex>] [-DFRAMES=<n>]
 #              [-DWRAPPER=<exe;args>] [-DSETTINGS_FROM=<json>] [-DSETTINGS_MUST_NOT_CONTAIN=<text;...>]
 #              [-DOUTPUT_FILE=<log>] [-DLAYOUT_FROM=<imgui.ini>] [-DLAYOUT_SAME_DOCK=<window;window...>]
+#              [-DLAYOUT_FIRST_TAB=<window>] [-DLAYOUT_MUST_NOT_CONTAIN=<text;...>]
 #              [-DEXPECT_ONCE=<regex;regex...>] -P smoke_test.cmake
 # NEW_PROJECT_* pass --new-project as separate arguments, so the name may contain spaces; FOCUS_PANEL passes
 # --focus-panel the same way (e.g. "State Machines"). MUST_NOT_EXIST fails the test if that path exists after the run
@@ -20,6 +21,8 @@
 # there before the run; SETTINGS_MUST_NOT_CONTAIN (a list) fails the test if the file holds any of those texts after.
 # LAYOUT_FROM is copied to <work dir>/imgui.ini, the editor's saved panel layout, before the run. LAYOUT_SAME_DOCK (a
 # list of window titles) fails the test unless the imgui.ini saved at exit docks them all in one node (tabs together).
+# LAYOUT_FIRST_TAB fails the test unless that window is its dock node's first tab (order 0) in that imgui.ini.
+# LAYOUT_MUST_NOT_CONTAIN (a list) fails the test if that imgui.ini holds any of those texts.
 if(NOT DEFINED FRAMES)
   set(FRAMES 120)
 endif()
@@ -116,6 +119,19 @@ if(DEFINED LAYOUT_SAME_DOCK)
     endif()
   endforeach()
 endif()
+if(DEFINED LAYOUT_FIRST_TAB)
+  file(READ "${work_dir}/imgui.ini" ini)
+  if(NOT ini MATCHES "\\[Window\\]\\[${LAYOUT_FIRST_TAB}\\][^[]*DockId=0x[0-9A-Fa-f]+,0[\r\n]")
+    message(FATAL_ERROR "imgui.ini: '${LAYOUT_FIRST_TAB}' is not the first tab of its dock:\n${ini}")
+  endif()
+endif()
+foreach(text IN LISTS LAYOUT_MUST_NOT_CONTAIN)
+  file(READ "${work_dir}/imgui.ini" ini)
+  string(FIND "${ini}" "${text}" at)
+  if(NOT at EQUAL -1)
+    message(FATAL_ERROR "imgui.ini holds '${text}':\n${ini}")
+  endif()
+endforeach()
 message(STATUS "OK: exit 0, ${SCREENSHOT} is ${size} bytes")
 if(DEFINED SETTINGS_MUST_NOT_CONTAIN AND EXISTS "${work_dir}/editor_settings.json")
   file(READ "${work_dir}/editor_settings.json" settings)

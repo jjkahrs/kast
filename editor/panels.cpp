@@ -42,7 +42,7 @@ bool hasExtension(const std::string& name, std::string_view extension); // below
 using Json = nlohmann::ordered_json;
 
 constexpr const char* kEntityPayload = "KAST_ENTITY";
-constexpr ImVec4 kOutOfDateColor{1.0f, 0.8f, 0.0f, 1.0f}; // #ffcc00, the palette's highlight: a lightmap bake out of date
+constexpr ImVec4 kOutOfDateColor = toVec4(kHighlight); // a lightmap bake out of date
 constexpr SDL_DialogFileFilter kLuaFilter{"Lua script (*.lua)", "lua"};
 
 bool sameBits(const bx::Quaternion& a, const bx::Quaternion& b) { return std::memcmp(&a, &b, sizeof(a)) == 0; }
@@ -160,8 +160,8 @@ void Panels::drawSceneHeader(Document& doc, kast::SceneSlot slot, bool& open)
     const std::string name = path.empty() ? "Untitled" : utf8(fromUtf8(path).stem());
     const std::string label = std::format("{}{}{}###scene", name, !playing && sceneDirty(doc, slot) ? "*" : "",
                                           active ? "  (Active)" : "");
-    if (active) // the palette's highlight #ffcc00; the others keep the #ffaa00 header
-        ImGui::PushStyleColor(ImGuiCol_Header, ImVec4(1.0f, 0.8f, 0.0f, 1.0f));
+    if (active) // highlight text; the others' turns the accent (darkenTextOnAccent)
+        ImGui::PushStyleColor(ImGuiCol_Text, kHighlight);
     open = ImGui::CollapsingHeader(label.c_str(), ImGuiTreeNodeFlags_DefaultOpen | ImGuiTreeNodeFlags_AllowOverlap);
     if (active)
         ImGui::PopStyleColor();
@@ -219,7 +219,7 @@ void Panels::drawNode(Document& doc, entt::entity entity)
     if (!renaming && registry.all_of<kast::PrefabInstance>(entity) && !missing)
         drawPrefabIcon(ImGui::GetItemRectMin().x + ImGui::GetTreeNodeToLabelSpacing() +
                            ImGui::CalcTextSize(name.c_str()).x + ImGui::GetStyle().ItemSpacing.x,
-                       ImGui::GetItemRectMin().y, ImGui::GetItemRectSize().y, doc.selected == entity);
+                       ImGui::GetItemRectMin().y, ImGui::GetItemRectSize().y);
 
     if ((ImGui::IsItemClicked(ImGuiMouseButton_Left) || ImGui::IsItemClicked(ImGuiMouseButton_Right)) &&
         !ImGui::IsItemToggledOpen())
@@ -2354,13 +2354,13 @@ bool hasExtension(const std::string& name, std::string_view extension)
 }
 
 // A small speaker (box, cone and a sound wave) at x in a row from y, height tall: marks audio files in Assets. Accent
-// colored, black on a selected (accent-filled) row.
-void drawSpeakerIcon(float x, float y, float height, bool selected)
+// colored.
+void drawSpeakerIcon(float x, float y, float height)
 {
     ImDrawList* draw = ImGui::GetWindowDrawList();
     const float s = ImGui::GetFontSize() * 0.5f; // icon height
     const float top = y + (height - s) * 0.5f;
-    const ImU32 color = selected ? IM_COL32_BLACK : ImGui::GetColorU32(ImGuiCol_Button);
+    const ImU32 color = ImGui::GetColorU32(ImGuiCol_Button);
     draw->AddRectFilled({x, top + s * 0.3f}, {x + s * 0.35f, top + s * 0.7f}, color);
     draw->AddQuadFilled({x + s * 0.35f, top + s * 0.3f}, {x + s * 0.8f, top}, {x + s * 0.8f, top + s},
                         {x + s * 0.35f, top + s * 0.7f}, color);
@@ -2434,7 +2434,7 @@ void Panels::refreshAssets(const Document& doc)
 }
 
 void Panels::drawAssets(Document& doc, FileActions& files, GuiBuilder& gui, ShaderGraphEditor& graphs, ModelPreview& preview,
-                        ExternalEditor& editor, ZoneSession& zone)
+                        ExternalEditor& editor, MapSession& session)
 {
     if ((doc.project ? doc.project->root : std::filesystem::path()) != assetsRoot_)
         refreshAssets(doc);
@@ -2524,7 +2524,7 @@ void Panels::drawAssets(Document& doc, FileActions& files, GuiBuilder& gui, Shad
         }
     }
     ImGui::End();
-    applyAssetEdit(doc, gui, graphs, preview, zone);
+    applyAssetEdit(doc, gui, graphs, preview, session);
 }
 
 void Panels::drawAssetNode(const Document& doc, FileActions& files, GuiBuilder& gui, ShaderGraphEditor& graphs, ModelPreview& preview,
@@ -2549,7 +2549,7 @@ void Panels::drawAssetNode(const Document& doc, FileActions& files, GuiBuilder& 
     if (!entry.folder && !renaming && kast::isAudioFile(entry.name))
         drawSpeakerIcon(ImGui::GetItemRectMin().x + ImGui::GetTreeNodeToLabelSpacing() +
                             ImGui::CalcTextSize(entry.name.c_str()).x + ImGui::GetStyle().ItemSpacing.x,
-                        ImGui::GetItemRectMin().y, ImGui::GetItemRectSize().y, assetSelected_ == entry.path);
+                        ImGui::GetItemRectMin().y, ImGui::GetItemRectSize().y);
 
     if ((ImGui::IsItemClicked(ImGuiMouseButton_Left) || ImGui::IsItemClicked(ImGuiMouseButton_Right)) &&
         !ImGui::IsItemToggledOpen())
@@ -2731,7 +2731,7 @@ void Panels::assetsFailed(std::string error)
 }
 
 void Panels::applyAssetEdit(Document& doc, GuiBuilder& gui, ShaderGraphEditor& graphs, ModelPreview& preview,
-                            ZoneSession& zone)
+                            MapSession& session)
 {
     const AssetEdit edit = std::exchange(assetEdit_, AssetEdit{});
     if (edit.op == AssetEdit::Op::None || !doc.project || doc.play != PlayState::Stopped)
@@ -2899,7 +2899,7 @@ void Panels::applyAssetEdit(Document& doc, GuiBuilder& gui, ShaderGraphEditor& g
             gui.remap(source, dest);
             graphs.remap(source, dest);
             preview.remap(edit.path, selected);
-            zone.remap(edit.path, selected);
+            session.remap(edit.path, selected);
             if (scenePath)
                 doc.path = std::move(*scenePath); // same project; the title follows, the dirty flag stays
             for (const kast::LoadedScene& loaded : doc.scene.loadedScenes()) { // the other open scenes follow theirs too

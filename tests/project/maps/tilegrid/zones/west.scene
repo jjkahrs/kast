@@ -1,0 +1,15 @@
+{
+  "version": 5,
+  "entities": [
+    {
+      "id": 1,
+      "name": "West Gate",
+      "parent": null,
+      "components": {
+        "Transform": { "position": [300, 25, 300], "rotation": [0, 0, 0, 1], "scale": [6, 10, 2] },
+        "MeshRenderer": { "primitive": "cube", "material": "" }
+      }
+    }
+  ],
+  "systems": []
+}

@@ -6,6 +6,7 @@
 #include <heights.h>
 #include <map.h>
 #include <objects.h>
+#include <zones.h>
 
 #include <array>
 #include <filesystem>
@@ -48,10 +49,10 @@ struct PrefabCache {
     std::shared_ptr<const PrefabAsset> get(const std::string& path, std::string& error, bool* fresh = nullptr);
 };
 
-// A zone object under parent, whose world position is origin (a tile's corner): an entity at the object's pos and
+// A map object under parent, whose world position is origin (a tile's corner): an entity at the object's pos and
 // yaw with, for an obstacle or interactable, a static Collider from its shape (standing on pos, not scaled), and the
 // prefab instance as its child, scaled by the object's scale. entt::null + error if the prefab doesn't load.
-entt::entity spawnZoneObject(Scene& scene, entt::entity parent, const bx::Vec3& origin, const map::ZoneObject& object,
+entt::entity spawnMapObject(Scene& scene, entt::entity parent, const bx::Vec3& origin, const map::ZoneObject& object,
                              PrefabCache& prefabs, std::string& error);
 
 // The interactable nearest to (x, z) by the horizontal distance to its shape's edge (map::footprint_distance), among the
@@ -65,13 +66,15 @@ std::optional<NearbyInteractable> nearestInteractable(const Scene& scene, float 
 // Owned next to physics by LuaSystems for one Play session.
 class TerrainStreamer {
 public:
-    // Loads every map manifest (and areas.json) under projectRoot/maps; forgets the current area. No project: none.
+    // Loads every map manifest (and areas.json, zones.json: none or a bad one logged is the implicit zone) under
+    // projectRoot/maps; forgets the current area and zone. No project: none.
     void start(const std::optional<std::filesystem::path>& projectRoot);
     // Makes the scene's TerrainTile entities (children of the first Terrain entity) the declared tiles of
     // Terrain.map within Terrain.radius of the centre: the NetworkLocalPlayer, else the active camera, else the
-    // origin. Heights and objects load on the frame a tile appears (its objects as its children, spawnZoneObject; a bad
+    // origin. Heights and objects load on the frame a tile appears (its objects as its children, spawnMapObject; a bad
     // entry or prefab is logged with the file and skipped), and go with it. Then publishes area.left / area.entered
-    // {map, id, name} on bus when the centre's area (map::area_at) changed.
+    // {map, id, name} on bus when the centre's area (map::area_at) changed, and zone.left {map, zone} / zone.entered
+    // {map, zone, name, flags} when its zone (map::zone_at) changed.
     void update(Scene& scene, EventBus& bus);
 
     // A loaded map, or null.
@@ -82,6 +85,12 @@ public:
     std::shared_ptr<const TerrainTileData> loadTile(uint16_t id, map::TileKey tile, bool lightmap) const;
     // The id of the loaded map in maps/<name>, or nullopt.
     std::optional<uint16_t> mapNamed(const std::string& name) const;
+    // A loaded map's zones, or null.
+    const map::Zones* zones(uint16_t id) const;
+    // The zone the last update()'s centre is in, or null (no Terrain map, or off its tiles).
+    const map::Zone* zone() const;
+    // The zone of the point (x, z) on the last update()'s Terrain map, or null.
+    const map::Zone* zoneAt(float x, float z) const;
 
     // What the last update() streamed: the Terrain's map (when loaded) and its tiles around the centre. Tile scenes
     // (tile_scenes.h) follow it.
@@ -95,15 +104,19 @@ private:
     struct LoadedMap {
         std::shared_ptr<const map::MapInfo> info;
         std::filesystem::path folder;
+        map::Zones zones;
     };
     std::shared_ptr<const TerrainTileData> load(const LoadedMap& map, map::TileKey tile, bool lightmap) const;
     void spawnObjects(Scene& scene, entt::entity tile, const LoadedMap& map, const TerrainTileData& data);
     void setArea(EventBus& bus, uint16_t map, int16_t area);
+    void setZone(EventBus& bus, uint16_t map, int16_t zone);
 
     std::map<uint16_t, LoadedMap> maps_;
-    PrefabCache prefabs_; // the zone objects' prefabs, for the session
+    PrefabCache prefabs_; // the map objects' prefabs, for the session
     uint16_t areaMap_ = 0;
     int16_t area_ = -1; // index into maps_[areaMap_].info->areas.list
+    uint16_t zoneMap_ = 0;
+    int16_t zone_ = -1; // index into maps_[zoneMap_].zones.list
     int warnedMap_ = -1; // the unknown Terrain.map last warned about
     std::optional<Streamed> streamed_;
 };

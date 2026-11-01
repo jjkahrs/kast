@@ -9,11 +9,11 @@
 <body>
 <header class="top"><a class="brand" href="../index.html">Kast Docs</a><nav><a href="../editor/index.html">Editor</a><a href="index.html">Engine</a><a href="../services/auth/index.html">Auth Server</a><a href="../services/world/index.html">World Server</a><a href="../services/chat/index.html">Chat Server</a><a href="../services/admin/index.html">Admin App</a><a href="../development/tests.html">Development</a></nav></header>
 <div class="layout">
-<nav class="side"><h2>Engine</h2><ul><li><a href="index.html">Overview</a></li><li><a href="coordinates-and-scenes.html">Coordinates and scenes</a></li><li><a href="additive-scenes.html">Additive scenes</a></li><li><a href="materials.html">Materials</a></li><li><a href="models-animation.html">Models &amp; Animation</a></li><li><a href="post-processing.html">Post-processing and fog</a></li><li><a href="ssao.html">SSAO</a></li><li><a href="ssr.html">Screen-space reflections</a></li><li><a href="depth-of-field.html">Depth of field</a></li><li><a href="volumetric-fog.html">Volumetric fog</a></li><li><a href="skybox.html">Skybox</a></li><li><a href="ibl-reflection-probes.html">Image-based lighting</a></li><li><a href="lightmaps.html">Lightmaps and GI</a></li><li><a href="voxelgi.html">VoxelGI</a></li><li><a href="sdfgi.html">SDFGI</a></li><li><a href="particles.html">Particles</a></li><li><a href="components-systems.html">Components and systems</a></li><li><a href="lua-systems.html">Lua systems</a></li><li><a href="events.html">Events</a></li><li><a href="physics.html">Physics</a></li><li><a href="terrain.html" class="active">Terrain</a></li><li><a href="audio.html">Audio</a></li><li><a href="networking.html">Networking</a></li><li><a href="online-services.html">Online Services</a></li><li><a href="lua-components.html">Lua components</a></li><li><a href="state-machines.html">State machines</a></li><li><a href="game-gui.html">Game GUI</a></li><li><a href="world-ui.html">World-space UI</a></li><li><a href="shaders.html">Shaders</a></li><li><a href="shader-graph.html">Shader graphs</a></li><li><a href="instancing-and-culling.html">Instancing and culling</a></li><li><a href="lod-and-occlusion.html">LOD and occlusion</a></li><li><a href="asset-refs.html">Asset references</a></li></ul></nav>
+<nav class="side"><h2>Engine</h2><ul><li><a href="index.html">Overview</a></li><li><a href="coordinates-and-scenes.html">Coordinates and scenes</a></li><li><a href="additive-scenes.html">Additive scenes</a></li><li><a href="materials.html">Materials</a></li><li><a href="models-animation.html">Models &amp; Animation</a></li><li><a href="post-processing.html">Post-processing and fog</a></li><li><a href="ssao.html">SSAO</a></li><li><a href="ssr.html">Screen-space reflections</a></li><li><a href="depth-of-field.html">Depth of field</a></li><li><a href="volumetric-fog.html">Volumetric fog</a></li><li><a href="skybox.html">Skybox</a></li><li><a href="ibl-reflection-probes.html">Image-based lighting</a></li><li><a href="lightmaps.html">Lightmaps and GI</a></li><li><a href="voxelgi.html">VoxelGI</a></li><li><a href="sdfgi.html">SDFGI</a></li><li><a href="particles.html">Particles</a></li><li><a href="components-systems.html">Components and systems</a></li><li><a href="lua-systems.html">Lua systems</a></li><li><a href="events.html">Events</a></li><li><a href="physics.html">Physics</a></li><li><a href="terrain.html" class="active">Terrain</a></li><li><a href="zones.html">Zones</a></li><li><a href="audio.html">Audio</a></li><li><a href="networking.html">Networking</a></li><li><a href="online-services.html">Online Services</a></li><li><a href="lua-components.html">Lua components</a></li><li><a href="state-machines.html">State machines</a></li><li><a href="game-gui.html">Game GUI</a></li><li><a href="world-ui.html">World-space UI</a></li><li><a href="shaders.html">Shaders</a></li><li><a href="shader-graph.html">Shader graphs</a></li><li><a href="instancing-and-culling.html">Instancing and culling</a></li><li><a href="lod-and-occlusion.html">LOD and occlusion</a></li><li><a href="asset-refs.html">Asset references</a></li></ul></nav>
 <main>
 <h1 id="terrain">Terrain</h1>
 <p>Heightmap ground for <a href="../services/world/index.html">maps</a> (<code>engine/terrain.h</code>, <code>services/world/map/heights.h</code>), streamed
-in Play (editor and <code>kast_player</code>; not in edit mode), with the map's <a href="#objects">zone objects</a>.</p>
+in Play (editor and <code>kast_player</code>; not in edit mode), with the map's <a href="#objects">map objects</a>.</p>
 <p><strong>Heightmaps</strong>: a map folder <code>maps/&lt;folder&gt;/</code> holds <code>map.json</code> (its <code>heightRange</code> <code>[min, max]</code>, <code>material</code>, <code>terrainUv</code> and
 <code>nav.maxSlopeDeg</code> are used here) and one file per tile, <code>heights/&lt;tx&gt;_&lt;tz&gt;.r16</code> (exactly 257 x 257 little-endian
 uint16, 132098 bytes) or <code>.png</code> (257 x 257 16-bit grayscale). A tile is 256 m with a sample every 1 m, row-major with
@@ -36,7 +36,7 @@ Add Component, and its Transform is ignored (tiles sit at their map position).</
   Its UVs follow <code>map.json</code>
   <code>"terrainUv"</code>: <code>"tiled"</code> (the default) is world x/z / 8, a texture repeating every 8 m; <code>"map"</code> stretches one
   texture over the bounding box of the declared tiles (UV 0, 0 at its min x, min z corner, 1, 1 at its max), the same on
-  both sides of a tile edge. Any other value fails the manifest (the editor, its Zone Builder, the player and the world server
+  both sides of a tile edge. Any other value fails the manifest (the editor, its Map Builder, the player and the world server
   refuse the map).</li>
 <li><strong>Physics</strong>: each tile is a static Jolt height field (under 2 cm from the rendered ground), so characters and
   bodies collide with it and raycasts hit it (the hit entity is the <code>TerrainTile</code>). While tiles exist, characters
@@ -44,10 +44,10 @@ Add Component, and its Transform is ignored (tiles sit at their map position).</
 <li><strong>Areas</strong>: when the centre moves into another area of the map's <code>areas.json</code> (or onto another map), the bus gets
   <code>area.left</code> then <code>area.entered</code>, each <code>{map, id, name}</code> (publisher <code>kast.terrain</code>).</li>
 <li>Loading is synchronous, on the frame a tile appears: crossing into a new tile can hitch (50-66 ms measured up to 32 x 32
-  tiles, 82-109 ms on a 64 x 64 map; <a href="../editor/zone-builder.html#map-size-limits">Map size limits</a>). Maps go up to 64 x 64 tiles.</li>
+  tiles, 82-109 ms on a 64 x 64 map; <a href="../editor/map-builder.html#map-size-limits">Map size limits</a>). Maps go up to 64 x 64 tiles.</li>
 </ul>
-<p id="generated-texture"><strong>Generated texture</strong>: the <a href="../editor/zone-builder.html#generated-terrain">Zone
-Builder</a> (the editor's Zone tab) can color a map by height. It keeps the gradient in <code>map.json</code> as <code>"terrainColors"</code>: stops
+<p id="generated-texture"><strong>Generated texture</strong>: the <a href="../editor/map-builder.html#generated-terrain">Map
+Builder</a> (the editor's Map tab) can color a map by height. It keeps the gradient in <code>map.json</code> as <code>"terrainColors"</code>: stops
 <code>[pos, [r, g, b]]</code>, <code>pos</code> 0..1 of the height range (0 = min, 1 = max), colors 0..1, at least 2, e.g.
 <code>[[0, [0.76, 0.7, 0.5]], [0.3, [0.33, 0.52, 0.21]], [1, [0.95, 0.95, 0.97]]]</code>. On save it bakes them into
 <code>textures/&lt;folder&gt;_terrain.png</code> (1 px per metre of the bounding box, at most 4096 px on a side, so 0.5 px/m on a 32 x 32 map and 0.25 on 64 x 64; row 0 at min z) with
@@ -65,10 +65,10 @@ within 10 frames (<a href="sdfgi.html#terrain">tested</a>). There is nothing to 
 server's, get it. Lightmapped tiles keep their lightmaps (the <a href="lightmaps.html#shading">precedence</a>) but still bounce
 and block SDFGI's light.</p>
 <h2 id="tile-scenes">Tile scenes</h2>
-<p>A big zone does not have to be one scene: each 256 m tile can have its own scene file,
+<p>A big map does not have to be one scene: each 256 m tile can have its own scene file,
 <code>maps/&lt;folder&gt;/scenes/&lt;tx&gt;_&lt;tz&gt;.scene</code> (project-relative; the file exists exactly when the tile has one, no manifest
 lists them and <code>map.json</code> is unchanged). Its entities use <strong>world coordinates</strong>, like every scene (no per-tile
-offset). The zone's <strong>root scene</strong>, the one with the <code>Terrain</code> entity, stays the active scene; tile scenes are
+offset). The map's <strong>root scene</strong>, the one with the <code>Terrain</code> entity, stays the active scene; tile scenes are
 <a href="additive-scenes.html">additive scenes</a> beside it. The editor's <a href="../editor/map-builder.html">Map tab</a> opens,
 closes and creates them; the pure logic (paths, cell states, the streaming diff) is <code>engine/tile_scenes.h</code>. The world
 server never sees them.</p>
@@ -98,10 +98,13 @@ scene you had open unloads if it is out of range and others load; Stop restores 
 <p><strong>Sample</strong>: <code>tests/project/scenes/tilegrid.scene</code> (a <code>Terrain</code> on map 7, radius 0) and
 <code>tests/project/maps/tilegrid</code> (3 x 3 tiles; scenes on 0_0, 1_0, 0_1 and 1_1, and an orphan on the undeclared 3_1);
 <code>scripts/map_stream.lua</code> moves the camera across tiles and logs the events.</p>
-<h2 id="objects">Zone objects</h2>
+<p><strong>Zone scenes</strong> (<code>maps/&lt;folder&gt;/zones/&lt;zoneId&gt;.scene</code>) stream in the same plan, one load a frame after the
+tile scenes, while any tile of their zone is wanted, with <code>map.zoneScene.loaded</code> / <code>unloaded</code>; the zone of the centre
+gives <code>zone.left</code> / <code>zone.entered</code> and <code>kast.map.zone()</code>: see <a href="zones.html">Zones</a>.</p>
+<h2 id="objects">Map objects</h2>
 <p>A map's tiles can hold placed objects: <code>maps/&lt;folder&gt;/objects/&lt;tx&gt;_&lt;tz&gt;.json</code> (the format, shared with the world
 server and the tools: <a href="../services/world/maps.html#objects">World Server, Maps, Objects</a>; authored in the
-<a href="../editor/zone-builder.html#objects">Zone Builder</a>). Like the ground they exist in Play only.</p>
+<a href="../editor/map-builder.html#objects">Map Builder</a>). Like the ground they exist in Play only.</p>
 <ul>
 <li><strong>Streaming</strong>: a tile's objects file is read with its heights, on the frame the tile appears, and each object becomes
   a child of the <code>TerrainTile</code> entity, so they all go when the tile streams out. An object is an entity named
@@ -139,9 +142,9 @@ kast.subscribe("server.shrine.blessing", function(e) kast.publish("chat.local", 
 <p><strong>Sample</strong>: <code>tests/project/maps/hills</code> (map 3, 2 x 2 tiles of PNG16 hills, <code>materials/terrain_grass.mat</code>) and
 <code>tests/project/terrain.scene</code> (a <code>Terrain</code> on map 3, a <code>CharacterController</code> dropped above the hills). The <code>start</code>
 map's <code>hills_gate</code> area ([1060, 1020]-[1070, 1030]) is a portal to it. <code>scripts/terrain_map_switch.lua</code> switches a
-<code>Terrain</code> from its map to map 3 offline, as <code>world.mapChanged</code> does online. The hills' zone object fixtures (a visual,
-two obstacle crates and the interactable Test Shrine) are played by <code>tests/project/zone_objects.scene</code>
-(<code>scripts/zone_objects.lua</code>: one character walks into the obstacle crate and stops, one through the visual crate). The
+<code>Terrain</code> from its map to map 3 offline, as <code>world.mapChanged</code> does online. The hills' map object fixtures (a visual,
+two obstacle crates and the interactable Test Shrine) are played by <code>tests/project/map_objects.scene</code>
+(<code>scripts/map_objects.lua</code>: one character walks into the obstacle crate and stops, one through the visual crate). The
 <code>samples/starter-mmo</code> Meadow has grass, flowers, rocks, trees and a shrine on E.</p>
 </main>
 </div>

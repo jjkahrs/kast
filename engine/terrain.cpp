@@ -62,7 +62,7 @@ std::shared_ptr<const PrefabAsset> PrefabCache::get(const std::string& path, std
     return it->second.first;
 }
 
-entt::entity spawnZoneObject(Scene& scene, entt::entity parent, const bx::Vec3& origin, const map::ZoneObject& object,
+entt::entity spawnMapObject(Scene& scene, entt::entity parent, const bx::Vec3& origin, const map::ZoneObject& object,
                              PrefabCache& prefabs, std::string& error)
 {
     const std::shared_ptr<const PrefabAsset> prefab = prefabs.get(object.prefab, error);
@@ -129,6 +129,8 @@ void TerrainStreamer::start(const std::optional<std::filesystem::path>& projectR
     prefabs_ = {projectRoot.value_or(std::filesystem::path()), {}};
     areaMap_ = 0;
     area_ = -1;
+    zoneMap_ = 0;
+    zone_ = -1;
     warnedMap_ = -1;
     streamed_.reset();
     if (!projectRoot)
@@ -159,8 +161,16 @@ void TerrainStreamer::start(const std::optional<std::filesystem::path>& projectR
             log::error(std::format("Terrain: {}: map id {} is already used", file.string(), info->id));
             continue;
         }
+        const std::string name = folder.filename().string();
+        map::Zones zones = map::implicit_zones(*info, name);
+        if (std::string text; readFile(folder / "zones.json", text)) {
+            if (std::optional<map::Zones> parsed = map::parse_zones(text, *info, name, err))
+                zones = std::move(*parsed);
+            else
+                log::error(std::format("Terrain: {}; the map is one zone", err));
+        }
         const uint16_t id = info->id;
-        maps_[id] = {std::make_shared<const map::MapInfo>(std::move(*info)), folder};
+        maps_[id] = {std::make_shared<const map::MapInfo>(std::move(*info)), folder, std::move(zones)};
     }
 }
 
@@ -182,6 +192,25 @@ std::optional<uint16_t> TerrainStreamer::mapNamed(const std::string& name) const
         if (loaded.folder.filename() == name)
             return id;
     return std::nullopt;
+}
+
+const map::Zones* TerrainStreamer::zones(uint16_t id) const
+{
+    const auto it = maps_.find(id);
+    return it == maps_.end() ? nullptr : &it->second.zones;
+}
+
+const map::Zone* TerrainStreamer::zone() const
+{
+    const auto it = maps_.find(zoneMap_);
+    return zone_ < 0 || it == maps_.end() ? nullptr : &it->second.zones.list[static_cast<size_t>(zone_)];
+}
+
+const map::Zone* TerrainStreamer::zoneAt(float x, float z) const
+{
+    const map::Zones* all = streamed_ ? zones(streamed_->map) : nullptr;
+    const int16_t index = all ? map::zone_at(*all, x, z) : -1;
+    return index < 0 ? nullptr : &all->list[static_cast<size_t>(index)];
 }
 
 std::shared_ptr<const TerrainTileData> TerrainStreamer::loadTile(uint16_t id, map::TileKey tile, bool lightmap) const
@@ -258,7 +287,7 @@ void TerrainStreamer::spawnObjects(Scene& scene, entt::entity tile, const Loaded
                                        object.prefab, error));
             continue;
         }
-        if (spawnZoneObject(scene, tile, origin, object, prefabs_, error) == entt::null)
+        if (spawnMapObject(scene, tile, origin, object, prefabs_, error) == entt::null)
             log::error(std::format("Terrain: {}: {}; that object is skipped", file.string(), error));
     }
 }
@@ -312,10 +341,27 @@ void TerrainStreamer::update(Scene& scene, EventBus& bus)
         spawnObjects(scene, entity, loaded->second, *data);
     }
 
-    if (loaded == maps_.end())
+    if (loaded == maps_.end()) {
         setArea(bus, 0, -1);
-    else
+        setZone(bus, 0, -1);
+    } else {
         setArea(bus, loaded->first, map::area_at(loaded->second.info->areas, at.x, at.y, at.z));
+        setZone(bus, loaded->first, map::zone_at(loaded->second.zones, at.x, at.z));
+    }
+}
+
+void TerrainStreamer::setZone(EventBus& bus, uint16_t mapId, int16_t zone)
+{
+    if (mapId == zoneMap_ && zone == zone_)
+        return;
+    if (const map::Zone* left = this->zone())
+        bus.publish("zone.left", {{"map", zoneMap_}, {"zone", left->id}}, "kast.terrain");
+    zoneMap_ = mapId;
+    zone_ = zone;
+    if (const map::Zone* entered = this->zone())
+        bus.publish("zone.entered",
+                    {{"map", zoneMap_}, {"zone", entered->id}, {"name", entered->name}, {"flags", entered->flags}},
+                    "kast.terrain");
 }
 
 void TerrainStreamer::setArea(EventBus& bus, uint16_t mapId, int16_t area)

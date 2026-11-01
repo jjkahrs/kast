@@ -91,7 +91,7 @@ so it was treated as the known bimodal enter latency (docs/services/world/tests.
 
 ## After phase 3: editor terrain by camera radius
 
-The Scene view meshes only the tiles within `zone::kEditRadius` = 4 of the camera's pivot (9 x 9 at most); a map past
+The Scene view meshes only the tiles within `mapedit::kEditRadius` = 4 of the camera's pivot (9 x 9 at most); a map past
 9 x 9 frames those around its centre. Same machine and settings as the baseline, 2026-10-30. The machine's speed moved
 between passes (8 x 8, unchanged code path, measured 117.7 then 71-86 FPS in later passes); the table is the pass with
 the fastest 8 x 8 (14:02), the range over four later passes in brackets.
@@ -105,7 +105,7 @@ the fastest 8 x 8 (14:02), the range over four later passes in brackets.
 
 The 64 x 64 crash was the Map tab: one thumbnail texture per tile, 4096 of bgfx's 4096 texture handles. Maps past
 1024 tiles get no thumbnails until phase 4 builds only visible cells'. The 32 x 32 black screenshots are gone. 64 x 64
-stays slower than 16 x 16 with the same 81 meshes: per-frame work over every tile (Map tab `declared_tiles`, Zone tab
+stays slower than 16 x 16 with the same 81 meshes: per-frame work over every tile (Map tab `declared_tiles`, its tile
 grid, preview checks) is phase 4 / 6.
 
 ## After phase 6: other per-frame costs that grew with the map
@@ -118,7 +118,7 @@ Same machine and settings, 2026-10-30, Release. Profiled (sampling the editor's 
   under the project changed (`FolderChanges`, editor/assets.h);
 - the generated-terrain preview check comparing and copying the whole heights map every frame though the map doesn't
   use that material (~3%): the material is checked first;
-- the Zone tab's spawn overlay copying every tile's spawns JSON every frame (~3%): read by reference.
+- the Map tab's spawn overlay copying every tile's spawns JSON every frame (~3%): read by reference.
 
 Editor sculpting, three passes (the machine was in its slow state: 8 x 8 at 84-91 FPS, vs 117 in the fastest
 baseline pass); median FPS average (range), lowest one-second window over the three passes:
@@ -146,7 +146,7 @@ Play now runs at 64 x 64 (the baseline crash was the Map tab's thumbnails, fixed
 16.7 ms at every size. The single-frame max (a row of tiles streaming in synchronously) is 50-66 ms up to 32 x 32 and
 82-109 ms at 64 x 64, where the average is also ~0.4 ms higher with the same p99: the streaming frames cost more on the
 64 x 64 map. Not diagnosed (the sampling profile shows no single size-dependent function; Play also spends ~15% in
-`zone::same`, the editor's unsaved-changes check comparing 4096 heights entries a frame, ~0.15 ms).
+`mapedit::same`, the editor's unsaved-changes check comparing 4096 heights entries a frame, ~0.15 ms).
 
 World server: startup to `maps loaded` 0.15-0.30 s / 22 MB (8), 0.25 s / 53 MB (16), 0.58-0.62 s / 160 MB (32),
 1.97 s / 582 MB (64) (a first pass with a cold disk cache: 1.06 / 3.78 / 14.85 s for 16 / 32 / 64). Load test (no
@@ -165,11 +165,11 @@ not size.
 
 ## Chosen cap: 64 x 64
 
-`zone::kMaxMapTiles` = 64. Every gate holds at 64 x 64 after the fixes: editor sculpting 67.9 FPS median (one 1-s window
+`mapedit::kMaxMapTiles` = 64. Every gate holds at 64 x 64 after the fixes: editor sculpting 67.9 FPS median (one 1-s window
 at 59.2), Play and `kast_player` average and p99 at or under 2.4 ms (budget 16.7, measured as the baseline was), server
 tick p99 15.40 ms against 15.67 at bench 8 x 8. The single-frame streaming hitch (50-66 ms up to 32 x 32, 8 x 8 included
 at baseline; 82-109 ms at 64 x 64) is today's behaviour, not gated, and documented as a known limit with the rest in
-`docs/editor/zone-builder.html#map-size-limits`.
+`docs/editor/map-builder.html#map-size-limits`.
 
 Confirmation run with the cap set (Release, three passes, 1200 frames each): 64 x 64 sculpting 71.4 / 71.8 / 70.3 FPS
 average, lowest one-second window 60.9 / 63.9 / 65.6, 81 terrain meshes, 1,064 MB RAM, 571 MB GPU; 8 x 8 in the same passes

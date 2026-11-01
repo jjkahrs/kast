@@ -225,6 +225,22 @@ progress fill {
 .link:active {
     color: #ff9900;
 }
+/* Tooltips (data-tooltip, gui_tooltip.h): a card with an accent border, wrapped at its max-width. A project rule on
+   #kast-tooltip overrides it. */
+#kast-tooltip {
+    display: block;
+    max-width: 320dp;
+    padding: 6dp 10dp;
+    border: 1dp #ffaa00;
+    border-radius: 4dp;
+    background-color: #313131;
+    color: #ffffff;
+    font-family: Roboto;
+    font-size: 14dp;
+    line-height: 18dp;
+    text-align: left;
+    white-space: normal;
+}
 )";
 
 namespace {
@@ -438,6 +454,10 @@ void applyGuiWrite(Rml::Element& element, const GuiWrite& write)
     }
     for (const auto& [name, value] : write.attributes)
         element.SetAttribute(name, value);
+    if (write.tooltip && write.tooltip->empty())
+        element.RemoveAttribute(kGuiTooltipAttribute);
+    else if (write.tooltip)
+        element.SetAttribute(kGuiTooltipAttribute, *write.tooltip);
     if (write.visible) {
         if (*write.visible)
             element.RemoveProperty("display"); // back to the style sheet's

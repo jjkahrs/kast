@@ -251,7 +251,7 @@ text field, and in the world only; dead, only the camera works.
   calls `kast.interact`, the server checks you are on the Meadow and in range, and `systems/shrines.lua` (subscribed to
   the shrine's `shrine.activated` event) restores your Health and answers `* The shrine hums softly. You feel
   refreshed.` Elsewhere, E says `There is nothing here to use.` Edit them in the editor's
-  [Zone tab](../../docs/editor/zone-builder.html#objects) (open `scenes/meadow.scene`: its Terrain entity names the Meadow, map 10),
+  [Map tab](../../docs/editor/map-builder.html#objects) (open `scenes/meadow.scene`: its Terrain entity names the Meadow, map 10),
   then re-bake (its **Bake** section) and restart the world server.
 - Losing the world connection or the auth session returns you to the login screen with the reason.
 

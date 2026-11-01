@@ -6,7 +6,7 @@
 #include "gui_builder.h"
 #include "model_preview.h"
 #include "shader_graph_editor.h"
-#include "zone_session.h"
+#include "map_session.h"
 
 #include <components.h>
 #include <material.h>
@@ -128,9 +128,9 @@ public:
     // Rescans the project's files for the Assets panel (main's poll). drawAssets also rescans when the project changes.
     void refreshAssets(const Document& doc);
     // Double-clicked .rml files open in gui, .kshadergraph files in graphs, models in preview, .lua/.rcss/.json files in
-    // editor; renames and moves of their open files reach them, and of any asset the open zone's refs.
+    // editor; renames and moves of their open files reach them, and of any asset the open map's refs.
     void drawAssets(Document& doc, FileActions& files, GuiBuilder& gui, ShaderGraphEditor& graphs, ModelPreview& preview,
-                    ExternalEditor& editor, ZoneSession& zone);
+                    ExternalEditor& editor, MapSession& session);
 
 private:
     // Tree edits are deferred to the end of drawHierarchy so the child lists are not changed mid-iteration.
@@ -172,7 +172,7 @@ private:
     void openRequestedAssetMenu(const char* popup); // opens popup (the last item's context menu) for openAssetMenu
     void startAssetRename(const std::string& path, const std::string& name);
     void requestAssetDelete(const Document& doc, const std::string& path);
-    void applyAssetEdit(Document& doc, GuiBuilder& gui, ShaderGraphEditor& graphs, ModelPreview& preview, ZoneSession& zone);
+    void applyAssetEdit(Document& doc, GuiBuilder& gui, ShaderGraphEditor& graphs, ModelPreview& preview, MapSession& session);
     void assetsFailed(std::string error); // logs it and shows the Assets Error modal
     void drawCreateItems(entt::entity parent, std::optional<kast::SceneSlot> scene = std::nullopt);
     // An open scene's collapsible header (name, unsaved "*", active marker): a drop target and a context menu.

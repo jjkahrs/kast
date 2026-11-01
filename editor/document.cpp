@@ -3,6 +3,7 @@
 #include "asset_ids.h"
 #include "assets.h"
 #include "build.h"
+#include "ui_common.h"
 
 #include <animation.h>
 #include <app.h>
@@ -1742,7 +1743,7 @@ void FileActions::saveTo(const std::string& path, Pending after)
 {
     std::string error;
     if (saveFile(doc_, path, error)) {
-        // Then the extra (a dirty zone). Blocked (it logs why): the action waits, so its changes aren't lost.
+        // Then the extra (a dirty map). Blocked (it logs why): the action waits, so its changes aren't lost.
         if (const std::string what = extraUnsaved(); !what.empty() && extra.save && !extra.save()) {
             if (after == Pending::None)
                 return;
@@ -1889,7 +1890,7 @@ void FileActions::drawBuildSettingsModal()
     if (buildScenes_.empty())
         ImGui::TextUnformatted("No scenes in project. Save a scene first.");
     if (!buildSettingsError_.empty())
-        ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.45f, 1.0f), "%s", buildSettingsError_.c_str());
+        ImGui::TextColored(kErrorColor, "%s", buildSettingsError_.c_str());
     ImGui::Spacing();
     ImGui::BeginDisabled(!listed);
     const bool save = ImGui::Button("Save");
@@ -1952,7 +1953,7 @@ void FileActions::drawOnlineSettingsModal()
         checkOnlineConfig(*doc_.project, online_, onlineError_);
     }
     if (!onlineError_.empty())
-        ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.45f, 1.0f), "%s", onlineError_.c_str());
+        ImGui::TextColored(kErrorColor, "%s", onlineError_.c_str());
     ImGui::Spacing();
     ImGui::BeginDisabled(!onlineError_.empty() || dialogOpen_);
     const bool save = ImGui::Button("Save");
@@ -2030,7 +2031,7 @@ void FileActions::drawGuiSettingsModal()
     if (ImGui::InputInt("Refresh Hz (0 = highest)", &refresh))
         window.refresh = refresh > 0 ? std::optional(std::min(refresh, 1000)) : std::nullopt;
     if (!guiError_.empty())
-        ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.45f, 1.0f), "%s", guiError_.c_str());
+        ImGui::TextColored(kErrorColor, "%s", guiError_.c_str());
     ImGui::Spacing();
     if (ImGui::Button("Save")) {
         if (setGuiConfig(*doc_.project, gui_, guiError_))

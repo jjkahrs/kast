@@ -88,10 +88,10 @@ public:
     // (Renderer::bakeProbe: call between frames), writes it to kast::bakedProbePath next to the scene, sets its
     // bakedPath and marks the document dirty. Edit mode and a scene saved in the project only; failures are logged.
     void bakeProbes(Document& doc, const std::vector<entt::entity>& probes);
-    // Drawn with the document's scene, lit by it (Renderer::render's extra): the open zone in edit mode. Null: none.
+    // Drawn with the document's scene, lit by it (Renderer::render's extra): the open map in edit mode. Null: none.
     void setExtraScene(const kast::Scene* scene) { extraScene_ = scene; }
     // Called each frame the scene image shows, before the gizmo, with the view-projection and the image's rect (ImGui
-    // points), to draw over it with the window's draw list: the zone overlays.
+    // points), to draw over it with the window's draw list: the map overlays.
     std::function<void(const float* viewProj, float x, float y, float width, float height)> overlay;
     // The Scene view image this frame, for the caller's own mouse handling: viewProj, the image's rect (ImGui points),
     // whether the mouse is over it, and whether a camera drag (right fly, middle pan, Alt + left orbit) holds the mouse.
@@ -102,7 +102,7 @@ public:
         bool cameraDrag;
     };
     // Called each frame the scene image shows, before overlay: true when the left mouse belongs to the caller this frame
-    // (the zone's active tool, a zone handle it hit or drags), so the gizmo is hidden and a click selects nothing. The
+    // (the map's active tool, a map handle it hit or drags), so the gizmo is hidden and a click selects nothing. The
     // camera keeps its controls either way.
     std::function<bool(const Input&)> input;
     // The scene image's center in window points (--sim-mouse without --play).

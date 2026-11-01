@@ -16,7 +16,7 @@ struct EditorCamera {
     float yaw = 0.0f;
     float pitch = -20.0f;
     float distance = 10.0f;
-    float nearPlane = kNear; // main.cpp widens both while the Scene view shows a zone
+    float nearPlane = kNear; // main.cpp widens both while the Scene view shows a map
     float farPlane = kFar;
     bool orthographic = false;
 

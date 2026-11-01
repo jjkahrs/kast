@@ -9,7 +9,7 @@
 <body>
 <header class="top"><a class="brand" href="../index.html">Kast Docs</a><nav><a href="index.html">Editor</a><a href="../engine/index.html">Engine</a><a href="../services/auth/index.html">Auth Server</a><a href="../services/world/index.html">World Server</a><a href="../services/chat/index.html">Chat Server</a><a href="../services/admin/index.html">Admin App</a><a href="../development/tests.html">Development</a></nav></header>
 <div class="layout">
-<nav class="side"><h2>Editor</h2><ul><li><a href="index.html">Overview</a></li><li><a href="command-line.html">Command line</a></li><li><a href="controls.html">Editor controls</a></li><li><a href="undo-redo.html">Undo and redo</a></li><li><a href="multi-scene.html">Multi-scene editing</a></li><li><a href="project-manager.html">Project Manager</a></li><li><a href="projects.html">Projects</a></li><li><a href="build.html">Build</a></li><li><a href="online-tooling.html">Online Services tooling</a></li><li><a href="gui-builder.html" class="active">GUI Builder</a></li><li><a href="prefabs.html">Prefabs</a></li><li><a href="shaders.html">Shaders</a></li><li><a href="shader-graph.html">Shader Graph</a></li><li><a href="zone-builder.html">Zone Builder</a></li><li><a href="map-builder.html">Map Builder</a></li><li><a href="model-preview.html">Model Preview</a></li><li><a href="assets.html">Assets and asset ids</a></li></ul></nav>
+<nav class="side"><h2>Editor</h2><ul><li><a href="index.html">Overview</a></li><li><a href="command-line.html">Command line</a></li><li><a href="controls.html">Editor controls</a></li><li><a href="undo-redo.html">Undo and redo</a></li><li><a href="multi-scene.html">Multi-scene editing</a></li><li><a href="project-manager.html">Project Manager</a></li><li><a href="projects.html">Projects</a></li><li><a href="build.html">Build</a></li><li><a href="online-tooling.html">Online Services tooling</a></li><li><a href="gui-builder.html" class="active">GUI Builder</a></li><li><a href="prefabs.html">Prefabs</a></li><li><a href="shaders.html">Shaders</a></li><li><a href="shader-graph.html">Shader Graph</a></li><li><a href="map-builder.html">Map Builder</a></li><li><a href="model-preview.html">Model Preview</a></li><li><a href="assets.html">Assets and asset ids</a></li></ul></nav>
 <main>
 <h1 id="gui-builder">GUI Builder</h1>
 <p>Three editor panels and an inset on one open GUI. <strong>Assets &gt; Create &gt; GUI</strong> writes <code>new_gui.rml</code> + <code>new_gui.rcss</code> (a Panel holding a
@@ -19,6 +19,12 @@ Text and a Button with <code>data-event="ui.clicked"</code>, the <code>.rml</cod
 nothing changed, if either new name is taken); moves and renames of the open files are followed. <strong>Double-click</strong> an
 <code>.rml</code> in Assets to open it (one GUI at a time; with unsaved builder changes, Save / Discard / Cancel first); its
 three panels come to the front.</p>
+<p>The three panels are hidden until a GUI (<code>.rml</code> or <code>.guiprefab</code>) is open: no tabs, no empty panels. Opening one
+shows them in their dock spots, the GUI Preview focused. The <strong>GUI Preview</strong> tab has a close <strong>X</strong> (GUI
+Inspector and GUI Style don't): it closes the GUI and hides all three again. With unsaved changes it first asks
+<em>Save changes to &lt;file&gt; before closing it?</em> <strong>Save</strong> (closes once saved), <strong>Discard</strong> (closes,
+the files on disk untouched) or <strong>Cancel</strong> (stays open). <code>--gui-close</code> does the same from the
+<a href="command-line.html">command line</a>.</p>
 <ul>
 <li><strong>GUI Hierarchy</strong> (not a tab: an inset over the GUI Preview, 8 px in from its top-left corner, 260x360): the
   elements under <strong>Body</strong>, under a toolbar of <strong>Save</strong>, <strong>Delete</strong>, <strong>Up</strong> and <strong>Down</strong> (Delete / Up / Down
@@ -48,7 +54,11 @@ three panels come to the front.</p>
   yellow outline, drawn by the editor, never saved. A document with <code>data-model</code> previews as authored, with no live
   data: its models are created empty (no RmlUi warning), so <code>data-for</code> rows don't show and <code>{{...}}</code> is empty;
   select a row template in the GUI Hierarchy. A Virtual List is the exception: it shows 20 placeholder rows made from its
-  template (see <a href="#lists">Lists</a>).</li>
+  template (see <a href="#lists">Lists</a>). The mouse over the preview hovers its elements (<code>:hover</code> styles), and
+  <a href="../engine/game-gui.html#tooltips">tooltips</a> show as in Play: rest it 0.5 s over an element with a
+  <code>data-tooltip</code>; a click (which selects) hides it. <code>data-tooltip</code> is an ordinary attribute: the Inspector lists it
+  under <em>Other attributes</em>; write it in the <code>.rml</code> (the builder reloads it) or with <code>--gui-set-attr
+  data-tooltip=...</code>.</li>
 </ul>
 <h2 id="rich-text">Rich Text</h2>
 <p><strong>Add Rich Text</strong> adds <code>&lt;p class="rich"&gt;[b]Rich[/b] text&lt;/p&gt;</code>: a paragraph whose text is

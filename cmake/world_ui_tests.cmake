@@ -306,8 +306,8 @@ foreach(shot "on|" "off|--no-scene-world-ui" "field|--set-field 6,WorldUI.offset
 endforeach()
 # Probes: Plate 700,270 and Sign 1040,262 (their clear color or the ground without them); Sign raised 1040,210; Sign
 # dragged 1150,262; Sign's outline 900,305; Plate's anchor cross below it 649,290 and its outline 700,222 and 520,250
-# (over the panel); the Entities panel's Crate row 200,120 (the
-# accent when selected).
+# (over the panel); the Entities panel's Crate row 200,120 (selected: the #222227 selection grey, its text #ffa100)
+# and the unselected Main Camera / Plate rows around it 200,100 and 200,140 (the #0c0c0e background).
 set(world_ui_scene_plate 0.43781,0.30056)
 set(world_ui_scene_sign 0.65031,0.29167)
 # Inside Sign where the grid's lines run behind it (1040,282, 1040,288, 870,277: grey lines in the _off shot): the
@@ -325,7 +325,7 @@ set(world_ui_scene_field ${world_ui_scene_plate},${world_ui_editor_clear} ${worl
 set(world_ui_scene_selected_world ${world_ui_scene_on} 0.56281,0.33944,255,204,0,12)
 set(world_ui_scene_selected_overlay ${world_ui_scene_on} 0.40594,0.32278,255,204,0,12 0.43781,0.24722,255,204,0,12
                                      0.32531,0.27833,255,204,0,12)
-set(world_ui_scene_pick ${world_ui_scene_on} 0.12531,0.13389,255,170,0,8)
+set(world_ui_scene_pick ${world_ui_scene_on} 0.12531,0.13389,34,34,39,4 0.12531,0.11167,12,12,14,4 0.12531,0.15611,12,12,14,4)
 set(world_ui_scene_gizmo ${world_ui_scene_plate},${world_ui_magenta} 0.71906,0.29167,${world_ui_white})
 foreach(name on off field selected_world selected_overlay pick gizmo)
   add_test(NAME editor_world_ui_scene_${name}_probe

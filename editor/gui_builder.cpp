@@ -13,6 +13,7 @@
 #include <RmlUi/Core/Element.h>
 #include <RmlUi/Core/ElementDocument.h>
 #include <RmlUi/Core/Factory.h>
+#include <SDL3/SDL.h>
 
 #include <imgui.h>
 #include <imgui_stdlib.h>
@@ -26,13 +27,8 @@ namespace {
 
 constexpr double kRcssApplyDelaySeconds = 0.3;
 constexpr const char* kNodePayload = "GUI_NODE";
-constexpr ImU32 kOutlineColor = IM_COL32(255, 200, 0, 255);
+constexpr ImU32 kOutlineColor = kHighlight;
 // The editor palette, for the GUI Hierarchy inset.
-constexpr ImU32 kHeader = IM_COL32(0xff, 0xaa, 0x00, 0xff);
-constexpr ImU32 kHighlight = IM_COL32(0xff, 0xcc, 0x00, 0xff);
-constexpr ImU32 kDarken = IM_COL32(0xff, 0x99, 0x00, 0xff);
-constexpr ImU32 kCard = IM_COL32(0x31, 0x31, 0x31, 0xff);
-constexpr ImU32 kFieldHighlight = IM_COL32(0x81, 0x81, 0x81, 0xff);
 
 std::filesystem::file_time_type modified(const std::filesystem::path& file)
 {
@@ -150,8 +146,19 @@ bool GuiBuilder::load(const std::filesystem::path& rml)
     return true;
 }
 
+void GuiBuilder::requestClose()
+{
+    if (!dirty()) {
+        close();
+        return;
+    }
+    pendingOpen_.clear();
+    openPromptRequested_ = true;
+}
+
 void GuiBuilder::close()
 {
+    kast::log::info(std::format("Closed GUI '{}'", rml_.string()));
     rml_.clear();
     rcss_.clear();
     rcssText_.clear();
@@ -496,6 +503,21 @@ bool GuiBuilder::pick(float x, float y)
     return true;
 }
 
+bool GuiBuilder::hover(const std::string& id)
+{
+    Rml::Element* element = previewDoc_ ? previewDoc_->GetElementById(id) : nullptr;
+    if (!element)
+        return false;
+    const Rml::Vector2f center =
+        element->GetAbsoluteOffset(Rml::BoxArea::Border) + element->GetBox().GetSize(Rml::BoxArea::Border) * 0.5f;
+    SDL_Event motion{};
+    motion.motion.type = SDL_EVENT_MOUSE_MOTION;
+    motion.motion.x = center.x;
+    motion.motion.y = center.y;
+    preview_.onEvent(motion);
+    return true;
+}
+
 void GuiBuilder::setPreviewSize(int width, int height)
 {
     resolutions_.insert(resolutions_.end() - 1, {width, height});
@@ -659,13 +681,13 @@ void GuiBuilder::drawHierarchyInset(ImVec2 areaMin, ImVec2 areaMax)
             }
         }
     }
-    // The header strip: the collapse arrow and the title, black on #ffaa00; dragged, it moves the inset.
-    draw->AddRectFilled(min, ImVec2(max.x, min.y + header), kHeader);
+    // The header strip: the collapse arrow and the title, the accent on grey; dragged, it moves the inset.
+    draw->AddRectFilled(min, ImVec2(max.x, min.y + header), kField);
     ImGui::SetCursorScreenPos(ImVec2(min.x + kGrip, min.y));
-    ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32_BLACK);
+    ImGui::PushStyleColor(ImGuiCol_Text, kAccent);
     ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(0, 0, 0, 0));
-    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, kHighlight);
-    ImGui::PushStyleColor(ImGuiCol_ButtonActive, kDarken);
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, kRowHover);
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, kField);
     if (ImGui::ArrowButton("##collapse", hierarchyCollapsed_ ? ImGuiDir_Right : ImGuiDir_Down))
         hierarchyCollapsed_ = !hierarchyCollapsed_;
     ImGui::PopStyleColor(3);
@@ -685,7 +707,7 @@ void GuiBuilder::drawHierarchyInset(ImVec2 areaMin, ImVec2 areaMax)
         // Inside the grips: a child window over them would take their mouse.
         ImGui::SetCursorScreenPos(ImVec2(min.x + kGrip, min.y + header));
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, kGrip));
-        ImGui::PushStyleColor(ImGuiCol_ChildBg, IM_COL32(0, 0, 0, 0)); // the inset's #313131 shows through
+        ImGui::PushStyleColor(ImGuiCol_ChildBg, IM_COL32(0, 0, 0, 0)); // the inset's kCard shows through
         ImGui::BeginChild("body", ImVec2(std::max(size.x - kGrip * 2.0f, 1.0f), std::max(size.y - header - kGrip, 1.0f)),
                           ImGuiChildFlags_AlwaysUseWindowPadding, kFlags);
         ImGui::PopStyleColor();
@@ -738,7 +760,7 @@ void GuiBuilder::drawNode(pugi::xml_node node)
     if (missing)
         label = std::format("missing prefab {}{}", prefab, label.substr(std::min(label.find(' '), label.size())));
     const bool unknown = !body && !missing && guiKind(node) == GuiKind::Unknown;
-    const bool tinted = unknown || (missing && node != selected_); // a selected row's text is darkened on the accent
+    const bool tinted = unknown || missing;
     if (tinted)
         ImGui::PushStyleColor(ImGuiCol_Text, missing ? kErrorColor : ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
     const bool open = ImGui::TreeNodeEx(reinterpret_cast<void*>(node.internal_object()), flags, "%s", label.c_str());
@@ -747,7 +769,7 @@ void GuiBuilder::drawNode(pugi::xml_node node)
     if (instance) // the prefab marker after its label, as the scene Hierarchy's
         drawPrefabIcon(ImGui::GetItemRectMin().x + ImGui::GetTreeNodeToLabelSpacing() + ImGui::CalcTextSize(label.c_str()).x +
                            ImGui::GetStyle().ItemSpacing.x,
-                       ImGui::GetItemRectMin().y, ImGui::GetItemRectSize().y, node == selected_);
+                       ImGui::GetItemRectMin().y, ImGui::GetItemRectSize().y);
     if ((instance || missing) && ImGui::IsItemHovered())
         ImGui::SetTooltip(missing ? "Missing GUI prefab %s: kept (with its overrides) and saved unchanged" : "Instance of %s",
                           prefab.c_str());
@@ -1226,7 +1248,7 @@ void GuiBuilder::drawRichText()
     ImGui::PushTextWrapPos(0.0f);
     if (problems.empty())
         ImGui::TextDisabled("Markup OK. Tags: [b] [i] [u] [s] [color=] [size=] [font=] [link=] [img=]; [[ is a literal [.");
-    ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.8f, 0.0f, 1.0f)); // #ffcc00, the palette's highlight
+    ImGui::PushStyleColor(ImGuiCol_Text, kHighlight);
     for (const kast::GuiRichTextProblem& problem : problems)
         ImGui::Text("Warning at %zu: %s", problem.offset, problem.message.c_str());
     ImGui::PopStyleColor();
@@ -1248,7 +1270,7 @@ void GuiBuilder::drawStyle()
             ImGui::TextUnformatted(utf8(rcss_.filename()).c_str());
             if (sheetFailed_) {
                 ImGui::SameLine();
-                ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "Errors (see Console): preview shows the last good style");
+                ImGui::TextColored(kErrorColor, "Errors (see Console): preview shows the last good style");
             }
             if (ImGui::InputTextMultiline("##rcss", &rcssText_, ImGui::GetContentRegionAvail(),
                                           ImGuiInputTextFlags_AllowTabInput)) {
@@ -1306,8 +1328,11 @@ void GuiBuilder::drawPreview()
     if (focusStep_ == 1) // last: the preview keeps the focus
         ImGui::SetNextWindowFocus();
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
-    const bool visible = ImGui::Begin(title("GUI Preview", kPreviewWindow).c_str());
+    bool keepOpen = true; // false: the tab's X was clicked
+    const bool visible = ImGui::Begin(title("GUI Preview", kPreviewWindow).c_str(), &keepOpen);
     ImGui::PopStyleVar();
+    if (!keepOpen)
+        requestClose(); // clean: closed now, so nothing below draws
     if (visible && !rml_.empty()) {
         saveShortcut();
         ImGui::SetNextItemWidth(160.0f);
@@ -1372,6 +1397,22 @@ void GuiBuilder::drawPreview()
             ImGui::SetCursorScreenPos(min);
             if (target_.valid())
                 ImGui::Image(static_cast<ImTextureID>(target_.texture().idx), size);
+            // The mouse over the image hovers the preview's elements (:hover, tooltips: gui_tooltip.h); a press there
+            // hides a tooltip as in Play but never reaches the documents (it picks, below).
+            const bool mouseOver = !insetMouse && ImGui::IsItemHovered();
+            if (mouseOver || previewMouse_) {
+                SDL_Event event{};
+                event.type = mouseOver ? SDL_EVENT_MOUSE_MOTION : SDL_EVENT_WINDOW_MOUSE_LEAVE;
+                event.motion.x = io.MousePos.x;
+                event.motion.y = io.MousePos.y;
+                preview_.onEvent(event, min.x, min.y, 1.0f / scale);
+            }
+            previewMouse_ = mouseOver;
+            for (int button = 0; button < ImGuiMouseButton_COUNT; ++button)
+                if (mouseOver && ImGui::IsMouseClicked(button))
+                    preview_.tooltip().press();
+            if (!ImGui::IsAnyMouseDown())
+                preview_.tooltip().release();
             if (!insetMouse && ImGui::IsItemClicked()) {
                 const ImVec2 mouse = ImGui::GetMousePos();
                 pick((mouse.x - min.x) / scale, (mouse.y - min.y) / scale);
@@ -1434,8 +1475,11 @@ void GuiBuilder::drawModals()
     if (std::exchange(openPromptRequested_, false))
         ImGui::OpenPopup("Unsaved GUI changes##open");
     if (ImGui::BeginPopupModal("Unsaved GUI changes##open", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
-        ImGui::Text("Save changes to %s before opening %s?", utf8(rml_.filename()).c_str(),
-                    utf8(pendingOpen_.filename()).c_str());
+        if (pendingOpen_.empty())
+            ImGui::Text("Save changes to %s before closing it?", utf8(rml_.filename()).c_str());
+        else
+            ImGui::Text("Save changes to %s before opening %s?", utf8(rml_.filename()).c_str(),
+                        utf8(pendingOpen_.filename()).c_str());
         ImGui::Spacing();
         const bool saveIt = ImGui::Button("Save");
         ImGui::SameLine();
@@ -1444,7 +1488,10 @@ void GuiBuilder::drawModals()
         const bool cancel = ImGui::Button("Cancel");
         if ((saveIt && save()) || discard) {
             rmlDirty_ = rcssDirty_ = false;
-            open(pendingOpen_);
+            if (pendingOpen_.empty())
+                close();
+            else
+                open(pendingOpen_);
         }
         if (saveIt || discard || cancel)
             ImGui::CloseCurrentPopup();

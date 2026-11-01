@@ -109,7 +109,7 @@ public:
     // logErrors false: a missing or broken .rml and a full atlas aren't logged (the editor's Scene view preview: the
     // Inspector already flags the path, and Play logs both).
     explicit WorldGui(std::string contextName, bool logErrors = true)
-        : context_(contextName), atlas_(contextName + "-atlas"), logErrors_(logErrors) {}
+        : context_(contextName, false), atlas_(contextName + "-atlas", false), logErrors_(logErrors) {} // no tooltips
     ~WorldGui() { clear(); }
     WorldGui(const WorldGui&) = delete;
     WorldGui& operator=(const WorldGui&) = delete;

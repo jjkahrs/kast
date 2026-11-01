@@ -1,0 +1,105 @@
+// The map builder's document: one map's files as JSON (edited in place, so keys the tool does not know survive), its
+// tile heights, and its undo history (docs/editor/undo-redo.html). No file IO (map_io.h) and no window.
+#pragma once
+#include <heights.h>
+#include <map.h>
+#include <undo.h>
+
+#include <nlohmann/json.hpp>
+
+#include <array>
+#include <filesystem>
+#include <map>
+#include <memory>
+#include <optional>
+#include <string>
+#include <vector>
+
+namespace mapedit {
+
+using Json = nlohmann::ordered_json; // keeps the files' key order
+using kast::map::TileKey;
+using Vec3 = std::array<float, 3>;
+
+// Tiles sorted by z then x, as the engine streams them.
+struct TileLess {
+    bool operator()(TileKey a, TileKey b) const { return a.z != b.z ? a.z < b.z : a.x < b.x; }
+};
+template <typename T>
+using TileMap = std::map<TileKey, T, TileLess>;
+
+// Shared between states until a tile is edited (copy on write), so an undo step holds only the tiles it touched.
+using HeightsPtr = std::shared_ptr<const kast::map::Heights>;
+
+// Everything a map's files hold.
+struct MapState {
+    Json manifest;               // map.json
+    Json areas;                  // areas.json; null: no file
+    TileMap<Json> spawns;        // .server/spawns/<tx>_<tz>.json
+    TileMap<Json> objects;       // objects/<tx>_<tz>.json; a tile without objects has no entry (and no file)
+    TileMap<Json> interactables; // .server/interactables/<tx>_<tz>.json, kept in step with objects (map_edit.h)
+    TileMap<HeightsPtr> heights; // tiles with a heights file or edits; absent: flat at heightMin
+    Json zones;                  // zones.json; null: no file (one implicit zone of every tile)
+    // A renamed zone's id -> its id on disk (its zones/<id>.scene), until save renames the scene file.
+    std::map<std::string, std::string> zoneRenames;
+};
+
+// Same content: JSON equal, heights the same buffers (an edit always makes a new one).
+bool same(const MapState& a, const MapState& b);
+
+// A problem in one file, as the world server reports it ("maps/meadow/areas.json", "area \"x\": ...").
+struct MapError {
+    std::string file, message;
+};
+
+// "tx_tz"
+std::string tile_name(TileKey t);
+
+class MapDoc {
+public:
+    std::string folder;              // maps/<folder>
+    MapState state;                 // what the tool shows and saves
+    MapState saved;                 // what is on disk (empty for a new map)
+    TileMap<std::string> heightExt;  // the heights file on disk per tile: ".r16" or ".png"
+
+    // The manifest parsed; nullopt with err set if it is invalid.
+    std::optional<kast::map::MapInfo> info(std::string& err) const;
+    bool dirty() const { return !same(state, saved); }
+
+    // Undo: begin() before an edit (a sculpt stroke: on mouse down), commit() after (mouse up). The commit records one
+    // step holding only the parts the edit changed, before and after, named for what changed ("Sculpt Terrain"); one
+    // that changed nothing adds no step. edit() does both around fn.
+    void begin();
+    void commit();
+    template <typename Fn>
+    void edit(Fn&& fn) {
+        begin();
+        fn(state);
+        commit();
+    }
+    // Between begin() and commit(): mid-stroke.
+    bool editing() const { return pending_.has_value(); }
+    bool canUndo() const { return history().canUndo(); }
+    bool canRedo() const { return history().canRedo(); }
+    // No-op mid-stroke.
+    void undo();
+    void redo();
+    // The steps (UndoStack::kMaxSteps at most). A copied or moved doc starts with none: steps act on the doc that
+    // recorded them.
+    const UndoStack& history() const { return history_.stack; }
+
+private:
+    struct History {
+        UndoStack stack;
+        History() = default;
+        History(const History&) {}
+        History& operator=(const History&) {
+            stack.clear(true);
+            return *this;
+        }
+    };
+    History history_;
+    std::optional<MapState> pending_; // the state at begin()
+};
+
+} // namespace mapedit

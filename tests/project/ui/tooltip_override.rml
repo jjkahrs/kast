@@ -1,0 +1,14 @@
+<rml>
+    <head>
+        <title>Tooltip Override</title>
+        <link type="text/rcss" href="tooltip_override.rcss" data-kast-id="091dd98a-97f4-4b13-b04d-46b86b468811"/>
+    </head>
+    <body>
+        <!-- tooltip_basic.rml's elements; tooltip_override.rcss restyles #kast-tooltip (blue card, green border, yellow
+             text) over the default style. -->
+        <div id="bag" class="slot" data-tooltip="Open bag"><div id="bag_icon"></div></div>
+        <div id="rich" class="slot" data-tooltip="[b]Iron Sword[/b] [color=#ffcc00]+5 attack[/color] &lt;b&gt;not bold&lt;/b&gt; [blink]x[/blink]"></div>
+        <div id="blank" class="slot" data-tooltip="   "></div>
+        <div id="corner" class="slot" data-tooltip="Corner tooltip: flips left and up"></div>
+    </body>
+</rml>

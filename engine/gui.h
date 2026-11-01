@@ -1,6 +1,7 @@
 #pragma once
 
 #include "gui_scale.h"
+#include "gui_tooltip.h"
 
 #include <RmlUi/Core/Types.h>
 #include <bgfx/bgfx.h>
@@ -79,10 +80,11 @@ bool overElement(Rml::Context& context);
 
 namespace kast {
 
-// One RmlUi context (a set of documents sharing a size and input focus), drawn into a bgfx view.
+// One RmlUi context (a set of documents sharing a size and input focus), drawn into a bgfx view. With tooltips, its
+// documents' data-tooltip elements show tooltips (gui_tooltip.h) as the mouse hovers them.
 class GuiContext {
 public:
-    explicit GuiContext(std::string name) : name_(std::move(name)) {}
+    explicit GuiContext(std::string name, bool tooltips = true) : name_(std::move(name)), tooltips_(tooltips) {}
     ~GuiContext() { release(); }
     GuiContext(const GuiContext&) = delete;
     GuiContext& operator=(const GuiContext&) = delete;
@@ -106,6 +108,9 @@ public:
     bool created() const { return context_ != nullptr; }
     // RmlUi units per area pixel: 1 / dpRatio for All, else 1.
     float unitsPerPixel() const { return scaling_ == GuiScaling::All ? 1.0f / dpRatio_ : 1.0f; }
+    // Its tooltip (updated by render, fed the mouse by onEvent). A host that keeps a press from the documents (the GUI
+    // Builder's pick) tells it with press / release; tests set its clock.
+    GuiTooltip& tooltip() { return tooltip_; }
 
 private:
     // Renders the base layer stays redirected through a stencil layer (GuiRenderer::begin's redirectBase) after the
@@ -117,6 +122,8 @@ private:
     Rml::Vector2i layoutSize() const;
 
     std::string name_;
+    bool tooltips_ = true;
+    GuiTooltip tooltip_;
     Rml::Context* context_ = nullptr;
     int baseMaskIdle_ = kBaseMaskRenders; // renders since a base-layer clip mask was asked for, up to kBaseMaskRenders
     int width_ = 1;

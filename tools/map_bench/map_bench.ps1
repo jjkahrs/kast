@@ -99,7 +99,7 @@ function CopyMoveScript([int]$n) {
 }
 
 # --- generate: project.kast, the grass material and its texture, the move script, a scene, and maps/bench<N> made by
-# the editor's own zone flags (heights generated, spawns, saved) from a map.json written here: the New Map cap is
+# the editor's own map flags (heights generated, spawns, saved) from a map.json written here: the New Map cap is
 # never involved, so this works the same before and after it changes.
 function Generate([int]$n) {
     $root = Join-Path $out "$n/project"
@@ -150,7 +150,7 @@ function Generate([int]$n) {
     $spawn = if ($n -eq 8) { 600 } else { $c }
     $edits = @('--map', "bench$n", '--generate-heights', '7,1024,6,0.5,2', '--set-spawn', "$spawn,$spawn")
     for ($z = 2; $z -lt $n; $z += 4) { for ($x = 2; $x -lt $n; $x += 4) { $edits += '--add-spawn', "bat_${x}_$z,Bat,$($x * 256 + 128),$($z * 256 + 128)" } }
-    $edits += '--save-zone', '--headless'
+    $edits += '--save-map', '--headless'
     $work = Join-Path $out "$n/generate.run"
     $r = Measure-Run $editor "--project `"$root`" $(EditorArgs $work) $($edits -join ' ')" $work (Join-Path $out "$n/generate.log")
     $bytes = (Get-ChildItem (Join-Path (MapDir $n) 'heights') -ErrorAction SilentlyContinue | Measure-Object Length -Sum).Sum
@@ -166,11 +166,11 @@ function Bake([int]$n) {
     Log "N=$n bake: $(Status $r), $($nav.Count) navtiles, $(Mb $nav.Sum), at most $polys polys per tile, peak RAM $(Mb $r.PeakWs)$(if ($r.Exit -ne 0) { LastError $log })"
 }
 
-# --- shots: the Zone tab's Map section and the Map tab on the map.
+# --- shots: the Map tab's Map section and its Tiles section in each grid mode on the map.
 function Shots([int]$n) {
     $dir = Join-Path $out 'screenshots'
     $scene = Join-Path $out "$n/project/scenes/bench.scene"
-    foreach ($shot in @(@('zone_tab', '--focus-panel Zone --zone-section Map'), @('map_tab', '--focus-panel Map'))) {
+    foreach ($shot in @(@('map_section', '--focus-panel Map --map-section Map'), @('map_tab', '--focus-panel Map'), @('map_tiles', '--focus-panel Map --map-section Tiles --grid-mode tiles'))) {
         $png = Join-Path $dir "$($shot[0])_${n}x$n.png"
         $work = "$png.run"
         $r = Measure-Run $editor "--scene `"$scene`" $(EditorArgs $work) --map bench$n --size 1600x1000 $($shot[1]) --frames 60 --screenshot `"$png`"" $work "$png.log"
@@ -204,7 +204,7 @@ function EditorSculpt([int]$n) {
     }
     $draws = Select-String -Path $log -Pattern 'Scene view: Tris \S+\s+Draws ([0-9]+)' -ErrorAction SilentlyContinue | Select-Object -Last 1
     if ($draws) { $line += ", Scene view $($draws.Matches[0].Groups[1].Value) draws" }
-    $meshes = Select-String -Path $log -Pattern 'Zone view: ([0-9]+) terrain meshes' -ErrorAction SilentlyContinue | Select-Object -Last 1
+    $meshes = Select-String -Path $log -Pattern 'Map view: ([0-9]+) terrain meshes' -ErrorAction SilentlyContinue | Select-Object -Last 1
     if ($meshes) { $line += ", $($meshes.Matches[0].Groups[1].Value) terrain meshes" }
     Log "$line, peak RAM $(Mb $r.PeakWs) (private $(Mb $r.PeakPrivate)), peak GPU dedicated $(Mb $r.PeakGpu)$(if ($r.Exit -ne 0) { LastError $log })"
 }
@@ -241,7 +241,7 @@ function Player([int]$n) {
 }
 
 # --- server: kast_world (Release, Windows) on the map until "maps loaded" (no database: it stops right after, as
-# cmake/zone_test.cmake runs it): startup time and peak RSS.
+# cmake/mapedit_test.cmake runs it): startup time and peak RSS.
 function Server([int]$n) {
     $maps = if ($n -eq 0) { Join-Path $repo 'tests/project/maps' } else { Join-Path $out "$n/project/maps" }
     $vars = @{ MAP_ROOT = $maps; START_MAP = $(if ($n -eq 0) { '1' } else { "$(MapId $n)" }); AUTH_JWKS_URL = 'http://127.0.0.1:9/jwks'

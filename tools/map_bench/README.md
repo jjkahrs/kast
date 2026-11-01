@@ -1,6 +1,6 @@
 # Map size benchmark
 
-`map_bench.ps1` measures how the editor, the runtime client and the world server cope with big zone maps. It generates
+`map_bench.ps1` measures how the editor, the runtime client and the world server cope with big maps. It generates
 N x N tile maps (default 16, 32 and 64) **at run time** under `build/map_bench/<N>/` (nothing large is committed) and
 appends every number to `build/map_bench/results.log`. Recorded results: [results.md](results.md).
 
@@ -11,8 +11,8 @@ appends every number to `build/map_bench/results.log`. Recorded results: [result
 
 - `map.json` written by the script (tiles `[0, 0, N-1, N-1]`, height range 0..400 m, the grass material). It is written
   directly, not with `--new-map`, so the editor's New Map size cap does not limit it.
-- Heights from the editor's own zone flags: `--generate-heights 7,1024,6,0.5,2` (fBm, 1 km features), the map spawn
-  on the ground, one `Bat` spawn per 4 x 4 tiles, `--save-zone --headless`.
+- Heights from the editor's own map flags: `--generate-heights 7,1024,6,0.5,2` (fBm, 1 km features), the map spawn
+  on the ground, one `Bat` spawn per 4 x 4 tiles, `--save-map --headless`.
 - Navtiles from `kast_mapbake` (the `bake` step).
 - `scenes/bench.scene`: the Terrain (radius `-Radius`, default 2), a sun, and a camera that
   `map_bench_move.lua` flies 0.7 m a frame on x and z (~1 m a frame) along the map's diagonal, 450 m up, so every size
@@ -25,7 +25,7 @@ appends every number to `build/map_bench/results.log`. Recorded results: [result
 |------|--------------|--------|
 | `generate` | the project and map above (kept if present; `-Force` regenerates) | time, peak RAM, heights size |
 | `bake` | `kast_mapbake maps/bench<N>` | time, navtile count and size, most polys in a tile |
-| `shots` | Zone tab (Map section) and Map tab screenshots | `build/map_bench/screenshots/` |
+| `shots` | Map tab screenshots: the Map section, and the Tiles section in each grid mode | `build/map_bench/screenshots/` |
 | `editor` | `kast_editor --map bench<N> --sculpt-loop --log-fps --no-vsync`, 1200 frames | FPS average and lowest over the last 10 one-second windows, CPU / GPU ms, seconds at under half that FPS after opening, Scene view draws, peak RAM and GPU dedicated memory |
 | `play` | the editor's Play of `bench.scene`, no vsync | frame time average / p99 / max while flying, peak RAM / GPU |
 | `player` | Build (`kast_editor --build`), then the built `kast_player` the same way | the same |

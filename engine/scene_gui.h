@@ -57,6 +57,9 @@ public:
     void reloadChanged();
     // Clicks the element with this id in the topmost visible document holding one, as the mouse would. False if none.
     bool click(const std::string& id);
+    // Moves the mouse over the center of the element with this id in the topmost visible document holding one, as an
+    // SDL motion event there would (tests: a hover that shows its tooltip). False if none.
+    bool hover(const std::string& id);
     GuiContext& context() { return context_; } // the Dp documents' (tests drive it directly)
     // The WorldUI documents: the host lays them out each frame from its camera (WorldGui::layout) before render().
     WorldGui& world() { return world_; }
@@ -84,6 +87,7 @@ public:
     void setRichText(const std::string& id, std::string_view text) override;
     void setVisible(const std::string& id, bool visible) override;
     void setAttribute(const std::string& id, const std::string& name, std::string_view value) override;
+    void setTooltip(const std::string& id, std::string_view text) override;
     bool focus(const std::string& id) override;
     std::optional<std::string> focusedField() override;
     bool mouseOver() override;
