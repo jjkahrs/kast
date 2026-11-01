@@ -16,6 +16,7 @@
 joined only by transfers. Players and NPCs on different maps never see each other, even at the same x/z.</p>
 <pre><code>&lt;MAP_ROOT&gt;/&lt;folder&gt;/map.json        one folder per map; dot-folders (.server/) are skipped
 &lt;MAP_ROOT&gt;/&lt;folder&gt;/areas.json      optional: the map's named areas (see Areas)
+&lt;MAP_ROOT&gt;/&lt;folder&gt;/zones.json      optional, client and editor: the map's zones (see Zones; the server ignores it)
 &lt;MAP_ROOT&gt;/&lt;folder&gt;/heights/&lt;tx&gt;_&lt;tz&gt;.r16|.png   optional: tile heightmaps (docs/engine/terrain.html; see Ground)
 &lt;MAP_ROOT&gt;/&lt;folder&gt;/.server/spawns/&lt;tx&gt;_&lt;tz&gt;.json   optional, server only: the NPCs a tile places (see NPC spawns)
 &lt;MAP_ROOT&gt;/&lt;folder&gt;/.server/nav/&lt;tx&gt;_&lt;tz&gt;.navtile   optional, server only: the tile's baked navmesh (see Navmesh)
@@ -66,6 +67,31 @@ joined only by transfers. Players and NPCs on different maps never see each othe
 <li><strong>Ownership:</strong> a transfer to a tile this process does not own is refused and logged. Every loaded tile is owned for
   now; the check is the seam for running maps in several processes later.</li>
 </ul>
+<h2 id="zones">Zones</h2>
+<p>A <em>zone</em> is a named set of a map's tiles: every declared tile is in exactly one zone, and a zone's tiles are
+contiguous (connected through shared edges; tiles touching only at a corner are not). Crossing from one zone to the next
+is seamless: same map, same context, no transfer. <code>zones.json</code> is optional:</p>
+<pre><code class="language-json">{ &quot;version&quot;: 1, &quot;zones&quot;: [
+  {&quot;id&quot;: &quot;eastvale&quot;, &quot;name&quot;: &quot;Eastvale&quot;, &quot;tiles&quot;: [[0, 0, 3, 7]], &quot;flags&quot;: {&quot;pvp&quot;: false}},
+  {&quot;id&quot;: &quot;westmarch&quot;, &quot;tiles&quot;: [[4, 0, 7, 7]]}
+]}
+</code></pre>
+<ul>
+<li><strong>Fields:</strong> <code>id</code> (required, unique; letters, digits, <code>_</code> and <code>-</code>, not starting with <code>-</code>, like a map
+  folder), <code>name</code> (defaults to <code>id</code>), <code>tiles</code> (required, inclusive rectangles <code>[x0, z0, x1, z1]</code> like
+  <code>map.json</code>'s; the zone is their union) and <code>flags</code> (optional object, passed through untouched). Unknown keys are kept
+  by the editor when it saves.</li>
+<li><strong>No file:</strong> the map is one implicit zone: <code>id</code> = the map's folder, <code>name</code> = the map's <code>name</code> (or the
+  folder), every declared tile.</li>
+<li><strong>Checks:</strong> <code>kast::map::parse_zones</code> (<code>map/zones.h</code> in <code>kast_map</code>) rejects, with the file and zone
+  (<code>maps/vale/zones.json: zone "a": not contiguous (tile 2_0 ...)</code>): bad JSON or fields, a duplicate or badly formed
+  id, a zone with no tiles, a zone tile not declared in <code>map.json</code>, two zones on one tile, a declared tile in no
+  zone, and a zone in pieces. <code>validate_zones</code> runs the same checks on an in-memory zone set and lists every
+  problem; <code>zone_at</code> finds the zone of a tile or a world x, z.</li>
+<li><strong>Server:</strong> the world server and <code>kast_mapbake</code> never read <code>zones.json</code> (a bad one does not stop the
+  server); the parser is in the shared library for the client and the editor.</li>
+</ul>
+
 <h2 id="map-contexts">Map contexts</h2>
 <p>Like AzerothCore's one <code>Map</code> object per map, each map in use runs in its own context, and one realm context runs what
 belongs to no map. Contexts are updated one after another on the tick thread, or at once on <code>MAP_THREADS</code> workers

@@ -16,6 +16,7 @@
 #include <bake.h>
 #include <heights.h>
 #include <navtile.h>
+#include <zones.h>
 
 #include <codec.h>
 
@@ -5434,11 +5435,102 @@ void checkAreaShapes() {
 }
 
 // Maps::load: areas.json per map, and the portals between maps.
+// --- zones (docs/services/world/maps.html#zones) ---
+
+void checkZones() {
+    std::string err;
+    // An L of tiles: row z=0 is x 0..3, plus (0,1).
+    const auto map = map::parse_manifest(nlohmann::json::parse(
+        R"({"version":1,"id":3,"name":"Vale","tiles":[[0,0,3,0],[0,1,0,1]],"spawn":{"pos":[10,0,10]}})"), err);
+    check(map.has_value(), "zones: map parses " + err);
+    if (!map) return;
+    const auto zones_of = [&](const std::string& text) {
+        err.clear();
+        return map::parse_zones(text, *map, "vale", err);
+    };
+
+    const auto z = zones_of(R"({"version":1,"zones":[
+        {"id":"east-1","name":"East","tiles":[[2,0,3,0]],"flags":{"pvp":true,"deep":{"a":[1]}},"music":"e.ogg"},
+        {"id":"west_0","tiles":[[0,0,1,0],[0,1,0,1],[0,0,0,0]]}]})");
+    check(z.has_value(), "zones: valid file parses: " + err);
+    if (z) {
+        check(!z->implicit && z->list.size() == 2 && z->list[0].name == "East" && z->list[1].name == "west_0",
+              "zones: name defaults to id");
+        check(z->list[0].flags == nlohmann::json{{"pvp", true}, {"deep", {{"a", {1}}}}} && z->list[1].flags.empty(),
+              "zones: flags passed through");
+        check(z->list[0].raw.value("music", "") == "e.ogg" && z->list[0].raw.begin().key() == "id",
+              "zones: unknown keys kept in raw, in file order");
+        check(map::zone_at(*z, map::TileKey{3, 0}) == 0 && map::zone_at(*z, map::TileKey{0, 1}) == 1 &&
+                  map::zone_at(*z, map::TileKey{1, 0}) == 1 && map::zone_at(*z, map::TileKey{1, 1}) == -1 &&
+                  map::zone_at(*z, map::TileKey{9, 9}) == -1,
+              "zones: zone_at by tile; off the map's tiles -1");
+        check(map::zone_at(*z, 600.f, 10.f) == 0 && map::zone_at(*z, 511.9f, 255.f) == 1 &&
+                  map::zone_at(*z, 10.f, 300.f) == 1 && map::zone_at(*z, -1.f, 10.f) == -1,
+              "zones: zone_at by world x, z");
+    }
+
+    const auto imp = map::implicit_zones(*map, "vale");
+    check(imp.implicit && imp.list.size() == 1 && imp.list[0].id == "vale" && imp.list[0].name == "Vale" &&
+              imp.byTile.size() == 5 && map::zone_at(imp, 300.f, 10.f) == 0 && map::zone_at(imp, 300.f, 300.f) == -1,
+          "zones: no file -> one implicit zone of every declared tile, named after the map");
+    const auto unnamed = map::parse_manifest(nlohmann::json::parse(
+        R"({"version":1,"id":4,"tiles":[[0,0,0,0]],"spawn":{"pos":[10,0,10]}})"), err);
+    check(unnamed && map::implicit_zones(*unnamed, "bare").list[0].name == "bare", "zones: implicit name falls back to the folder");
+
+    const std::string file = "maps/vale/zones.json: ";
+    const std::pair<const char*, std::string> bad[] = {
+        {"{nope", "not valid JSON"},
+        {R"([])", "must be a JSON object"},
+        {R"({"zones":[]})", "\"version\" must be 1"},
+        {R"({"version":1})", "\"zones\" must be a list"},
+        {R"({"version":1,"zones":[{"tiles":[[0,0,3,0],[0,1,0,1]]}]})", "zones[0]: \"id\" must be a string"},
+        {R"({"version":1,"zones":[{"id":"a","name":5,"tiles":[[0,0,3,0],[0,1,0,1]]}]})", "zone \"a\": \"name\" must be a string"},
+        {R"({"version":1,"zones":[{"id":"a","tiles":[[0,0,3]]}]})", "zone \"a\": tiles[0]: must be [x0, z0, x1, z1] integers"},
+        {R"({"version":1,"zones":[{"id":"a","tiles":[[3,0,0,0]]}]})", "zone \"a\": tiles[0]: x0 <= x1 and z0 <= z1 required"},
+        {R"({"version":1,"zones":[{"id":"a","tiles":[[0,0,3,0],[0,1,0,1]],"flags":[1]}]})", "zone \"a\": \"flags\" must be an object"},
+        {R"({"version":1,"zones":[{"id":"a b","tiles":[[0,0,3,0],[0,1,0,1]]}]})",
+         "zone \"a b\": id must be letters, digits, _ and - (not starting with -)"},
+        {R"({"version":1,"zones":[{"id":"-a","tiles":[[0,0,3,0],[0,1,0,1]]}]})", "zone \"-a\": id must be letters"},
+        {R"({"version":1,"zones":[{"id":"","tiles":[[0,0,3,0],[0,1,0,1]]}]})", "zone \"\": id must be letters"},
+        {R"({"version":1,"zones":[{"id":"a","tiles":[[0,0,1,0]]},{"id":"a","tiles":[[2,0,3,0],[0,1,0,1]]}]})", "zone \"a\": duplicate id"},
+        {R"({"version":1,"zones":[{"id":"a","tiles":[[0,0,3,1]]}]})", "zone \"a\": tile 1_1 is not declared in map.json"},
+        {R"({"version":1,"zones":[{"id":"a","tiles":[[0,0,0,2000000000]]}]})", "zone \"a\": tile 0_2 is not declared"},
+        {R"({"version":1,"zones":[{"id":"a","tiles":[[0,0,2,0],[0,1,0,1]]},{"id":"b","tiles":[[2,0,3,0]]}]})",
+         "zones \"a\" and \"b\" overlap at tile 2_0"},
+        {R"({"version":1,"zones":[{"id":"a","tiles":[[0,0,2,0],[0,1,0,1]]}]})", "tile 3_0 is in no zone"},
+        {R"({"version":1,"zones":[]})", "5 declared tiles are in no zone (first 0_0)"},
+        {R"({"version":1,"zones":[{"id":"a","tiles":[[0,0,3,0],[0,1,0,1]]},{"id":"e","tiles":[]}]})", "zone \"e\": no tiles"},
+        {R"({"version":1,"zones":[{"id":"a","tiles":[[0,0,0,0],[2,0,3,0]]},{"id":"b","tiles":[[1,0,1,0],[0,1,0,1]]}]})",
+         "zone \"a\": not contiguous (tile "},
+        // (1,0) and (0,1) touch only at a corner.
+        {R"({"version":1,"zones":[{"id":"a","tiles":[[0,0,0,0],[2,0,3,0]]},{"id":"b","tiles":[[1,0,1,0]]},{"id":"c","tiles":[[0,1,0,1]]}]})",
+         "zone \"a\": not contiguous"},
+    };
+    for (const auto& [text, want] : bad) {
+        const auto got = zones_of(text);
+        check(!got && err.starts_with(file) && err.find(want) != std::string::npos,
+              std::string("zones rejected: ") + text + " -> " + err + " (want " + want + ")");
+    }
+    // Every problem, on an in-memory set as the editor checks it: a = (0,0) + (2,0)-(3,0) is cut by d, and d = (1,0) +
+    // (0,1) touch only at a corner (diagonal-only is not contiguous).
+    map::Zones mem;
+    mem.list.push_back({"a", "a", {{0, 0, 0, 0}, {2, 0, 3, 0}}});
+    mem.list.push_back({"d", "d", {{1, 0, 1, 0}, {0, 1, 0, 1}}});
+    const auto problems = map::validate_zones(mem, *map);
+    check(problems.size() == 2 && problems[0].starts_with("zone \"a\": not contiguous") &&
+              problems[1].starts_with("zone \"d\": not contiguous"),
+          "zones: validate_zones lists every problem on an in-memory set: " + joined(problems));
+    mem.list = {{"a", "a", {{0, 0, 3, 0}}}, {"c", "c", {{0, 1, 0, 1}}}};
+    check(map::validate_zones(mem, *map).empty() && map::zone_at(mem, map::TileKey{0, 1}) == 1,
+          "zones: validate_zones on a valid in-memory set fills byTile");
+}
+
 void checkAreaLoading() {
     std::vector<std::string> errors;
     LuaRoot r;
     r.write("a/map.json", R"({"version":1,"id":1,"tiles":[[0,0,1,1]],"spawn":{"pos":[10,0,10]}})");
     r.write("b/map.json", R"({"version":1,"id":2,"tiles":[[0,0,0,0]],"spawn":{"pos":[10,0,10]}})");
+    r.write("a/zones.json", "{nope"); // the server never reads zones.json: no error for it
     r.write("b/areas.json", R"({"version":1,"areas":[{"id":"door","rect":[0,0,20,20],"portal":{"map":1,"pos":[300,0,300]}}]})");
     r.write("a/areas.json", R"({"version":1,"areas":[
         {"id":"ok","rect":[0,0,20,20],"portal":{"map":2,"pos":[100,0,100],"heading":1}},
@@ -7479,6 +7571,7 @@ int lua_checks(int& checks) {
     checkLayerOverflow();
     checkLuaFileCache();
     checkAreaShapes();
+    checkZones();
     checkAreaLoading();
     checkGround();
     checkNavmesh();

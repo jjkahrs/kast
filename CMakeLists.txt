@@ -169,7 +169,7 @@ target_compile_options(kast_protocol PRIVATE ${KAST_COMPILE_OPTIONS})
 
 # --- map: the world server's map manifests, tile math and heightmaps (services/world/map), compiled from its sources
 # unchanged; std + nlohmann_json + stb only ---
-add_library(kast_map STATIC services/world/map/map.cpp services/world/map/heights.cpp services/world/map/objects.cpp)
+add_library(kast_map STATIC services/world/map/map.cpp services/world/map/heights.cpp services/world/map/objects.cpp services/world/map/zones.cpp)
 target_include_directories(kast_map PUBLIC services/world/map)
 target_include_directories(kast_map SYSTEM PRIVATE "${Stb_INCLUDE_DIR}")
 target_compile_options(kast_map PRIVATE ${KAST_COMPILE_OPTIONS})
