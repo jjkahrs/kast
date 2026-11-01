@@ -73,6 +73,9 @@ public:
     // Selects the deepest element at (x, y) in preview pixels, as a click there does (<body> if none). False if no
     // preview is laid out yet.
     bool pick(float x, float y);
+    // Moves the preview's mouse over the center of the element with this id, as the real one over the preview does
+    // (tests: its tooltip shows). False if there is none or no preview is laid out yet.
+    bool hover(const std::string& id);
     std::string selectedId() const { return GuiDoc::attribute(GuiDoc::widgetElement(selected_), "id"); } // "" if none
     // Adds an element of kind as the GUI Hierarchy's Add menu does, into the selected Panel, else <body> (applied when the
     // preview next draws).
@@ -207,6 +210,7 @@ private:
     bool hierarchyCollapsed_ = false;
     ImVec2 hierarchyMin_{}, hierarchyMax_{}; // where the inset was drawn last (empty: nowhere)
     double previewRatio_ = 0.0; // the dp ratio last logged
+    bool previewMouse_ = false;  // the mouse was over the preview image last frame
 
     std::filesystem::path rml_; // empty = nothing open
     std::filesystem::path rcss_; // the linked sheet; empty if none

@@ -137,6 +137,25 @@ bool SceneGui::click(const std::string& id)
     return false;
 }
 
+bool SceneGui::hover(const std::string& id)
+{
+    for (auto it = entries_.rbegin(); it != entries_.rend(); ++it)
+        if (it->document && it->visible)
+            if (Rml::Element* element = it->document->GetElementById(id)) {
+                // The center in RmlUi units, as area pixels (onEvent maps them back).
+                const Rml::Vector2f center = element->GetAbsoluteOffset(Rml::BoxArea::Border) +
+                                             element->GetBox().GetSize(Rml::BoxArea::Border) * 0.5f;
+                const float units = contextFor(it->scaling).unitsPerPixel();
+                SDL_Event motion{};
+                motion.motion.type = SDL_EVENT_MOUSE_MOTION;
+                motion.motion.x = center.x / units;
+                motion.motion.y = center.y / units;
+                onEvent(motion);
+                return true;
+            }
+    return false;
+}
+
 std::optional<GuiValue> SceneGui::value(const std::string& id)
 {
     for (auto it = entries_.rbegin(); it != entries_.rend(); ++it)
@@ -209,10 +228,26 @@ void SceneGui::setVisible(const std::string& id, bool visible)
 
 void SceneGui::setAttribute(const std::string& id, const std::string& name, std::string_view value)
 {
+    if (name == kGuiTooltipAttribute)
+        written_[id].tooltip.reset(); // the later of setAttribute and setTooltip wins
     written_[id].attributes[name] = std::string(value);
     for (Entry& entry : entries_)
         if (entry.document)
             apply(entry, *entry.document, id, {.attributes = {{name, std::string(value)}}});
+}
+
+void SceneGui::setTooltip(const std::string& id, std::string_view text)
+{
+    if (!documentWith(id)) {
+        log::warn(std::format("kast.gui.setTooltip('{}'): no loaded GUI has it", id));
+        return;
+    }
+    Written& written = written_[id];
+    written.tooltip = std::string(text);
+    written.attributes.erase(kGuiTooltipAttribute);
+    for (Entry& entry : entries_)
+        if (entry.document)
+            apply(entry, *entry.document, id, {.tooltip = written.tooltip});
 }
 
 bool SceneGui::focus(const std::string& id)

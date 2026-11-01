@@ -34,13 +34,14 @@ inline bool guiVariableName(std::string_view name)
     return std::ranges::find(kReserved, lower) == std::end(kReserved);
 }
 
-// What kast.gui wrote to one element id (setText, setRichText, setVisible, setAttribute, setValue), kept and applied
-// again to documents that load later. text or rich: the later write.
+// What kast.gui wrote to one element id (setText, setRichText, setVisible, setAttribute, setTooltip, setValue), kept and
+// applied again to documents that load later. text or rich: the later write.
 struct GuiWrite {
     std::optional<std::string> text;
     std::optional<std::string> rich; // BBCode
     std::optional<bool> visible;
     std::map<std::string, std::string> attributes;
+    std::optional<std::string> tooltip; // data-tooltip's BBCode; "": the attribute removed
     std::optional<GuiValue> value;
 };
 
@@ -70,6 +71,9 @@ public:
     virtual void setVisible(const std::string& id, bool visible) = 0;
     // Sets an attribute of the element (src of an <img>, class, ...). Kept like setText.
     virtual void setAttribute(const std::string& id, const std::string& name, std::string_view value) = 0;
+    // Sets the element's tooltip (its data-tooltip, BBCode: gui_tooltip.h); "" removes it. A tooltip showing it changes
+    // at once. Kept like setText. An id no loaded document has logs a warning and does nothing.
+    virtual void setTooltip(const std::string& id, std::string_view text) = 0;
     // Gives keyboard focus to the element (a text field: typing goes there). False if no visible document has it.
     virtual bool focus(const std::string& id) = 0;
     // The id of the text field that has keyboard focus; nullopt if none does.

@@ -1623,6 +1623,9 @@ void LuaSystems::State::bindGuiApi()
         std::string value = text(L, "setAttribute", "value", arg(args, at + 2));
         e ? gui->writeEntity(*e, id, {.attributes = {{name, std::move(value)}}}) : gui->setAttribute(id, name, value);
     });
+    guiApi.set_function("setTooltip", [=, this](sol::this_state L, const sol::object& id, const sol::object& value) {
+        gui->setTooltip(text(L, "setTooltip", "id", id), text(L, "setTooltip", "text", value));
+    });
     guiApi.set_function("focus", [=, this](sol::this_state L, const sol::object& id) {
         return gui->focus(text(L, "focus", "id", id));
     });

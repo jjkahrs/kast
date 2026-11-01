@@ -1523,6 +1523,10 @@ public:
     {
         history.push_back(std::format("attribute {}.{}={}", id, name, value));
     }
+    void setTooltip(const std::string& id, std::string_view text) override
+    {
+        history.push_back(std::format("tooltip {}={}", id, text));
+    }
     bool focus(const std::string& id) override
     {
         history.push_back("focus " + id);
@@ -7540,6 +7544,333 @@ void checkGuiPrefabs()
     checkGuiPrefabExpansion();
     checkGuiDocPrefabs();
     checkGuiPrefabScene();
+}
+
+// Built-in tooltips (gui_tooltip.h): the placement math; then headless SceneGui on a copy of
+// tests/project/ui/tooltip_basic.rml with the tooltip's clock injected (no sleeping): ancestor resolution, the blank
+// rule, the 0.5 s delay and its restart, the default style and placement, BBCode with markup kept as text, each hide
+// trigger (mouse leave, press, drag, the source hidden or removed, its document hidden or unloaded), kast.gui.setTooltip
+// (live update, kept through a reload until reset, "" removes, an unknown id warns, the setAttribute route) and through
+// Lua; then a bare GuiContext at dp ratio 1 and 2 in both scaling modes: the offset, and the flip near the bottom-right
+// corner keeping the box inside the area.
+void checkGuiTooltips()
+{
+    using kast::GuiTooltipSpot;
+    using kast::guiTooltipSpot;
+    check(guiTooltipSpot(100, 100, 50, 20, 800, 600, 16) == GuiTooltipSpot{116, 116} &&
+              guiTooltipSpot(100, 100, 50, 20, 800, 600, 32) == GuiTooltipSpot{132, 132},
+          "tooltip spot: right of and below the mouse by the offset (16 at dp 1, 32 px at dp 2)");
+    check(guiTooltipSpot(790, 590, 50, 20, 800, 600, 16) == GuiTooltipSpot{724, 554} &&
+              guiTooltipSpot(790, 10, 50, 20, 800, 600, 16) == GuiTooltipSpot{724, 26} &&
+              guiTooltipSpot(10, 590, 50, 20, 800, 600, 16) == GuiTooltipSpot{26, 554},
+          "tooltip spot: flipped left / up of the cursor near the right / bottom edge, each axis on its own");
+    check(guiTooltipSpot(40, 300, 100, 20, 120, 600, 16) == GuiTooltipSpot{0, 316} &&
+              guiTooltipSpot(5, 5, 900, 700, 800, 600, 16) == GuiTooltipSpot{0, 0},
+          "tooltip spot: kept inside the area when neither side fits, at its top left if bigger than it");
+
+    bgfx::Init init;
+    init.type = bgfx::RendererType::Noop;
+    check(bgfx::init(init) && kast::gui::init(), "headless bgfx and RmlUi start (tooltips)");
+    {
+        const std::filesystem::path source = std::filesystem::path(KAST_SOURCE_DIR) / "tests/project";
+        const std::filesystem::path root = projectTestDir("kast_gui_tooltips", "tooltips");
+        std::filesystem::create_directories(root / "ui");
+        for (const char* file : {"ui/tooltip_basic.rml", "ui/tooltip_basic.rcss"})
+            std::filesystem::copy_file(source / file, root / file);
+        kast::Scene scene;
+        const entt::entity holder = scene.create("Tooltips");
+        scene.registry().emplace<kast::UIDocument>(holder, kast::UIDocument{"ui/tooltip_basic.rml", true});
+        kast::EventBus bus;
+        kast::SceneGui gui("tooltip_check");
+        gui.resize(1280, 720);
+        double now = 0.0;
+        kast::GuiTooltip& tip = gui.context().tooltip();
+        tip.clock = [&now] { return now; };
+        const uint64_t problems = kast::gui::problemCount();
+        gui.sync(scene, root, bus);
+        const auto frame = [&](double t) {
+            now = t;
+            gui.render(0, BGFX_INVALID_HANDLE);
+            bgfx::frame();
+        };
+        frame(0.0);
+        Rml::Context* rml = gui.context().context();
+        Rml::ElementDocument* doc = rml->GetNumDocuments() == 1 ? rml->GetDocument(0) : nullptr;
+        check(doc != nullptr && kast::gui::problemCount() == problems, "tooltip_basic.rml loads with no RmlUi warning");
+        if (!doc)
+            return;
+        const auto mouse = [&](Uint32 type, const char* id, float dx = 0.0f) { // an SDL mouse event at id's center
+            Rml::Element* element = doc->GetElementById(id);
+            const Rml::Vector2f at = element->GetAbsoluteOffset(Rml::BoxArea::Border) + element->GetBox().GetSize() * 0.5f;
+            SDL_Event event{};
+            event.type = type;
+            if (type == SDL_EVENT_MOUSE_MOTION) {
+                event.motion.x = at.x + dx;
+                event.motion.y = at.y;
+            } else {
+                event.button.button = SDL_BUTTON_LEFT;
+                event.button.down = type == SDL_EVENT_MOUSE_BUTTON_DOWN;
+                event.button.x = at.x + dx;
+                event.button.y = at.y;
+            }
+            gui.onEvent(event);
+        };
+        const auto sourceId = [&] { return tip.source() ? tip.source()->GetId() : std::string(); };
+        const auto bagDocument = [&]() -> Rml::ElementDocument* { // the loaded one (the tooltip's has no #bag)
+            for (int i = 0; i < rml->GetNumDocuments(); ++i)
+                if (rml->GetDocument(i)->GetElementById("bag"))
+                    return rml->GetDocument(i);
+            return nullptr;
+        };
+        // Shows #bag's tooltip from t (hovering #blank first, so it is a new hover).
+        const auto showBag = [&](double t) {
+            gui.hover("blank");
+            frame(t - 1.0);
+            gui.hover("bag");
+            frame(t);
+            frame(t + kast::kGuiTooltipDelay);
+            return tip.showing();
+        };
+
+        // The delay, the text, the default style and the placement.
+        gui.hover("bag");
+        frame(10.0);
+        frame(10.4);
+        const bool early = tip.showing();
+        frame(10.5);
+        check(!early && tip.showing() && tip.text() == "Open bag" && sourceId() == "bag",
+              "tooltip: nothing before 0.5 s of hover, then the element's data-tooltip");
+        Rml::Element* box = tip.box();
+        check(box && box->GetId() == "kast-tooltip" && box->IsVisible(true) &&
+                  box->GetProperty<Rml::Colourb>("background-color") == Rml::Colourb(0x31, 0x31, 0x31) &&
+                  box->GetProperty<Rml::Colourb>("border-top-color") == Rml::Colourb(0xff, 0xaa, 0x00) &&
+                  box->GetProperty<Rml::Colourb>("color") == Rml::Colourb(0xff, 0xff, 0xff),
+              "tooltip: the default style (#313131 card, #ffaa00 border, light text) on #kast-tooltip");
+        const float offset = kast::kGuiTooltipOffsetDp * static_cast<float>(gui.dpRatio());
+        const Rml::Vector2f boxAt = box ? box->GetAbsoluteOffset(Rml::BoxArea::Border) : Rml::Vector2f();
+        check(boxAt == Rml::Vector2f(100.0f + offset, 64.0f + offset) &&
+                  rml->GetDocument(rml->GetNumDocuments() - 1) == box->GetOwnerDocument(),
+              "tooltip: at the mouse plus the offset, in the context's topmost document");
+        check(gui.hovered() == "bag" && gui.mouseOver(), "tooltip: it takes no mouse (hovered stays the element under it)");
+
+        // Ancestor resolution, blank text, restarting the delay.
+        gui.hover("bag_icon");
+        frame(10.6);
+        check(tip.showing() && sourceId() == "bag", "tooltip: a child without data-tooltip shows its ancestor's, still showing");
+        gui.hover("blank");
+        frame(11.0);
+        const bool leftBag = !tip.showing();
+        frame(13.0);
+        check(leftBag && !tip.showing() && !tip.source(), "tooltip: a data-tooltip of only spaces shows nothing");
+        check(showBag(20.0), "tooltip: #bag again");
+        gui.hover("rich");
+        frame(21.0);
+        const bool restarted = !tip.showing();
+        frame(21.4);
+        const bool stillWaiting = !tip.showing();
+        frame(21.5);
+        check(restarted && stillWaiting && tip.showing() && sourceId() == "rich",
+              "tooltip: moving to an element with another tooltip restarts the delay");
+
+        // BBCode: rendered; markup in the text and a malformed tag stay text.
+        std::string shownText;
+        const auto collect = [&](auto&& self, Rml::Element& element) -> void {
+            if (const auto* part = rmlui_dynamic_cast<Rml::ElementText*>(&element))
+                shownText += part->GetText();
+            for (int i = 0; i < element.GetNumChildren(); ++i)
+                self(self, *element.GetChild(i));
+        };
+        collect(collect, *box);
+        Rml::ElementList bTags;
+        box->GetElementsByTagName(bTags, "b");
+        check(contains(box->GetInnerRML(), "font-weight: bold") && contains(box->GetInnerRML(), "#ffcc00") &&
+                  contains(shownText, "Iron Sword") && contains(shownText, "+5 attack"),
+              "tooltip: BBCode renders ([b], [color=#ffcc00])");
+        check(bTags.empty() && contains(shownText, "<b>not bold</b>") && contains(shownText, "[blink]x[/blink]"),
+              "tooltip: < and > make no element; a malformed tag shows as plain text");
+
+        // Hide triggers.
+        check(showBag(30.0), "tooltip: #bag shows (before mouse leave)");
+        SDL_Event leave{};
+        leave.type = SDL_EVENT_WINDOW_MOUSE_LEAVE;
+        gui.onEvent(leave);
+        frame(30.6);
+        check(!tip.showing(), "tooltip: hidden when the mouse leaves");
+        check(showBag(40.0), "tooltip: #bag shows (before a press)");
+        mouse(SDL_EVENT_MOUSE_BUTTON_DOWN, "bag");
+        frame(40.6);
+        const bool pressHid = !tip.showing();
+        mouse(SDL_EVENT_MOUSE_BUTTON_UP, "bag");
+        frame(42.0);
+        check(pressHid && !tip.showing(), "tooltip: hidden by a press, and not shown again over the same element after it");
+        check(showBag(50.0), "tooltip: shown again once the mouse went to another element and back");
+
+        struct DragCount final : Rml::EventListener {
+            int starts = 0;
+            void ProcessEvent(Rml::Event&) override { ++starts; }
+        } drags;
+        doc->AddEventListener(Rml::EventId::Dragstart, &drags);
+        mouse(SDL_EVENT_MOUSE_BUTTON_DOWN, "bag");
+        frame(50.6);
+        mouse(SDL_EVENT_MOUSE_MOTION, "bag", 30.0f);
+        frame(50.7);
+        mouse(SDL_EVENT_MOUSE_MOTION, "rich");
+        frame(52.0);
+        const bool hiddenDragging = !tip.showing();
+        mouse(SDL_EVENT_MOUSE_BUTTON_UP, "rich");
+        frame(52.1);
+        check(drags.starts == 1 && hiddenDragging, "tooltip: hidden when a drag of its element starts and while it runs");
+        gui.hover("blank"); // #blank drags a clone: over #rich during that drag, still no tooltip
+        frame(53.0);
+        mouse(SDL_EVENT_MOUSE_BUTTON_DOWN, "blank");
+        frame(53.1);
+        mouse(SDL_EVENT_MOUSE_MOTION, "blank", 30.0f);
+        frame(53.2);
+        mouse(SDL_EVENT_MOUSE_MOTION, "rich");
+        frame(53.3);
+        const bool overRich = gui.hovered() == "rich";
+        frame(55.0);
+        const bool noneDragging = !tip.showing();
+        mouse(SDL_EVENT_MOUSE_BUTTON_UP, "rich");
+        frame(55.1);
+        doc->RemoveEventListener(Rml::EventId::Dragstart, &drags);
+        check(drags.starts == 2 && overRich && noneDragging, "tooltip: none over another element while a drag runs");
+
+        check(showBag(60.0), "tooltip: #bag shows (before it is hidden)");
+        gui.setVisible("bag", false);
+        frame(60.6);
+        const bool hiddenWithIt = !tip.showing();
+        gui.setVisible("bag", true);
+        check(hiddenWithIt, "tooltip: hidden when its element is hidden");
+        check(showBag(70.0), "tooltip: #bag shows (before its document hides)");
+        scene.registry().get<kast::UIDocument>(holder).visible = false;
+        gui.sync(scene, root, bus);
+        frame(70.6);
+        const bool hiddenWithDocument = !tip.showing();
+        scene.registry().get<kast::UIDocument>(holder).visible = true;
+        gui.sync(scene, root, bus);
+        frame(71.0);
+        check(hiddenWithDocument, "tooltip: hidden when its document hides");
+
+        // kast.gui.setTooltip: live, kept through a reload until reset, "" removes, unknown ids warn.
+        check(showBag(80.0), "tooltip: #bag shows (before setTooltip)");
+        gui.setTooltip("bag", "From [b]Lua[/b]");
+        frame(80.6);
+        check(tip.showing() && tip.text() == "From [b]Lua[/b]" && contains(box->GetInnerRML(), "font-weight: bold"),
+              "setTooltip: the showing tooltip updates at once");
+        gui.setTooltip("nope", "x");
+        check(logged("kast.gui.setTooltip('nope'): no loaded GUI has it"), "setTooltip: an unknown id logs a warning");
+        rewrite(root / "ui/tooltip_basic.rml", readText(root / "ui/tooltip_basic.rml") + "\n");
+        gui.reloadChanged();
+        doc = bagDocument();
+        frame(81.0);
+        check(doc && doc->GetElementById("bag")->GetAttribute<Rml::String>("data-tooltip", "") == "From [b]Lua[/b]" &&
+                  !tip.showing(),
+              "setTooltip: kept through a document reload (the old document's tooltip hid with it)");
+        gui.setTooltip("bag", "");
+        check(doc && !doc->GetElementById("bag")->HasAttribute("data-tooltip"), "setTooltip: \"\" removes data-tooltip");
+        gui.hover("blank");
+        frame(90.0);
+        gui.hover("bag");
+        frame(90.1);
+        frame(92.0);
+        check(!tip.showing(), "setTooltip: no tooltip once removed");
+        gui.setAttribute("rich", "data-tooltip", "By attribute");
+        gui.hover("rich");
+        frame(93.0);
+        frame(93.5);
+        check(tip.showing() && tip.text() == "By attribute", "kast.gui.setAttribute(id, \"data-tooltip\", ...) works too");
+
+        // A removed source, an unloaded document.
+        gui.removeElement("rich");
+        frame(94.0);
+        check(!tip.showing() && !tip.source(), "tooltip: hidden when its element is removed");
+        gui.setTooltip("bag", "Back");
+        check(showBag(110.0), "tooltip: #bag shows (before its document unloads)");
+        gui.reset();
+        frame(110.6);
+        check(!tip.showing(), "tooltip: hidden when its document unloads");
+        gui.sync(scene, root, bus);
+        frame(111.0);
+        doc = bagDocument();
+        check(doc && doc->GetElementById("bag")->GetAttribute<Rml::String>("data-tooltip", "") == "Open bag" &&
+                  doc->GetElementById("rich")->GetAttribute<Rml::String>("data-tooltip", "") != "By attribute",
+              "setTooltip / setAttribute writes are forgotten by reset()");
+        check(kast::gui::problemCount() == problems, "no RmlUi warning through the tooltip checks");
+
+        // Through Lua (kast.gui.setTooltip, its argument checks).
+        writeFile(root / "scripts/tooltips.lua", R"(return { update = function()
+    kast.gui.setTooltip("bag", "[i]Lua[/i] tooltip")
+    local ok, err = pcall(function() kast.gui.setTooltip("bag", 3) end)
+    assert(not ok and string.find(err, "kast.gui.setTooltip: text must be a string, got 3", 1, true), tostring(err))
+end })");
+        scene.systems = {"scripts/tooltips.lua"};
+        kast::LuaSystems lua;
+        lua.setGui(&gui);
+        lua.start(scene, root, "", nullptr); // resets the GUI first
+        gui.sync(scene, root, bus);
+        frame(120.0);
+        lua.tick(0.1f);
+        checkOk(lua, 0, "kast.gui.setTooltip asserts in Lua pass");
+        doc = bagDocument();
+        check(doc && doc->GetElementById("bag")->GetAttribute<Rml::String>("data-tooltip", "") == "[i]Lua[/i] tooltip",
+              "kast.gui.setTooltip from Lua sets the element's tooltip");
+        lua.stop();
+        gui.release();
+    }
+
+    // Placement through a bare GuiContext at dp ratio 1 and 2, Dp and All scaling: the offset is 16 dp in pixels; over
+    // the bottom-right #corner the box flips left and up of the cursor and stays inside the area.
+    for (const float dp : {1.0f, 2.0f})
+        for (const kast::GuiScaling scaling : {kast::GuiScaling::Dp, kast::GuiScaling::All}) {
+            const std::string mode = std::format("dp {} {}", dp, scaling == kast::GuiScaling::All ? "All" : "Dp");
+            kast::GuiContext context("tooltip_scale");
+            context.resize(1280, 720, dp, scaling);
+            double now = 0.0;
+            context.tooltip().clock = [&now] { return now; };
+            Rml::Context* rml = context.context();
+            Rml::ElementDocument* doc = rml->LoadDocument(kast::gui::toRmlPath(
+                std::filesystem::path(KAST_SOURCE_DIR) / "tests/project/ui/tooltip_basic.rml"));
+            if (!doc) {
+                check(false, ("tooltip " + mode + ": the document loads").c_str());
+                continue;
+            }
+            kast::gui::addWidgetStyle(*doc);
+            doc->Show();
+            context.render(0, BGFX_INVALID_HANDLE);
+            const float units = context.unitsPerPixel();
+            const auto hover = [&](const char* id, double t) { // returns the mouse in units
+                Rml::Element* element = doc->GetElementById(id);
+                const Rml::Vector2f at = element->GetAbsoluteOffset(Rml::BoxArea::Border) + element->GetBox().GetSize() * 0.5f;
+                SDL_Event motion{};
+                motion.type = SDL_EVENT_MOUSE_MOTION;
+                motion.motion.x = at.x / units;
+                motion.motion.y = at.y / units;
+                context.onEvent(motion);
+                now = t;
+                context.render(0, BGFX_INVALID_HANDLE);
+                now = t + 1.0;
+                context.render(0, BGFX_INVALID_HANDLE);
+                bgfx::frame();
+                return Rml::Vector2f(std::floor(at.x), std::floor(at.y)); // onEvent's int mapping
+            };
+            Rml::Vector2f at = hover("bag", 0.0);
+            Rml::Element* box = context.tooltip().box();
+            const Rml::Vector2f offset = box ? (box->GetAbsoluteOffset(Rml::BoxArea::Border) - at) / units : Rml::Vector2f();
+            check(context.tooltip().showing() && std::abs(offset.x - 16.0f * dp) < 1.01f && std::abs(offset.y - 16.0f * dp) < 1.01f,
+                  ("tooltip " + mode + ": 16 dp right of and below the mouse").c_str());
+            at = hover("corner", 10.0);
+            const Rml::Vector2f min = box ? box->GetAbsoluteOffset(Rml::BoxArea::Border) : Rml::Vector2f();
+            const Rml::Vector2f max = box ? min + box->GetBox().GetSize(Rml::BoxArea::Border) : Rml::Vector2f();
+            const Rml::Vector2i area = rml->GetDimensions();
+            check(context.tooltip().showing() && context.tooltip().text() == "Corner tooltip: flips left and up" && min.x >= 0.0f &&
+                      min.y >= 0.0f && max.x <= static_cast<float>(area.x) && max.y <= static_cast<float>(area.y) &&
+                      max.x <= at.x && max.y <= at.y,
+                  ("tooltip " + mode + ": flipped left and up near the bottom-right corner, inside the area").c_str());
+            context.release();
+        }
+    kast::gui::shutdown();
+    bgfx::shutdown();
 }
 
 // The list math (gui_lists.h, no RmlUi): the virtual window for a scroll position, scrolling a row into view, the keys,
@@ -17830,6 +18161,7 @@ int main(int argc, char** argv)
         checkGuiRichTextScene();
         checkGuiDocRichText();
         checkGuiPrefabs();
+        checkGuiTooltips();
         removeTree(testRoot());
         kast::log::info(g_failures == 0 ? "All GUI checks passed" : std::format("{} GUI check(s) failed", g_failures));
         return g_failures == 0 ? 0 : 1;
@@ -17851,6 +18183,12 @@ int main(int argc, char** argv)
         checkGuiPrefabs();
         removeTree(testRoot());
         kast::log::info(g_failures == 0 ? "All GUI prefab checks passed" : std::format("{} GUI prefab check(s) failed", g_failures));
+        return g_failures == 0 ? 0 : 1;
+    }
+    if (argc == 2 && std::string_view(argv[1]) == "--guitooltips") { // only the game GUI tooltip checks
+        checkGuiTooltips();
+        removeTree(testRoot());
+        kast::log::info(g_failures == 0 ? "All GUI tooltip checks passed" : std::format("{} GUI tooltip check(s) failed", g_failures));
         return g_failures == 0 ? 0 : 1;
     }
     if (argc == 2 && std::string_view(argv[1]) == "--richtext") { // only the rich text checks
@@ -18032,6 +18370,7 @@ int main(int argc, char** argv)
     checkGuiRichText();
     checkGuiRichTextScene();
     checkGuiPrefabs();
+    checkGuiTooltips();
     checkWorldUIComponent();
     checkWorldToScreen();
     checkWorldGuiScene();

@@ -1,0 +1,52 @@
+/* The layout of tooltip_basic.rcss, plus a project rule on #kast-tooltip that overrides the default tooltip style. */
+body {
+    width: 100%;
+    height: 100%;
+    font-family: Roboto;
+    font-size: 16px;
+    color: #f0f0f0;
+}
+
+div {
+    display: block;
+}
+
+.slot {
+    position: absolute;
+    width: 120px;
+    height: 48px;
+    background-color: #205080;
+}
+
+#bag {
+    left: 40px;
+    top: 40px;
+}
+
+#bag_icon {
+    margin: 8px;
+    width: 32px;
+    height: 32px;
+    background-color: #80c040;
+}
+
+#rich {
+    left: 200px;
+    top: 40px;
+}
+
+#blank {
+    left: 360px;
+    top: 40px;
+}
+
+#corner {
+    right: 0px;
+    bottom: 0px;
+}
+
+#kast-tooltip {
+    background-color: #2040c0;
+    border-color: #40ff40;
+    color: #ffff00;
+}

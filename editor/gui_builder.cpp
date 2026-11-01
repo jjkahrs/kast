@@ -13,6 +13,7 @@
 #include <RmlUi/Core/Element.h>
 #include <RmlUi/Core/ElementDocument.h>
 #include <RmlUi/Core/Factory.h>
+#include <SDL3/SDL.h>
 
 #include <imgui.h>
 #include <imgui_stdlib.h>
@@ -499,6 +500,21 @@ bool GuiBuilder::pick(float x, float y)
     selected_ = index >= 0 && static_cast<size_t>(index) < previewNodes_.size()
                     ? GuiDoc::widgetRoot(previewNodes_[static_cast<size_t>(index)])
                     : doc_.body();
+    return true;
+}
+
+bool GuiBuilder::hover(const std::string& id)
+{
+    Rml::Element* element = previewDoc_ ? previewDoc_->GetElementById(id) : nullptr;
+    if (!element)
+        return false;
+    const Rml::Vector2f center =
+        element->GetAbsoluteOffset(Rml::BoxArea::Border) + element->GetBox().GetSize(Rml::BoxArea::Border) * 0.5f;
+    SDL_Event motion{};
+    motion.motion.type = SDL_EVENT_MOUSE_MOTION;
+    motion.motion.x = center.x;
+    motion.motion.y = center.y;
+    preview_.onEvent(motion);
     return true;
 }
 
@@ -1381,6 +1397,22 @@ void GuiBuilder::drawPreview()
             ImGui::SetCursorScreenPos(min);
             if (target_.valid())
                 ImGui::Image(static_cast<ImTextureID>(target_.texture().idx), size);
+            // The mouse over the image hovers the preview's elements (:hover, tooltips: gui_tooltip.h); a press there
+            // hides a tooltip as in Play but never reaches the documents (it picks, below).
+            const bool mouseOver = !insetMouse && ImGui::IsItemHovered();
+            if (mouseOver || previewMouse_) {
+                SDL_Event event{};
+                event.type = mouseOver ? SDL_EVENT_MOUSE_MOTION : SDL_EVENT_WINDOW_MOUSE_LEAVE;
+                event.motion.x = io.MousePos.x;
+                event.motion.y = io.MousePos.y;
+                preview_.onEvent(event, min.x, min.y, 1.0f / scale);
+            }
+            previewMouse_ = mouseOver;
+            for (int button = 0; button < ImGuiMouseButton_COUNT; ++button)
+                if (mouseOver && ImGui::IsMouseClicked(button))
+                    preview_.tooltip().press();
+            if (!ImGui::IsAnyMouseDown())
+                preview_.tooltip().release();
             if (!insetMouse && ImGui::IsItemClicked()) {
                 const ImVec2 mouse = ImGui::GetMousePos();
                 pick((mouse.x - min.x) / scale, (mouse.y - min.y) / scale);

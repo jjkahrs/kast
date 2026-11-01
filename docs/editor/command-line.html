@@ -476,6 +476,10 @@ unsaved-changes prompt if that scene has unsaved changes), for screenshots.</td>
 <td><code>--gui-click &lt;id&gt;</code></td>
 <td>With <code>--play</code>: click the game GUI element with this <code>id</code> (topmost visible document holding one) after 10 frames, as the mouse does; logs an error if there is none.</td>
 </tr>
+<tr>
+<td><code>--gui-hover &lt;id&gt;</code></td>
+<td>With <code>--play</code> (after 10 frames) or <code>--open-gui</code> (in the GUI Preview, after 16): put a synthetic mouse over the center of the GUI element with this <code>id</code> (never the real cursor), so its <a href="../engine/game-gui.html#tooltips">tooltip</a> shows 0.5 s later; logs <code>--gui-hover &lt;id&gt;</code>, or an error if there is none.</td>
+</tr>
 </tbody>
 </table>
 <p>Without <code>--project</code>, <code>--scene</code>, <code>--save-scene</code> or <code>--build</code>, <code>kast_editor</code> runs the Project Manager instead of the
