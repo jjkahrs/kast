@@ -28,7 +28,8 @@ function(kast_mapedit_cli_test name)
             -P "${mapedit_test}")
 endfunction()
 
-foreach(case "meadow;samples/starter-mmo" "cavern;samples/starter-mmo" "hills;tests/project" "crypt;tests/project")
+foreach(case "meadow;samples/starter-mmo" "cavern;samples/starter-mmo" "hills;tests/project" "crypt;tests/project"
+             "tilegrid;tests/project")
   list(GET case 0 map)
   list(GET case 1 project)
   kast_mapedit_cli_test(roundtrip_${map} "-DPROJECT=${CMAKE_CURRENT_SOURCE_DIR}/${project}" -DMODE=roundtrip -DMAP=${map})
@@ -116,6 +117,41 @@ add_test(NAME editor_mapedit_remove_tile_prompt
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/map_remove_tile_prompt.png"
           "-DEXTRA_ARGS=--scene ${KAST_SHADOW_PROJECT}/terrain.scene --map-section Tiles --grid-mode tiles --prompt-remove-tile 1,1 --focus 384,384,150 --size 1600x1000"
           -DFOCUS_PANEL=Map "-DFORBID_OUTPUT=\\[error\\]" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
+
+# Zones (zone_edit.h) on a copy of tests/project's maps/tilegrid (west x 0..1 with zones/west.scene, east x 2). A new
+# zone painted over the top row, flags and names set, west renamed: its scene file follows on save, unknown keys stay.
+kast_mapedit_cli_test(zones_edit "-DPROJECT=${KAST_TEST_PROJECT}" -DMODE=zones -DMAP=tilegrid
+  "-DARGS=--add-zone|north,Northreach|--paint-zone|north,0,2,2,2|--zone-flags|north,{\"pvp\":true}|--zone-name|east,Eastmarch|--rename-zone|west,vale"
+  "-DEXPECT_FILES=zones/vale.scene|zones/vale.scene.meta" "-DEXPECT_GONE=zones/west.scene|zones/west.scene.meta"
+  "-DEXPECT_JSON=\"id\": \"north\"|\"name\": \"Northreach\"|\"pvp\": true|\"name\": \"Eastmarch\"|\"id\": \"vale\"|\"note\": \"unknown keys are kept\""
+  "-DFORBID_JSON=\"id\": \"west\""
+  "-DEXPECT_LOG=Map: added zone north.*Map: painted 3 tile\\(s\\) into zone north.*Map: renamed zone west to vale.*Map: zone vale renamed from west: its scene is maps/tilegrid/zones/vale.scene")
+# A deleted zone's tiles go to its edge neighbour (east -> west); a new tile joins its first edge neighbour's zone (3_1:
+# -x is 2_1, east's; joining west would split it and block the save).
+kast_mapedit_cli_test(zones_delete "-DPROJECT=${KAST_TEST_PROJECT}" -DMODE=zones -DMAP=tilegrid "-DARGS=--delete-zone|east"
+  "-DEXPECT_FILES=zones/west.scene" "-DEXPECT_JSON=\"id\": \"west\"" "-DFORBID_JSON=\"id\": \"east\""
+  "-DEXPECT_LOG=Map: deleted zone east \\(its tiles went to zone west\\)")
+kast_mapedit_cli_test(zones_add_tile "-DPROJECT=${KAST_TEST_PROJECT}" -DMODE=zones -DMAP=tilegrid "-DARGS=--add-tile|3,1"
+  "-DEXPECT_JSON=\"id\": \"east\"")
+# Zone edits undone one step each: the save writes the same bytes.
+kast_mapedit_cli_test(zones_undo "-DPROJECT=${KAST_TEST_PROJECT}" -DMODE=roundtrip -DMAP=tilegrid
+  "-DARGS=--add-zone|x|--paint-zone|x,0,0|--zone-flags|east,{}|--rename-zone|east,far|--delete-zone|west|--undo|--undo|--undo|--undo|--undo")
+# Invalid zones block the save, nothing written: a paint that splits west, an empty zone, removed tiles that split west,
+# every zone deleted (tiles in no zone).
+foreach(case "zone_split|--paint-zone|east,0,1" "zone_empty|--add-zone|empty"
+             "zone_remove_tile_split|--remove-tile|0,1|--remove-tile|1,1" "zone_unassigned|--delete-zone|east|--delete-zone|west")
+  string(FIND "${case}" "|" bar)
+  string(SUBSTRING "${case}" 0 ${bar} name)
+  math(EXPR bar "${bar} + 1")
+  string(SUBSTRING "${case}" ${bar} -1 args)
+  kast_mapedit_cli_test(blocked_${name} "-DPROJECT=${KAST_TEST_PROJECT}" -DMODE=blocked -DMAP=tilegrid "-DARGS=${args}")
+endforeach()
+# A zone flag naming an unknown zone fails the run with the form.
+add_test(NAME mapedit_cli_zone_unknown
+  COMMAND kast_editor --project "${KAST_TEST_PROJECT}" --projects-file "${KAST_MAPEDIT_OUT}/zone_unknown_projects.json"
+          --settings-file "${KAST_MAPEDIT_OUT}/zone_unknown_settings.json" --map tilegrid --paint-zone nope,0,0 --headless)
+set_tests_properties(mapedit_cli_zone_unknown PROPERTIES
+  PASS_REGULAR_EXPRESSION "--paint-zone nope,0,0: expected id,tx,tz\\[,tx2,tz2\\] \\(an existing zone\\)")
 
 # --new-map's size cap (mapedit::kMaxMapTiles, read from map_io.h): the cap a side opens, one more is refused with the
 # range in the Console; --add-tile past the cap is refused too. In memory only (--headless, no save).

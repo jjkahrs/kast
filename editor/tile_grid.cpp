@@ -24,7 +24,7 @@ void TileGrid::fit(const std::string& key, const km::TileRect& bounds, int cols,
     view_ = mapedit::pan_grid(view_, {0, 0}, bounds_, size_); // a tile removed at the edge: no empty cells past it
 }
 
-TileGrid::Input TileGrid::area(const char* id)
+TileGrid::Input TileGrid::area(const char* id, bool paint)
 {
     origin_ = ImGui::GetCursorScreenPos();
     const bool pressed = ImGui::InvisibleButton(id, {size_[0], size_[1]},
@@ -33,7 +33,7 @@ TileGrid::Input TileGrid::area(const char* id)
     const bool hovered = ImGui::IsItemHovered();
     if (ImGui::IsItemActive()) {
         for (const ImGuiMouseButton b : {ImGuiMouseButton_Left, ImGuiMouseButton_Right, ImGuiMouseButton_Middle})
-            dragged_ = dragged_ || ImGui::IsMouseDragging(b);
+            dragged_ = dragged_ || (ImGui::IsMouseDragging(b) && !(paint && b == ImGuiMouseButton_Left));
         if (dragged_)
             view_ = mapedit::pan_grid(view_, {io.MouseDelta.x, io.MouseDelta.y}, bounds_, size_);
     }
@@ -51,6 +51,7 @@ TileGrid::Input TileGrid::area(const char* id)
             t && t->x >= bounds_.x0 && t->x <= bounds_.x1 && t->z >= bounds_.z0 && t->z <= bounds_.z1)
             input.hover = t;
     input.clicked = pressed && !dragged_ && ImGui::IsMouseReleased(ImGuiMouseButton_Left) && input.hover;
+    input.painting = paint && ImGui::IsItemActive() && ImGui::IsMouseDown(ImGuiMouseButton_Left) && !dragged_;
     if (!ImGui::IsItemActive())
         dragged_ = false;
     return input;

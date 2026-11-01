@@ -32,6 +32,11 @@ Zones implicit_zones(const MapInfo& map, const std::string& folder);
 // tile in no zone, a zone in pieces (4-neighbour). Empty: valid. The editor runs it on its in-memory zones.
 std::vector<std::string> validate_zones(Zones& zones, const MapInfo& map);
 
+// The zones of a zones.json document as written, not validated (validate_zones): nullopt with err set to the first
+// structural problem (not an object, "version" not 1, a zone's bad field), unprefixed. The editor reads its in-memory
+// zones with it.
+std::optional<Zones> read_zones(const nlohmann::ordered_json& j, std::string& err);
+
 // Parses and validates maps/<folder>/zones.json. nullopt with err set to the first problem, prefixed with the file
 // ("maps/meadow/zones.json: zone \"a\": no tiles").
 std::optional<Zones> parse_zones(std::string_view text, const MapInfo& map, const std::string& folder, std::string& err);

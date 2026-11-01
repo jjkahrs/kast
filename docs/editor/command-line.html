@@ -128,7 +128,7 @@
 </tr>
 <tr>
 <td><code>--map-section &lt;Name[,Name...]&gt;</code></td>
-<td>Expand these sections of the Map tab (<code>Map</code>, <code>Tiles</code>, <code>Terrain</code>, <code>Areas</code>, <code>Spawns</code>, <code>Objects</code>, <code>Bake</code>, <code>Problems</code>; e.g. <code>Map,Problems</code>) and collapse the others after the first 10 frames, for screenshots; pair it with <code>--focus-panel Map</code> to bring the tab to the front.</td>
+<td>Expand these sections of the Map tab (<code>Map</code>, <code>Tiles</code>, <code>Zones</code>, <code>Terrain</code>, <code>Areas</code>, <code>Spawns</code>, <code>Objects</code>, <code>Bake</code>, <code>Problems</code>; e.g. <code>Map,Problems</code>) and collapse the others after the first 10 frames, for screenshots; pair it with <code>--focus-panel Map</code> to bring the tab to the front.</td>
 </tr>
 <tr id="map-click">
 <td><code>--map-click tx,tz</code> (repeatable)</td>
@@ -142,18 +142,24 @@ Tile scenes mode, <code>Map: tile grid view ...</code> (the tab scrolled to its 
 big maps, e.g. <code>--grid-view 60,60,16 --map-click 60,60</code>.</td>
 </tr>
 <tr id="grid-mode">
-<td><code>--grid-mode scenes|tiles</code></td>
+<td><code>--grid-mode scenes|tiles|zones</code></td>
 <td>After 10 frames, set what a click on the <a href="map-builder.html#tiles">Map tab's tile grid</a> does: <code>scenes</code> (Tile scenes,
-the default: open, close or create a tile's scene) or <code>tiles</code> (Add / remove tiles). <code>--map-click</code> always clicks in Tile
-scenes mode.</td>
+the default: open, close or create a tile's scene), <code>tiles</code> (Add / remove tiles) or <code>zones</code> (Paint zone: shows the zone
+overlay). <code>--map-click</code> always clicks in Tile scenes mode.</td>
+</tr>
+<tr id="zone-scene-click">
+<td><code>--zone-scene-click id</code> (repeatable)</td>
+<td>Press that zone's scene button in the <a href="map-builder.html#zone-scenes">Map tab's Zones section</a>: open, close or create
+<code>maps/&lt;map&gt;/zones/&lt;id&gt;.scene</code> (the file of the zone's id at the last save if it was renamed since). One a frame, after the
+<code>--map-click</code>s; an unknown zone logs an error. Nothing during Play or in prefab edit mode.</td>
 </tr>
 <tr>
 <td><code>--map-tool &lt;Tool&gt;</code></td>
 <td>Make that Map tab tool active after the first 10 frames, as its button does: <code>Raise</code>, <code>Lower</code>, <code>Flatten</code>, <code>SetSpawn</code> (Place on terrain), <code>AreaRect</code>, <code>AreaPolygon</code>, <code>PlaceSpawn</code>, <code>PathPoints</code>, <code>PlaceObject</code> or <code>Scatter</code>. Pair it with <code>--sim-mouse</code> (without <code>--play</code> it acts on the Scene view) for tests and screenshots of the tools: a click or drag uses the tool, a hover shows the brush ring.</td>
 </tr>
 <tr>
-<td><code>--map-select &lt;id&gt;|object:tx,tz,i</code></td>
-<td>Select that map area or spawn (by id), or the map object at index <code>i</code> of tile <code>tx, tz</code>'s objects file, in the Map tab after the first 10 frames, for screenshots.</td>
+<td><code>--map-select &lt;id&gt;|object:tx,tz,i|zone:id</code></td>
+<td>Select that map area or spawn (by id), the map object at index <code>i</code> of tile <code>tx, tz</code>'s objects file, or that zone, in the Map tab after the first 10 frames, for screenshots.</td>
 </tr>
 <tr>
 <td><code>--bake</code></td>
@@ -490,7 +496,7 @@ unsaved-changes prompt if that scene has unsaved changes), for screenshots.</td>
 </table>
 <p>Without <code>--project</code>, <code>--scene</code>, <code>--save-scene</code> or <code>--build</code>, <code>kast_editor</code> runs the Project Manager instead of the
 editor. Editor-only flags (<code>--select</code>, <code>--play</code>, <code>--select-network-entity</code>, <code>--add-component-popup</code>, <code>--new-component[-prompt]</code>,
-<code>--new-state-machine-prompt</code>, <code>--open-menu</code>, <code>--open-build-settings</code>, <code>--open-online-settings</code>, <code>--focus-panel</code>, <code>--map-click</code>, <code>--grid-view</code>, <code>--grid-mode</code>, <code>--map-section</code>, <code>--map-tool</code>, <code>--assets-*</code>, <code>--open-gui</code>,
+<code>--new-state-machine-prompt</code>, <code>--open-menu</code>, <code>--open-build-settings</code>, <code>--open-online-settings</code>, <code>--focus-panel</code>, <code>--map-click</code>, <code>--zone-scene-click</code>, <code>--grid-view</code>, <code>--grid-mode</code>, <code>--map-section</code>, <code>--map-tool</code>, <code>--assets-*</code>, <code>--open-gui</code>,
 <code>--gui-*</code>, <code>--open-graph</code>, <code>--graph-*</code>, <code>--map-select</code>, <code>--bake</code>, <code>--mapbake</code>, <code>--file-save</code>, <code>--bake-probes</code>, the <a href="#map">map edits</a>) then are invalid arguments, as are Project Manager flags (<code>--launcher</code>, <code>--new-project</code>,
 <code>--launcher-open</code>, <code>--</code>) together with the editor's.</p>
 <h2 id="shader-graph-flags">Shader Graph</h2>
@@ -738,6 +744,28 @@ the terrain), headings radians, tiles <code>tx,tz</code>. The full list is also 
 <tr>
 <td><code>--erase-visuals x,z,radius</code></td>
 <td>Remove every visual in the circle.</td>
+</tr>
+<tr><td colspan="2"><strong>Zones</strong> (<a href="map-builder.html#zones">Map Builder, zones</a>; one undo step each; the first makes a map's
+implicit zone explicit, named by the map's folder)</td></tr>
+<tr>
+<td><code>--add-zone id[,name]</code></td>
+<td>Append a zone with no tiles (a new valid id).</td>
+</tr>
+<tr>
+<td><code>--paint-zone id,tx,tz[,tx2,tz2]</code></td>
+<td>Move the declared tiles of that tile (or rect) into the zone; logs <code>Map: painted N tile(s) into zone id</code>.</td>
+</tr>
+<tr>
+<td><code>--delete-zone id</code></td>
+<td>Delete a zone; its tiles go to an edge neighbour's zone (<a href="map-builder.html#zone-neighbour">order</a>), else to none.</td>
+</tr>
+<tr>
+<td><code>--rename-zone old,new</code></td>
+<td>Rename a zone; its scene file is renamed on save.</td>
+</tr>
+<tr>
+<td><code>--zone-name id,name</code>, <code>--zone-flags id,{json}</code></td>
+<td>Set a zone's name, or its flags to that JSON object (the rest of the value, commas and all).</td>
 </tr>
 <tr><td colspan="2"><strong>Undo, checks and saving</strong></td></tr>
 <tr>

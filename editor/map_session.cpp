@@ -5,6 +5,7 @@
 #include <files.h>
 #include <log.h>
 #include <prefab.h> // kPrefabExtension
+#include <zone_scenes.h>
 
 #include <algorithm>
 #include <format>
@@ -82,6 +83,8 @@ bool MapSession::save()
 {
     if (!doc_)
         return false;
+    renamed_.clear();
+    const std::map<std::string, std::string> renames = doc_->state.zoneRenames;
     problems_ = mapedit::save_map(project_, *doc_, recycle_);
     if (!problems_.empty()) {
         kast::log::error(std::format("Map: save of maps/{} blocked: {} problem(s), nothing written (Map tab > Problems)",
@@ -91,6 +94,10 @@ bool MapSession::save()
         return false;
     }
     kast::log::info("Map: saved maps/" + doc_->folder);
+    for (const auto& [zone, onDisk] : renames) {
+        renamed_.emplace_back(kast::zoneScenePath(doc_->folder, onDisk), kast::zoneScenePath(doc_->folder, zone));
+        kast::log::info(std::format("Map: zone {} renamed from {}: its scene is {}", zone, onDisk, renamed_.back().second));
+    }
     scan(project_.root); // a new map, or a generated terrain material, is on disk now
     return true;
 }

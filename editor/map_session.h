@@ -52,6 +52,8 @@ public:
     // mapedit::save_map on the open map (validation first: any problem writes nothing). Logs the result and each problem
     // to the Console. False with no map or when blocked.
     bool save();
+    // The last successful save's renamed zone scenes, project-relative: (old path, new path); the open ones follow.
+    const std::vector<std::pair<std::string, std::string>>& renamedZoneScenes() const { return renamed_; }
     // Whether save sends the files it deletes (a removed tile's) to the Recycle Bin (default) or deletes them (--no-recycle).
     void setRecycle(bool recycle) { recycle_ = recycle; }
     // Scans root's maps, materials, prefabs and NPCs now, as update does when the project changes (map_cli, before the
@@ -86,5 +88,6 @@ private:
     entt::entity terrain_ = entt::null;
     std::string error_;
     std::vector<mapedit::MapError> problems_;
+    std::vector<std::pair<std::string, std::string>> renamed_;
     bool recycle_ = true;
 };

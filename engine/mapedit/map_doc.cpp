@@ -9,7 +9,8 @@ namespace mapedit {
 
 bool same(const MapState& a, const MapState& b) {
     return a.manifest == b.manifest && a.areas == b.areas && a.spawns == b.spawns && a.objects == b.objects &&
-           a.interactables == b.interactables && a.heights == b.heights;
+           a.interactables == b.interactables && a.heights == b.heights && a.zones == b.zones &&
+           a.zoneRenames == b.zoneRenames;
 }
 
 std::string tile_name(TileKey t) { return std::to_string(t.x) + "_" + std::to_string(t.z); }
@@ -26,7 +27,8 @@ using TileChanges = TileMap<std::optional<T>>;
 
 // The parts of a MapState one edit changed, as they were before it or after it.
 struct MapPart {
-    std::optional<Json> manifest, areas;
+    std::optional<Json> manifest, areas, zones;
+    std::optional<std::map<std::string, std::string>> zoneRenames;
     TileChanges<Json> spawns, objects, interactables;
     TileChanges<HeightsPtr> heights;
 };
@@ -59,6 +61,8 @@ void apply(const TileChanges<T>& changes, TileMap<T>& tiles) {
 void apply(const MapPart& part, MapState& state) {
     if (part.manifest) state.manifest = *part.manifest;
     if (part.areas) state.areas = *part.areas;
+    if (part.zones) state.zones = *part.zones;
+    if (part.zoneRenames) state.zoneRenames = *part.zoneRenames;
     apply(part.spawns, state.spawns);
     apply(part.objects, state.objects);
     apply(part.interactables, state.interactables);
@@ -69,6 +73,7 @@ void apply(const MapPart& part, MapState& state) {
 std::string step_name(const MapPart& changed) {
     if (!changed.heights.empty()) return "Edit Terrain";
     if (changed.manifest) return "Edit Map";
+    if (changed.zones || changed.zoneRenames) return "Edit Zones";
     if (!changed.objects.empty() || !changed.interactables.empty()) return "Edit Objects";
     if (!changed.spawns.empty()) return "Edit Spawns";
     return "Edit Areas";
@@ -92,11 +97,19 @@ void MapDoc::commit() {
         was.areas = before.areas;
         now.areas = state.areas;
     }
+    if (before.zones != state.zones) {
+        was.zones = before.zones;
+        now.zones = state.zones;
+    }
+    if (before.zoneRenames != state.zoneRenames) {
+        was.zoneRenames = before.zoneRenames;
+        now.zoneRenames = state.zoneRenames;
+    }
     diff(before.spawns, state.spawns, was.spawns, now.spawns);
     diff(before.objects, state.objects, was.objects, now.objects);
     diff(before.interactables, state.interactables, was.interactables, now.interactables);
     diff(before.heights, state.heights, was.heights, now.heights);
-    if (!now.manifest && !now.areas && now.spawns.empty() && now.objects.empty() && now.interactables.empty() &&
+    if (!now.manifest && !now.areas && !now.zones && !now.zoneRenames && now.spawns.empty() && now.objects.empty() && now.interactables.empty() &&
         now.heights.empty())
         return; // changed nothing
     history_.stack.push({step_name(now), [this, parts] { apply(parts->first, state); },

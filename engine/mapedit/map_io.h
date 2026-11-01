@@ -29,7 +29,7 @@ Project scan_project(const std::filesystem::path& root);
 // The lowest map id no project map uses.
 uint16_t next_map_id(const Project& project);
 
-// Reads maps/<folder>: map.json, areas.json, every declared tile's heights (.r16 first, as the loaders) and every
+// Reads maps/<folder>: map.json, areas.json, zones.json, every declared tile's heights (.r16 first, as the loaders) and every
 // .server/spawns/, objects/ and .server/interactables/ <tx>_<tz>.json. nullopt with err set if a file is unreadable or
 // the manifest is invalid.
 std::optional<MapDoc> load_map(const Project& project, const std::string& folder, std::string& err);
@@ -56,7 +56,8 @@ std::vector<std::string> tile_files(const Project& project, const std::string& f
 // deletes. Project-relative.
 std::vector<std::string> removed_tile_files(const Project& project, const MapDoc& doc);
 
-// Validates, then writes what changed since the last save (heights as .r16; an edited tile's old .png is deleted) and
+// Validates, then writes what changed since the last save (heights as .r16; an edited tile's old .png is deleted; a
+// renamed zone's zones/<id>.scene and its .meta renamed) and
 // deletes removed_tile_files and the spawn, objects and interactables files of tiles that no longer have one. Any validation error: writes nothing and returns them. recycle: deleted files go to the
 // Recycle Bin (tests delete for good, to keep the bin clean). Rescans project on success.
 std::vector<MapError> save_map(Project& project, MapDoc& doc, bool recycle = true);

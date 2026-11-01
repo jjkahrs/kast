@@ -1,6 +1,7 @@
 #include "map_io.h"
 
 #include "terrain_edit.h"
+#include "zone_edit.h"
 
 #include <asset_ref.h>
 #include <files.h> // recycleFile
@@ -141,6 +142,8 @@ std::optional<MapDoc> load_map(const Project& project, const std::string& folder
 
     if (auto areas = read_json(dir / "areas.json", exists, err)) doc.state.areas = std::move(*areas);
     else if (exists) return fail("areas.json", err);
+    if (auto zones = read_json(dir / "zones.json", exists, err)) doc.state.zones = std::move(*zones);
+    else if (exists) return fail("zones.json", err);
 
     std::error_code ec;
     for (const auto& entry : fs::directory_iterator(dir / ".server" / "spawns", ec)) {
@@ -259,6 +262,20 @@ std::vector<MapError> validate(const Project& project, const MapDoc& doc) {
         } else {
             errors.push_back({where(doc.folder, "areas.json"), err});
         }
+    }
+
+    if (!doc.state.zones.is_null()) {
+        std::vector<std::string> problems;
+        map_zones(*info, doc.state, doc.folder, &problems);
+        for (std::string& p : problems) errors.push_back({where(doc.folder, "zones.json"), std::move(p)});
+    }
+    // A renamed zone's scene file moves on save, onto no other file.
+    for (const auto& [zone, onDisk] : doc.state.zoneRenames) {
+        const fs::path dir = project.root / "maps" / u8path(doc.folder) / "zones";
+        if (fs::exists(dir / u8path(onDisk + ".scene")) && fs::exists(dir / u8path(zone + ".scene")))
+            errors.push_back({where(doc.folder, "zones/" + zone + ".scene"),
+                              "already exists: zone \"" + zone + "\" (renamed from \"" + onDisk +
+                                  "\") cannot take it for its scene zones/" + onDisk + ".scene"});
     }
 
     std::set<std::string> ids;
@@ -405,6 +422,17 @@ std::vector<MapError> save_map(Project& project, MapDoc& doc, bool recycle) {
     }
     if (doc.state.manifest != doc.saved.manifest) write("map.json", dumpRefs(doc.state.manifest));
     if (!doc.state.areas.is_null() && doc.state.areas != doc.saved.areas) write("areas.json", dump(doc.state.areas));
+    if (doc.state.zones != doc.saved.zones) {
+        if (!doc.state.zones.is_null()) write("zones.json", dump(doc.state.zones));
+        else if (fs::exists(dir / "zones.json")) remove(where(doc.folder, "zones.json")); // an undo past its first edit
+    }
+    for (const auto& [zone, onDisk] : doc.state.zoneRenames) // validate() checked the new names are free
+        for (const char* ext : {".scene", ".scene.meta"}) {
+            const fs::path from = dir / "zones" / u8path(onDisk + ext), to = dir / "zones" / u8path(zone + ext);
+            std::error_code ec;
+            if (fs::exists(from)) fs::rename(from, to, ec);
+            if (ec) errors.push_back({where(doc.folder, "zones/" + onDisk + ext), "cannot rename: " + ec.message()});
+        }
     for (const auto& [tile, json] : doc.state.spawns) {
         const auto old = doc.saved.spawns.find(tile);
         if (old == doc.saved.spawns.end() || old->second != json) write(".server/spawns/" + tile_name(tile) + ".json", dump(json));
@@ -428,6 +456,7 @@ std::vector<MapError> save_map(Project& project, MapDoc& doc, bool recycle) {
     for (auto it = doc.heightExt.begin(); it != doc.heightExt.end();)
         it = doc.state.heights.contains(it->first) ? std::next(it) : doc.heightExt.erase(it);
     if (!errors.empty()) return errors;
+    doc.state.zoneRenames.clear();
     doc.saved = doc.state;
     project = scan_project(project.root);
     return {};

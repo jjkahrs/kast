@@ -11,6 +11,7 @@
 
 #include <mapedit/terrain_edit.h>
 #include <mapedit/map_edit.h>
+#include <mapedit/zone_edit.h>
 
 #include <algorithm>
 #include <charconv>
@@ -34,7 +35,8 @@ constexpr std::string_view kValueOps[] = {"--map", "--new-map", "--falloff", "--
                                           "--move-spawn", "--delete-spawn", "--add-path", "--map-id", "--add-tile",
                                           "--remove-tile", "--set-spawn", "--add-object", "--set-interactable",
                                           "--move-object", "--delete-object", "--scatter", "--erase-visuals",
-                                          "--instance"};
+                                          "--instance", "--add-zone", "--paint-zone", "--delete-zone", "--rename-zone",
+                                          "--zone-name", "--zone-flags"};
 constexpr std::string_view kFlagOps[] = {"--save-map", "--expect-save-fail", "--undo", "--redo", "--validate",
                                          "--create-terrain-material", "--world-map"};
 constexpr float kLoopRadius = 24.0f; // --sculpt-loop's brush
@@ -408,6 +410,84 @@ std::optional<bool> objectEdit(mapedit::MapDoc& doc, const Op& op)
     return std::nullopt;
 }
 
+// The zone edits (zone_edit.h), one undo step each; nullopt: op is not one. A zone is named by its id (the implicit
+// zone's is the map folder).
+std::optional<bool> zoneEdit(mapedit::MapDoc& doc, const Op& op)
+{
+    const auto bad = [&](std::string_view form) {
+        kast::log::error(std::format("{} {}: expected {}", op.flag, op.value, form));
+        return false;
+    };
+    std::string err;
+    const auto info = doc.info(err);
+    const auto parts = split(op.value, ',');
+    // The zone named by parts[0] (made explicit first: the edit writes zones.json).
+    const auto zone = [&]() -> std::optional<size_t> {
+        if (!info || parts.empty())
+            return std::nullopt;
+        if (doc.state.zones.is_null() && parts[0] == doc.folder)
+            return 0;
+        return mapedit::find_zone(doc.state, parts[0]);
+    };
+    const auto explicitZones = [&](mapedit::MapState& s) { mapedit::zones_list(*info, s, doc.folder); };
+    if (op.flag == "--add-zone") { // id[,name]
+        if (!info || parts.empty() || parts.size() > 2 || !kast::map::valid_zone_id(parts[0]) || zone())
+            return bad("id[,name] (a new id: letters, digits, _ and -)");
+        doc.edit([&](mapedit::MapState& s) { mapedit::add_zone(*info, s, doc.folder, parts[0], parts.size() > 1 ? parts[1] : ""); });
+        kast::log::info(std::format("Map: added zone {} (no tiles yet: paint some on the grid)", parts[0]));
+        return true;
+    }
+    if (op.flag == "--paint-zone") { // id,tx,tz[,tx2,tz2]: the rect's declared tiles
+        int v[4] = {};
+        bool ok = (parts.size() == 3 || parts.size() == 5) && zone();
+        for (size_t i = 1; ok && i < parts.size(); ++i)
+            ok = parseInt(parts[i], v[i - 1]);
+        if (!ok)
+            return bad("id,tx,tz[,tx2,tz2] (an existing zone)");
+        if (parts.size() == 3)
+            v[2] = v[0], v[3] = v[1];
+        mapedit::TileSet tiles;
+        for (int tz = std::min(v[1], v[3]); tz <= std::max(v[1], v[3]); ++tz)
+            for (int tx = std::min(v[0], v[2]); tx <= std::max(v[0], v[2]); ++tx)
+                tiles.insert({tx, tz});
+        size_t moved = 0;
+        doc.edit([&](mapedit::MapState& s) {
+            explicitZones(s);
+            moved = mapedit::paint_zone(*info, s, *mapedit::find_zone(s, parts[0]), tiles);
+        });
+        kast::log::info(std::format("Map: painted {} tile(s) into zone {}", moved, parts[0]));
+        return true;
+    }
+    if (op.flag == "--delete-zone" || op.flag == "--rename-zone") {
+        const bool rename = op.flag == "--rename-zone";
+        if (!zone() || parts.size() != (rename ? 2u : 1u) ||
+            (rename && (!kast::map::valid_zone_id(parts[1]) || mapedit::find_zone(doc.state, parts[1]))))
+            return bad(rename ? "old,new (an existing zone, a new valid id)" : "id (an existing zone)");
+        if (rename)
+            MapPanel::renameZone(doc, *info, parts[0], parts[1]);
+        else
+            MapPanel::deleteZone(doc, *info, parts[0]);
+        return true;
+    }
+    if (op.flag == "--zone-name" || op.flag == "--zone-flags") { // id,name | id,{json}: the rest, commas and all
+        const std::string rest = parts.size() > 1 ? op.value.substr(parts[0].size() + 1) : "";
+        const Json flags = op.flag == "--zone-flags" ? Json::parse(rest, nullptr, false) : Json();
+        if (!zone() || parts.size() < 2 || (op.flag == "--zone-flags" && !flags.is_object()))
+            return bad(op.flag == "--zone-name" ? "id,name (an existing zone)" : "id,{JSON object} (an existing zone)");
+        doc.edit([&](mapedit::MapState& s) {
+            explicitZones(s);
+            Json& z = mapedit::zones_list(*info, s, doc.folder)[*mapedit::find_zone(s, parts[0])];
+            if (op.flag == "--zone-name")
+                z["name"] = rest;
+            else
+                z["flags"] = flags;
+        });
+        kast::log::info(std::format("Map: zone {} {} {}", parts[0], op.flag == "--zone-name" ? "named" : "flags", rest));
+        return true;
+    }
+    return std::nullopt;
+}
+
 // Runs one map edit; false (logged) stops the run. brush: --falloff's, for later sculpts.
 bool runOp(MapSession& session, const Op& op, mapedit::Brush& brush)
 {
@@ -466,6 +546,8 @@ bool runOp(MapSession& session, const Op& op, mapedit::Brush& brush)
         return true;
     }
     if (const auto edit = objectEdit(*doc, op); edit)
+        return *edit;
+    if (const auto edit = zoneEdit(*doc, op); edit)
         return *edit;
     if (op.flag == "--add-tile" || op.flag == "--remove-tile") {
         mapedit::TileKey t;

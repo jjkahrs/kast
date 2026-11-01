@@ -1,6 +1,7 @@
 #include "terrain_edit.h"
 
 #include "map_io.h" // kMaxMapTiles
+#include "zone_edit.h"
 
 #include <scene_io.h> // jsonNumber
 
@@ -468,6 +469,7 @@ bool add_tile(const km::MapInfo& info, MapState& state, TileKey t) {
                 }
         }
     if (shaped) state.heights[t] = std::move(fresh);
+    zones_add_tile(state, t);
     return true;
 }
 
@@ -479,6 +481,7 @@ bool remove_tile(const km::MapInfo& info, MapState& state, TileKey t) {
     state.spawns.erase(t);
     state.objects.erase(t);
     state.interactables.erase(t);
+    zones_remove_tile(state, t);
     return true;
 }
 

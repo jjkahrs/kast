@@ -62,10 +62,11 @@ instance, Revert, Revert All and Unpack.</li>
 <h3 id="map">Map builder</h3>
 <p>Every edit that marks the map unsaved: terrain sculpt / flatten strokes, height range, heightmap import and
 generation, terrain colors, tiles added / removed, the map's fields and spawn point, areas and their vertices and portals,
-spawns and their paths, objects placed / moved / deleted / edited and scatter / erase strokes. A step holds only the parts
+spawns and their paths, objects placed / moved / deleted / edited, scatter / erase strokes, and zones added / renamed /
+deleted / given a name or flags and paint strokes. A step holds only the parts
 of the map the edit changed (the tiles a stroke touched, the areas file, a tile's objects), as they were before and
-after. Steps are named for what changed: <em>Edit Terrain</em>, <em>Edit Map</em>, <em>Edit Areas</em>, <em>Edit Spawns</em>,
-<em>Edit Objects</em>. The tab's own <strong>Undo</strong> / <strong>Redo</strong> buttons use the same history.</p>
+after. Steps are named for what changed: <em>Edit Terrain</em>, <em>Edit Map</em>, <em>Edit Zones</em>, <em>Edit Areas</em>,
+<em>Edit Spawns</em>, <em>Edit Objects</em>. The tab's own <strong>Undo</strong> / <strong>Redo</strong> buttons use the same history.</p>
 
 <h2 id="gestures">One step per gesture</h2>
 <p>A gizmo drag, a slider or drag-number drag, a text field from activation to commit, a brush, scatter or erase stroke

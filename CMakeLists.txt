@@ -188,7 +188,7 @@ add_library(kast_engine STATIC
   engine/state_machines.cpp engine/lua_state_machines.cpp engine/post_process.cpp
   engine/lua_sandbox.cpp engine/lua_components.cpp engine/lua_items.cpp engine/pak.cpp engine/files.cpp engine/play.cpp engine/event_bus.cpp
   engine/gui.cpp engine/gui_render.cpp engine/gui_effects.cpp engine/gui_events.cpp engine/gui_models.cpp engine/gui_widgets.cpp engine/gui_lists.cpp engine/gui_richtext.cpp engine/gui_tooltip.cpp engine/gui_prefabs.cpp engine/gui_scale.cpp engine/scene_gui.cpp engine/world_ui.cpp engine/window_display.cpp engine/model.cpp engine/animation.cpp engine/physics.cpp
-  engine/audio.cpp engine/network.cpp engine/auth_client.cpp engine/chat_client.cpp engine/world_client.cpp engine/stats_overlay.cpp engine/replication.cpp engine/terrain.cpp engine/tile_scenes.cpp engine/sky.cpp engine/ibl.cpp engine/bvh.cpp engine/lightmap.cpp engine/lightmap_bake.cpp engine/voxel_gi.cpp engine/sdfgi.cpp engine/volumetric_fog.cpp engine/particles.cpp engine/texture_cook.cpp ${KAST_ENGINE_SHADERS})
+  engine/audio.cpp engine/network.cpp engine/auth_client.cpp engine/chat_client.cpp engine/world_client.cpp engine/stats_overlay.cpp engine/replication.cpp engine/terrain.cpp engine/tile_scenes.cpp engine/zone_scenes.cpp engine/sky.cpp engine/ibl.cpp engine/bvh.cpp engine/lightmap.cpp engine/lightmap_bake.cpp engine/voxel_gi.cpp engine/sdfgi.cpp engine/volumetric_fog.cpp engine/particles.cpp engine/texture_cook.cpp ${KAST_ENGINE_SHADERS})
 target_include_directories(kast_engine PUBLIC engine PRIVATE "${KAST_SHADER_OUT}" "${KAST_GENERATED}")
 target_include_directories(kast_engine SYSTEM PRIVATE "${LUAJIT_INCLUDE_DIR}" "${Stb_INCLUDE_DIR}" "${MINIAUDIO_INCLUDE_DIR}")
 # sol2 on the LuaJIT (Lua 5.1) API; safeties check argument types instead of trusting scripts. sol2 lets C++
@@ -222,7 +222,7 @@ add_executable(kast_editor
   editor/main.cpp editor/imgui_bgfx.cpp editor/document.cpp editor/scene_undo.cpp editor/gui_undo.cpp editor/build.cpp editor/camera.cpp editor/viewport.cpp
   editor/game_view.cpp editor/panels.cpp editor/lightmap_job.cpp editor/voxelgi_job.cpp editor/launcher.cpp editor/recent_projects.cpp editor/ui_common.cpp
   editor/assets.cpp editor/asset_ids.cpp editor/gui_doc.cpp editor/gui_builder.cpp editor/shader_graph_doc.cpp editor/shader_graph_editor.cpp editor/shader_preview.cpp editor/model_preview.cpp editor/external_editor.cpp editor/editor_settings.cpp
-  editor/shader_compiler.cpp editor/texture_cooker.cpp editor/online.cpp editor/online_panel.cpp editor/map_session.cpp editor/map_render.cpp editor/map_panel.cpp editor/map_terrain.cpp editor/map_objects.cpp editor/map_cli.cpp editor/map_tiles.cpp editor/tile_grid.cpp
+  editor/shader_compiler.cpp editor/texture_cooker.cpp editor/online.cpp editor/online_panel.cpp editor/map_session.cpp editor/map_render.cpp editor/map_panel.cpp editor/map_terrain.cpp editor/map_objects.cpp editor/map_cli.cpp editor/map_tiles.cpp editor/map_zones.cpp editor/tile_grid.cpp
   editor/kast_editor.rc
   "${KAST_MANIFEST}" ${KAST_EDITOR_SHADERS})
 target_include_directories(kast_editor PRIVATE "${KAST_SHADER_OUT}" "${KAST_GENERATED}")
@@ -237,7 +237,7 @@ add_dependencies(kast_editor kast_player kast_shader_tools) # Build copies kast_
 # part of kast_engine: only editing tools link it, so the shipped kast_player stays free of it (and of KAST_SOURCE_DIR). ---
 add_library(kast_mapedit STATIC
   engine/mapedit/map_doc.cpp engine/mapedit/map_io.cpp engine/mapedit/terrain_edit.cpp engine/mapedit/map_edit.cpp
-  engine/mapedit/process_runner.cpp)
+  engine/mapedit/zone_edit.cpp engine/mapedit/process_runner.cpp)
 target_compile_options(kast_mapedit PRIVATE ${KAST_COMPILE_OPTIONS})
 target_include_directories(kast_mapedit SYSTEM PRIVATE "${Stb_INCLUDE_DIR}") # stb_perlin, stb_image_write
 target_link_libraries(kast_mapedit PUBLIC kast_engine kast_map)

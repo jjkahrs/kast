@@ -3,7 +3,7 @@
 // the scene's Terrain entity names, its manifest), Tiles (map_tiles.h: the one tile grid, adding and removing tiles and
 // opening tile scenes), Terrain (map_terrain.cpp: brushes, height range, heightmap PNGs, Generate, Height colors, the
 // terrain material), Areas, Spawns (+ patrol paths), Objects (+ the Scatter brush) and Bake (map_objects.cpp), and
-// Problems (the last validation). Read-only during Play and in prefab edit mode. Unsaved-changes prompt before the map
+// Zones (map_zones.cpp: the map's zones, painted on the Tiles grid, their zone scenes) and Problems (the last validation). Read-only during Play and in prefab edit mode. Unsaved-changes prompt before the map
 // changes (here or in the Inspector); scene-wide prompts and Ctrl+S go through FileActions::extra (main.cpp). The active tool gets the
 // Scene view's left mouse through sceneInput (SceneViewport::input) and draws over it with drawSceneOverlay; with no
 // tool, while the tab is in front, the map's handles (area vertices, spawns, path points, objects) drag there.
@@ -42,9 +42,10 @@ public:
 
     // The window and its modals; call once a frame after session.update.
     void draw(Document& doc, MapSession& session, FileActions& files);
-    // Saves the map (MapSession::save); a blocked save opens Problems and brings the tab forward.
-    bool save(MapSession& session);
-    // --map-section: expand these sections ("Map", "Tiles", "Terrain", "Problems") and collapse the others, each the next time
+    // Saves the map (MapSession::save); a blocked save opens Problems and brings the tab forward. Open zone scenes of
+    // renamed zones follow their files.
+    bool save(Document& doc, MapSession& session);
+    // --map-section: expand these sections ("Map", "Tiles", "Zones", "Terrain", "Problems") and collapse the others, each the next time
     // it is drawn.
     void showSections(const std::vector<std::string>& names) { showSections_ = std::set(names.begin(), names.end()); }
     Tool tool() const { return tool_; }
@@ -52,7 +53,7 @@ public:
     void setTool(Tool tool) { tool_ = tool; }
     // "Raise", "SetSpawn", ...: the Tool of that name; nullopt if none.
     static std::optional<Tool> toolNamed(std::string_view name);
-    // --map-select: selects the area or spawn with this id, or the map object "object:tx,tz,index".
+    // --map-select: selects the area or spawn with this id, the map object "object:tx,tz,index" or the zone "zone:id".
     void select(const MapSession& session, const std::string& id);
     // Bake Navmesh: kast_mapbake on the saved, valid map (else logs why not); its output and exit code go to the
     // Console. False if it did not start.
@@ -67,6 +68,10 @@ public:
     void askRemoveTile(kast::map::TileKey t) { removeTile_ = t; }
     // --grid-view, --grid-mode, --map-click and shutdown: the Tiles section's grid (MapTiles).
     MapTiles& tiles() { return tiles_; }
+    // Zone edits as the Zones section makes them, one undo step each, logged ("Map: ..."); the zone must exist.
+    // --rename-zone and --delete-zone too.
+    static void renameZone(mapedit::MapDoc& z, const kast::map::MapInfo& info, const std::string& from, const std::string& to);
+    static void deleteZone(mapedit::MapDoc& z, const kast::map::MapInfo& info, const std::string& id);
     // Points the first Terrain entity (added if there is none) at map id; marks the scene dirty.
     static void setTerrainMap(Document& doc, int id);
 
@@ -96,7 +101,7 @@ private:
     };
 
     bool header(const char* label, const char* section, bool defaultOpen = false);
-    void drawTopBar(MapSession& session);
+    void drawTopBar(Document& doc, MapSession& session);
     void drawTerrainEntity(Document& doc, const MapSession& session);
     void drawMap(Document& doc, MapSession& session);
     void drawManifest(mapedit::MapDoc& z, const MapSession& session);
@@ -105,6 +110,14 @@ private:
     // The Tiles section: MapTiles' grid; a click in its Tiles mode adds a free cell's tile or asks to remove a tile.
     void drawTiles(Document& doc, MapSession& session, FileActions& files, bool locked);
     void drawProblems(const MapSession& session);
+    // map_zones.cpp
+    void drawZones(Document& doc, MapSession& session, FileActions& files);
+    void drawZoneFields(Document& doc, MapSession& session, FileActions& files, const kast::map::MapInfo& info,
+                        const kast::map::Zone& zone);
+    // A paint stroke (MapTiles' Zones mode): tile t into the selected zone; the stroke is one undo step, ended (and
+    // logged) by endZoneStroke once the mouse is up.
+    void paintZone(mapedit::MapDoc& z, const kast::map::MapInfo& info, kast::map::TileKey t);
+    void endZoneStroke(MapSession& session);
     void drawUnsavedPrompt(Document& doc, MapSession& session);
     void drawNewMapDialog(Document& doc, MapSession& session);
     void drawRemoveTilePrompt(MapSession& session);
@@ -203,6 +216,13 @@ private:
     std::string dataText_; // the selected interactable's "data" being typed
     uint32_t dataFor_ = 0; // whose dataText_ it is (interactable id)
     std::string dataError_;
+
+    // Zones (map_zones.cpp)
+    std::string zone_;                   // the selected zone's id
+    std::string zoneIdFor_, zoneIdText_; // the Id field being typed, for that zone
+    std::string flagsText_, flagsError_; // its flags being typed
+    bool zoneStroke_ = false;            // a paint stroke's undo step is open
+    size_t strokeTiles_ = 0;             // tiles it moved
 
     // Bake
     std::filesystem::path settingsFile_;

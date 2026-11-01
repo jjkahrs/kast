@@ -1,6 +1,7 @@
 // The tile grid area of the Map tab (mapedit::GridView): fitted to the map at first, the mouse wheel
 // zooms about the mouse (out to the fitted view at most), a drag with any button pans (within the map), a left click
-// without a drag picks a cell; --grid-view centres it.
+// without a drag picks a cell; --grid-view centres it. Painting (area's paint): the left button paints instead of
+// panning.
 #pragma once
 
 #include <mapedit/terrain_edit.h>
@@ -26,9 +27,10 @@ public:
     struct Input {
         std::optional<mapedit::TileKey> hover; // the cell under the mouse (not in a gap)
         bool clicked = false;               // a left click on it, not the end of a drag
+        bool painting = false;              // paint: the left button is held on the area
     };
-    // The area as one item at the cursor; zooms and pans it.
-    Input area(const char* id);
+    // The area as one item at the cursor; zooms and pans it. paint: a left drag paints (Input::painting), not pans.
+    Input area(const char* id, bool paint = false);
 
     const mapedit::GridView& view() const { return view_; }
     // The cells of the fitted bounds the area shows.

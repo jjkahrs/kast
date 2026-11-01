@@ -5,6 +5,7 @@
 #include <mapedit/map_doc.h>
 #include <mapedit/map_edit.h>
 #include <mapedit/map_io.h>
+#include <mapedit/zone_edit.h>
 
 #include <crash_dialogs.h>
 
@@ -15,6 +16,7 @@
 #include <renderer.h> // decodeImage
 #include <terrain.h>
 #include <tile_scenes.h>
+#include <zone_scenes.h>
 
 #include <algorithm>
 #include <chrono>
@@ -101,6 +103,7 @@ void check_round_trip(const fs::path& project, const std::string& name, const st
     Json manifest = json_file(dir / "map.json");
     kast::readAssetRefs(manifest); // its {id, path} refs: saved below without the editor's ids, as plain paths
     const Json areas = fs::exists(dir / "areas.json") ? json_file(dir / "areas.json") : Json();
+    const Json zones = fs::exists(dir / "zones.json") ? json_file(dir / "zones.json") : Json();
     std::map<std::string, std::string> heightBytes;
     std::error_code noHeights; // a flat map (the crypt) has no heights/ folder
     for (const auto& entry : fs::directory_iterator(dir / "heights", noHeights))
@@ -111,6 +114,7 @@ void check_round_trip(const fs::path& project, const std::string& name, const st
     CHECK(save_map(p, *doc, false).empty());
     CHECK(json_file(dir / "map.json") == manifest);
     if (!areas.is_null()) CHECK(json_file(dir / "areas.json") == areas);
+    if (!zones.is_null()) CHECK(json_file(dir / "zones.json") == zones);
     for (const auto& [tile, json] : doc->state.spawns)
         CHECK(json_file(dir / ".server" / "spawns" / (tile_name(tile) + ".json")) == json);
     for (const auto& [tile, json] : doc->state.objects) CHECK(json_file(dir / "objects" / (tile_name(tile) + ".json")) == json);
@@ -118,6 +122,7 @@ void check_round_trip(const fs::path& project, const std::string& name, const st
         CHECK(json_file(dir / ".server" / "interactables" / (tile_name(tile) + ".json")) == json);
     auto again = load_map(p, folder, err);
     CHECK(again && again->state.manifest == doc->state.manifest && again->state.areas == doc->state.areas &&
+          again->state.zones == doc->state.zones &&
           again->state.spawns == doc->state.spawns && again->state.objects == doc->state.objects &&
           again->state.interactables == doc->state.interactables);
     for (const auto& [file, data] : heightBytes) {
@@ -1034,6 +1039,112 @@ void check_undo_history() {
     CHECK(serialize(capped.state) == afterFifth && capped.state.manifest["name"] == "Edit 5");
 }
 
+// Zones (zone_edit.h) and zone scenes (zone_scenes.h) on a copy of tests/project's maps/tilegrid (3 x 3: west x 0..1,
+// east x 2, zones/west.scene): paths, the implicit zone made explicit, paint / rename / delete with their undo steps,
+// the invariants that block the save, tiles added and removed, and the scene file renamed on save.
+void check_zones() {
+    CHECK(kast::zoneScenePath("tilegrid", "west") == "maps/tilegrid/zones/west.scene");
+    CHECK(kast::zoneSceneId("west.scene") == "west" && kast::zoneSceneId("a-b_2.scene") == "a-b_2");
+    for (const char* bad : {"west", "-x.scene", "a b.scene", ".scene", "west.scene.meta", "west.json"})
+        CHECK(!kast::zoneSceneId(bad));
+    const auto ref = kast::parseZoneScenePath("maps\\tilegrid\\zones/west.scene");
+    CHECK(ref && ref->folder == "tilegrid" && ref->zone == "west");
+    CHECK(!kast::parseZoneScenePath("maps/tilegrid/scenes/0_0.scene") && !kast::parseZoneScenePath("maps/tilegrid/zones/a b.scene"));
+
+    const fs::path root = copy_project(kSource / "tests" / "project", "zones");
+    const fs::path dir = root / "maps" / "tilegrid";
+    std::ofstream(dir / "zones" / "bad name.scene") << "{}";
+    std::ofstream(dir / "zones" / "notes.txt") << "x";
+    const kast::ZoneSceneFiles listing = kast::listZoneScenes(dir);
+    CHECK(listing.zones == std::vector<std::string>{"west"} && listing.badNames.size() == 2);
+    fs::remove(dir / "zones" / "bad name.scene");
+    fs::remove(dir / "zones" / "notes.txt");
+
+    Project p = scan_project(root);
+    std::string err;
+    auto loaded = load_map(p, "tilegrid", err);
+    CHECK(loaded.has_value());
+    if (!loaded) return;
+    MapDoc& doc = *loaded;
+    const km::MapInfo info = info_of(doc);
+    std::vector<std::string> problems;
+    km::Zones zones = map_zones(info, doc.state, "tilegrid", &problems);
+    CHECK(problems.empty() && zones.list.size() == 2 && !zones.implicit);
+    CHECK(km::zone_at(zones, {1, 2}) == 0 && km::zone_at(zones, {2, 1}) == 1 && km::zone_at(zones, {3, 1}) == -1);
+    const std::string original = bytes(dir / "zones.json");
+    CHECK(save_map(p, doc, false).empty() && bytes(dir / "zones.json") == original); // unchanged: not written
+
+    // No zones.json: the implicit zone; the first edit writes it out with the manifest's tiles; undone, nothing to save.
+    auto hills = load_map(p, "hills", err);
+    CHECK(hills.has_value());
+    if (hills) {
+        const km::MapInfo hi = info_of(*hills);
+        const km::Zones implicit = map_zones(hi, hills->state, "hills");
+        CHECK(implicit.implicit && implicit.list.size() == 1 && implicit.list[0].id == "hills");
+        hills->edit([&](MapState& s) { add_zone(hi, s, "hills", "north", "North"); });
+        const Json& list = hills->state.zones["zones"];
+        CHECK(list.size() == 2 && list[0]["id"] == "hills" && list[0]["tiles"] == hills->state.manifest["tiles"]);
+        CHECK(hills->history().undoName() == "Edit Zones");
+        const auto errors = save_map(p, *hills, false); // an empty zone blocks the save
+        CHECK(has_error(errors, "maps/hills/zones.json", "zone \"north\": no tiles") && !fs::exists(root / "maps" / "hills" / "zones.json"));
+        hills->undo();
+        CHECK(hills->state.zones.is_null() && !hills->dirty());
+    }
+
+    // Paint: one step; 1_0..1_2 move from west to east.
+    size_t moved = 0;
+    doc.edit([&](MapState& s) { moved = paint_zone(info, s, 1, {{1, 0}, {1, 1}, {1, 2}, {1, 1}, {7, 7}}); });
+    CHECK(moved == 3 && doc.history().undoName() == "Edit Zones");
+    CHECK(zone_tiles(doc.state.zones["zones"][0]).size() == 3 && zone_tiles(doc.state.zones["zones"][1]).size() == 6);
+    CHECK(doc.state.zones["zones"][0]["note"] == "unknown keys are kept" && validate(p, doc).empty());
+    // A paint that splits west (0_1 out of 0_0, 0_1, 0_2) blocks the save: nothing written.
+    doc.edit([&](MapState& s) { paint_zone(info, s, 1, {{0, 1}}); });
+    auto errors = save_map(p, doc, false);
+    CHECK(has_error(errors, "maps/tilegrid/zones.json", "zone \"west\": not contiguous") && bytes(dir / "zones.json") == original);
+    doc.undo();
+    CHECK(validate(p, doc).empty());
+
+    // A new tile joins its first edge neighbour's zone (-x first): 3_1 -> east (2_1); -1_2 -> west (0_2).
+    doc.edit([&](MapState& s) { add_tile(info, s, {3, 1}); });
+    doc.edit([&](MapState& s) { add_tile(info_of(doc), s, {-1, 2}); });
+    zones = map_zones(info_of(doc), doc.state, "tilegrid", &problems);
+    CHECK(problems.empty() && km::zone_at(zones, {3, 1}) == 1 && km::zone_at(zones, {-1, 2}) == 0);
+    // Removing 2_1 cuts 3_1 off the rest of east: blocked.
+    doc.edit([&](MapState& s) { remove_tile(info_of(doc), s, {2, 1}); });
+    CHECK(has_error(validate(p, doc), "maps/tilegrid/zones.json", "zone \"east\": not contiguous"));
+    doc.undo();
+    doc.undo();
+    doc.undo();
+    CHECK(validate(p, doc).empty() && !info_of(doc).has_tile({3, 1}));
+
+    // Rename west -> vale: its scene file (and .meta) follows on save; undo of the rename forgets it.
+    rename_zone(doc.state, 0, "dale");
+    rename_zone(doc.state, 0, "vale");
+    CHECK(doc.state.zoneRenames == (std::map<std::string, std::string>{{"vale", "west"}}) && zone_scene_id(doc.state, "vale") == "west");
+    rename_zone(doc.state, 0, "west");
+    CHECK(doc.state.zoneRenames.empty());
+    doc.edit([&](MapState& s) { rename_zone(s, 0, "vale"); });
+    std::ofstream(dir / "zones" / "vale.scene") << "{}"; // taken: blocked
+    CHECK(has_error(save_map(p, doc, false), "maps/tilegrid/zones/vale.scene", "already exists"));
+    fs::remove(dir / "zones" / "vale.scene");
+    CHECK(save_map(p, doc, false).empty());
+    CHECK(fs::exists(dir / "zones" / "vale.scene") && fs::exists(dir / "zones" / "vale.scene.meta") &&
+          !fs::exists(dir / "zones" / "west.scene") && doc.state.zoneRenames.empty() && !doc.dirty());
+    auto again = load_map(p, "tilegrid", err);
+    CHECK(again && again->state.zones["zones"][0]["id"] == "vale" && again->state.zones["zones"][0]["note"] == "unknown keys are kept");
+
+    // Delete east: its tiles go to its edge neighbour vale. Delete the last zone: every tile in no zone, blocked.
+    std::optional<std::string> to;
+    doc.edit([&](MapState& s) { to = delete_zone(s, 1); });
+    zones = map_zones(info, doc.state, "tilegrid", &problems);
+    CHECK(to == "vale" && zones.list.size() == 1 && km::zone_at(zones, {2, 2}) == 0 && validate(p, doc).empty());
+    doc.edit([&](MapState& s) { to = delete_zone(s, 0); });
+    CHECK(!to && has_error(validate(p, doc), "maps/tilegrid/zones.json", "9 declared tiles are in no zone"));
+    doc.undo();
+    doc.undo();
+    CHECK(!doc.dirty());
+}
+
 } // namespace
 
 // Same heights: the same tiles with equal samples.
@@ -1437,6 +1548,7 @@ int main(int argc, char** argv) {
     check_terrain_gen();
     check_round_trip(kSource / "tests" / "project", "rt_tilegrid", "tilegrid");
     check_tile_scenes();
+    check_zones();
     check_edit_view();
     check_grid_view();
     if (failures) std::fprintf(stderr, "%d check(s) failed\n", failures);

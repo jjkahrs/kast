@@ -4,11 +4,13 @@
 #include "ui_common.h"
 
 #include <mapedit/terrain_edit.h>
+#include <mapedit/zone_edit.h>
 
 #include <components.h>
 #include <files.h> // readFile
 #include <log.h>
 #include <project.h> // toProjectPath
+#include <zone_scenes.h>
 
 #include <imgui.h>
 
@@ -30,6 +32,9 @@ constexpr ImU32 kButton = kAccent; // an open tile scene
 constexpr ImU32 kBlack = IM_COL32(0, 0, 0, 255);
 // Not ImGui's text color, so darkenTextOnAccent leaves cell labels on an open cell's accent tint white.
 constexpr ImU32 kWhite = IM_COL32(250, 250, 250, 255);
+constexpr ImU32 kZoneBorder = kWhite; // between tiles of different zones (kWhite: see above)
+constexpr float kZoneBorderWidth = 4.0f;
+constexpr ImU32 kZoneSelected = withAlpha(kHighlight, 70); // the selected zone's tint
 
 ImU32 borderColor(kast::TileCell cell)
 {
@@ -79,6 +84,8 @@ std::optional<MapTiles::Mode> MapTiles::modeNamed(std::string_view name)
         return Mode::Scenes;
     if (name == "tiles")
         return Mode::Tiles;
+    if (name == "zones")
+        return Mode::Zones;
     return std::nullopt;
 }
 
@@ -94,7 +101,7 @@ void MapTiles::update(const Document& doc, const MapSession& session)
 }
 
 std::optional<km::TileKey> MapTiles::draw(Document& doc, const MapSession& session, FileActions& files,
-                                          const km::MapInfo& info, bool locked)
+                                          const km::MapInfo& info, bool locked, const std::string& zone)
 {
     ImGui::TextUnformatted("Click:");
     ImGui::SameLine();
@@ -103,7 +110,10 @@ std::optional<km::TileKey> MapTiles::draw(Document& doc, const MapSession& sessi
     ImGui::SameLine();
     if (ImGui::RadioButton("Add / remove tiles", mode_ == Mode::Tiles))
         mode_ = Mode::Tiles;
-    const std::optional<km::TileKey> clicked = drawGrid(doc, session, files, info, locked);
+    ImGui::SameLine();
+    if (ImGui::RadioButton("Paint zone", mode_ == Mode::Zones))
+        mode_ = Mode::Zones;
+    const std::optional<km::TileKey> clicked = drawGrid(doc, session, files, info, locked, zone);
     drawWarnings();
     return clicked;
 }
@@ -139,39 +149,15 @@ void MapTiles::refresh(const Document& doc, const mapedit::MapDoc& z, const km::
     warnings_.clear();
     for (const km::TileKey t : tiles) {
         const std::string rel = kast::tileScenePath(z.folder, t);
-        const std::filesystem::path file = tileFile(root, z.folder, t);
-        std::vector<kast::TileSceneRoot> roots;
-        if (const std::optional<kast::SceneSlot> slot = findOpenScene(doc, utf8(file))) {
-            entities_[t] = perScene[*slot];
-            for (const entt::entity entity : doc.scene.children(entt::null))
-                if (doc.scene.sceneOf(entity) == *slot) {
-                    const bx::Vec3& p = doc.scene.registry().get<kast::Transform>(entity).position; // a root's is world
-                    roots.push_back({doc.scene.registry().get<kast::Name>(entity).value, {p.x, p.z}});
-                }
-        } else {
-            std::error_code ec;
-            const std::filesystem::file_time_type mtime = std::filesystem::last_write_time(file, ec);
-            FileSummary& summary = files_[rel];
-            if ((!summary.summary && summary.error.empty()) || summary.mtime != mtime) {
-                std::string text;
-                summary = {mtime, std::nullopt, ""};
-                if (!kast::readFile(file, text))
-                    summary.error = "cannot read the file";
-                else
-                    summary.summary = kast::summarizeTileScene(text, summary.error);
-            }
-            if (!summary.summary) {
-                warnings_.push_back(std::format("{}: {}", rel, summary.error));
-                continue;
-            }
-            entities_[t] = summary.summary->entities;
-            roots = summary.summary->roots;
-        }
+        const std::optional<SceneRoots> scene = sceneRoots(doc, rel, perScene, warnings_);
+        if (!scene)
+            continue;
+        entities_[t] = scene->entities;
         if (!declared.contains(t))
             warnings_.push_back(std::format("{} is an orphan: tile {} is not a map tile (declare it in the Map tab, "
                                             "or move its entities into another tile scene)",
                                             rel, mapedit::tile_name(t)));
-        for (const kast::TileSceneRoot& r : roots)
+        for (const kast::TileSceneRoot& r : scene->roots)
             if (const std::optional<km::TileKey> at = kast::outsideTile(t, r.xz[0], r.xz[1]))
                 warnings_.push_back(std::format("{}: root entity '{}' at ({:.0f}, {:.0f}) is in tile {}, outside tile {}",
                                                 rel, r.name, r.xz[0], r.xz[1], mapedit::tile_name(*at), mapedit::tile_name(t)));
@@ -179,11 +165,92 @@ void MapTiles::refresh(const Document& doc, const mapedit::MapDoc& z, const km::
     for (const std::string& name : listing.badNames)
         warnings_.push_back(std::format("maps/{}/scenes/{}: not a tile scene name (<tx>_<tz>.scene), ignored", z.folder, name));
 
+    // The zone scenes: their files and open ones, against the zones as edited (a renamed zone's file keeps its old id
+    // until save).
+    const kast::ZoneSceneFiles zoneListing = kast::listZoneScenes(root / "maps" / fromUtf8(z.folder));
+    zoneSceneFiles_ = {zoneListing.zones.begin(), zoneListing.zones.end()};
+    std::set<std::string> zoneScenes = zoneSceneFiles_;
+    for (const kast::LoadedScene& loaded : doc.scene.loadedScenes()) {
+        const std::string path = scenePath(doc, loaded.slot);
+        const std::optional<std::string> relative = path.empty() ? std::nullopt : kast::toProjectPath(root, fromUtf8(path));
+        if (const std::optional<kast::ZoneSceneRef> ref = relative ? kast::parseZoneScenePath(*relative) : std::nullopt;
+            ref && ref->folder == z.folder)
+            zoneScenes.insert(ref->zone);
+    }
+    const km::Zones zones = mapedit::map_zones(info, z.state, z.folder);
+    std::map<std::string, int16_t> zoneOfScene;
+    for (size_t i = 0; i < zones.list.size(); ++i)
+        zoneOfScene.emplace(mapedit::zone_scene_id(z.state, zones.list[i].id), int16_t(i));
+    zoneEntities_.clear();
+    zoneWarnings_.clear();
+    for (const std::string& id : zoneScenes) {
+        const std::string rel = kast::zoneScenePath(z.folder, id);
+        const std::optional<SceneRoots> scene = sceneRoots(doc, rel, perScene, zoneWarnings_);
+        if (!scene)
+            continue;
+        zoneEntities_[id] = scene->entities;
+        const auto zone = zoneOfScene.find(id);
+        if (zone == zoneOfScene.end()) {
+            zoneWarnings_.push_back(std::format("{} is an orphan: the map has no zone \"{}\" (rename the file to a zone's "
+                                                "id, or move its entities into another zone scene)",
+                                                rel, id));
+            continue;
+        }
+        for (const kast::TileSceneRoot& r : scene->roots)
+            if (const int16_t at = km::zone_at(zones, r.xz[0], r.xz[1]); at != zone->second)
+                zoneWarnings_.push_back(std::format("{}: root entity '{}' at ({:.0f}, {:.0f}) is {}, outside zone {}", rel,
+                                                    r.name, r.xz[0], r.xz[1],
+                                                    at < 0 ? std::string("on no zone's tile")
+                                                           : std::format("in zone {}", zones.list[size_t(at)].id),
+                                                    zones.list[size_t(zone->second)].id));
+    }
+    for (const std::string& name : zoneListing.badNames)
+        zoneWarnings_.push_back(
+            std::format("maps/{}/zones/{}: not a zone scene name (<zoneId>.scene), ignored", z.folder, name));
+
     std::set<std::string> shown(warnings_.begin(), warnings_.end());
-    for (const std::string& warning : warnings_)
-        if (!logged_.contains(warning))
-            kast::log::warn("Map: " + warning);
+    shown.insert(zoneWarnings_.begin(), zoneWarnings_.end());
+    for (const std::vector<std::string>* list : {&warnings_, &zoneWarnings_})
+        for (const std::string& warning : *list)
+            if (!logged_.contains(warning))
+                kast::log::warn("Map: " + warning);
     logged_ = std::move(shown);
+}
+
+std::optional<MapTiles::SceneRoots> MapTiles::sceneRoots(const Document& doc, const std::string& rel,
+                                                         const std::map<kast::SceneSlot, size_t>& perScene,
+                                                         std::vector<std::string>& warnings)
+{
+    const std::filesystem::path file = (doc.project->root / fromUtf8(rel)).lexically_normal();
+    SceneRoots out;
+    if (const std::optional<kast::SceneSlot> slot = findOpenScene(doc, utf8(file))) {
+        const auto count = perScene.find(*slot);
+        out.entities = count == perScene.end() ? 0 : count->second;
+        for (const entt::entity entity : doc.scene.children(entt::null))
+            if (doc.scene.sceneOf(entity) == *slot) {
+                const bx::Vec3& p = doc.scene.registry().get<kast::Transform>(entity).position; // a root's is world
+                out.roots.push_back({doc.scene.registry().get<kast::Name>(entity).value, {p.x, p.z}});
+            }
+        return out;
+    }
+    std::error_code ec;
+    const std::filesystem::file_time_type mtime = std::filesystem::last_write_time(file, ec);
+    FileSummary& summary = files_[rel];
+    if ((!summary.summary && summary.error.empty()) || summary.mtime != mtime) {
+        std::string text;
+        summary = {mtime, std::nullopt, ""};
+        if (!kast::readFile(file, text))
+            summary.error = "cannot read the file";
+        else
+            summary.summary = kast::summarizeTileScene(text, summary.error);
+    }
+    if (!summary.summary) {
+        warnings.push_back(std::format("{}: {}", rel, summary.error));
+        return std::nullopt;
+    }
+    out.entities = summary.summary->entities;
+    out.roots = summary.summary->roots;
+    return out;
 }
 
 void MapTiles::syncThumbnails(const mapedit::MapDoc& z, const km::MapInfo& info)
@@ -248,10 +315,11 @@ void MapTiles::shutdown()
 }
 
 std::optional<km::TileKey> MapTiles::drawGrid(Document& doc, const MapSession& session, FileActions& files,
-                                              const km::MapInfo& info, bool locked)
+                                              const km::MapInfo& info, bool locked, const std::string& zone)
 {
     const mapedit::MapDoc& z = *session.doc();
-    const bool tiles = mode_ == Mode::Tiles;
+    const bool tiles = mode_ == Mode::Tiles, paint = mode_ == Mode::Zones;
+    const km::Zones zones = mapedit::map_zones(info, z.state, z.folder);
     // Scenes: the bounds' cells, at least kMinGrid a side from the bottom-left one (a small map shows the cells around
     // it). Tiles: the bounds and a free cell around them, smaller cells.
     const km::TileRect box = mapedit::tile_bounds(info);
@@ -259,20 +327,22 @@ std::optional<km::TileKey> MapTiles::drawGrid(Document& doc, const MapSession& s
     const km::TileRect bounds = tiles ? km::TileRect{box.x0 - 1, box.z0 - 1, box.x1 + 1, box.z1 + 1}
                                       : km::TileRect{box.x0, box.z0, box.x0 + grid - 1, box.z0 + grid - 1};
     ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
-    ImGui::TextWrapped(tiles ? "maps/%s: click a free cell (+) to add a tile, a tile to remove it; the wheel zooms, a drag "
-                               "pans. +z is up."
-                             : "maps/%s: click a tile to open, close or create its scene; the wheel zooms, a drag pans. "
-                               "+z is up.",
+    ImGui::TextWrapped(tiles   ? "maps/%s: click a free cell (+) to add a tile, a tile to remove it; the wheel zooms, a drag "
+                                 "pans. +z is up."
+                       : paint ? "maps/%s: click or drag over tiles to paint them into the selected zone (Zones section); "
+                                 "the wheel zooms, a right drag pans. +z is up."
+                               : "maps/%s: click a tile to open, close or create its scene; the wheel zooms, a drag pans. "
+                                 "+z is up.",
                        z.folder.c_str());
     ImGui::PopStyleColor();
-    grid_.fit(z.folder + (tiles ? "#tiles" : "#scenes"), bounds, bounds.x1 - bounds.x0 + 1, bounds.z1 - bounds.z0 + 1,
+    grid_.fit(z.folder + (tiles ? "#tiles" : paint ? "#zones" : "#scenes"), bounds, bounds.x1 - bounds.x0 + 1, bounds.z1 - bounds.z0 + 1,
               ImGui::GetContentRegionAvail().x, tiles ? ImGui::GetFrameHeight() * 1.6f : kMaxCell);
     const bool looked = tiles && std::exchange(looked_, false);
     if (looked)
         ImGui::SetScrollHereY(0.0f);
     if (!tiles)
         looked_ = false;
-    const TileGrid::Input input = grid_.area("##tiles");
+    const TileGrid::Input input = grid_.area("##tiles", paint);
     syncThumbnails(z, info);
     const km::TileRect shown = grid_.visible();
     const float cell = grid_.view().cell;
@@ -333,8 +403,13 @@ std::optional<km::TileKey> MapTiles::drawGrid(Document& doc, const MapSession& s
             }
             draw->AddRect(min, max, borderColor(state), 0.0f, 0, borderWidth(state));
             if (input.hover == t) {
+                const int16_t in = km::zone_at(zones, t);
                 if (tiles && !info.has_tile(t) && !addable)
                     ImGui::SetTooltip("A map is at most %d tiles a side", mapedit::kMaxMapTiles);
+                else if (paint)
+                    ImGui::SetTooltip("Tile %s\nZone: %s%s", mapedit::tile_name(t).c_str(),
+                                      in < 0 ? "(none)" : zones.list[size_t(in)].id.c_str(),
+                                      zone.empty() ? "\nSelect a zone in the Zones section to paint" : "");
                 else if (tiles)
                     ImGui::SetTooltip("%s tile %s", addable ? "Add" : "Remove", mapedit::tile_name(t).c_str());
                 else
@@ -371,10 +446,14 @@ std::optional<km::TileKey> MapTiles::drawGrid(Document& doc, const MapSession& s
                   kWhite, 1.5f);
     draw->AddCircleFilled(spawn, r, kWhite);
     draw->AddCircle(spawn, r, kBlack, 0, 1.5f);
+    if (paint || !z.state.zones.is_null())
+        drawZones(draw, info, zones, zone);
     draw->PopClipRect();
 
     std::optional<km::TileKey> clicked;
-    if (input.clicked && !locked) {
+    if (paint && input.painting && input.hover && !locked)
+        clicked = input.hover;
+    else if (input.clicked && !locked && !paint) {
         if (tiles)
             clicked = input.hover;
         else
@@ -385,18 +464,54 @@ std::optional<km::TileKey> MapTiles::drawGrid(Document& doc, const MapSession& s
                                        {kHighlight, "Unsaved *"}, {kError, "Orphan"}, {kCard, "Not a tile"}})
         legendItem(color, label);
     ImGui::NewLine();
-    ImGui::TextDisabled(tiles ? "O spawn   [ ] portal   + add a tile" : "O spawn   [ ] portal");
+    ImGui::TextDisabled(tiles ? "O spawn   [ ] portal   + add a tile"
+                        : paint || !z.state.zones.is_null() ? "O spawn   [ ] portal   thick line: zone border   tint: selected zone"
+                                                            : "O spawn   [ ] portal");
     return clicked;
 }
 
-void MapTiles::drawWarnings() const
+void MapTiles::drawZones(ImDrawList* draw, const km::MapInfo& info, const km::Zones& zones, const std::string& selected) const
 {
-    const std::string header = std::format("Tile scene problems ({})###TileSceneProblems", warnings_.size());
-    if (!ImGui::TreeNodeEx(header.c_str(), ImGuiTreeNodeFlags_DefaultOpen))
+    const km::TileRect shown = grid_.visible();
+    const float cell = grid_.view().cell, half = TileGrid::kGap * 0.5f;
+    std::set<int16_t> named; // a zone's name on its first visible tile, top row first
+    for (int32_t tz = shown.z1; tz >= shown.z0 - 1; --tz)
+        for (int32_t tx = shown.x0 - 1; tx <= shown.x1; ++tx) {
+            const km::TileKey t{tx, tz};
+            if (!info.has_tile(t))
+                continue;
+            const int16_t in = km::zone_at(zones, t);
+            const ImVec2 min = grid_.corner(t), max{min.x + cell, min.y + cell};
+            if (in >= 0 && zones.list[size_t(in)].id == selected)
+                draw->AddRectFilled(min, max, kZoneSelected);
+            // The +x and +z edges (+z is up): each shared edge drawn once.
+            if (const km::TileKey east{tx + 1, tz}; info.has_tile(east) && km::zone_at(zones, east) != in)
+                draw->AddLine({max.x + half, min.y - half}, {max.x + half, max.y + half}, kZoneBorder, kZoneBorderWidth);
+            if (const km::TileKey north{tx, tz + 1}; info.has_tile(north) && km::zone_at(zones, north) != in)
+                draw->AddLine({min.x - half, min.y - half}, {max.x + half, min.y - half}, kZoneBorder, kZoneBorderWidth);
+            if (in < 0 || tx < shown.x0 || tz < shown.z0 || cell < 24.0f || !named.insert(in).second)
+                continue;
+            const std::string& name = zones.list[size_t(in)].name;
+            const ImVec2 text = ImGui::CalcTextSize(name.c_str());
+            const ImVec2 at{min.x + 2.0f, max.y - text.y - 1.0f};
+            draw->AddRectFilled({at.x - 2.0f, at.y}, {at.x + text.x + 2.0f, max.y}, IM_COL32(0, 0, 0, 200));
+            draw->AddText(at, zones.list[size_t(in)].id == selected ? kHighlight : kWhite, name.c_str());
+        }
+}
+
+void MapTiles::drawWarnings() const { drawWarningList("Tile scene problems ({})###TileSceneProblems", warnings_); }
+
+void MapTiles::drawZoneWarnings() const { drawWarningList("Zone scene problems ({})###ZoneSceneProblems", zoneWarnings_); }
+
+void MapTiles::drawWarningList(const char* header, const std::vector<std::string>& warnings)
+{
+    const size_t count = warnings.size();
+    const std::string label = std::vformat(header, std::make_format_args(count));
+    if (!ImGui::TreeNodeEx(label.c_str(), ImGuiTreeNodeFlags_DefaultOpen))
         return;
-    if (warnings_.empty())
+    if (warnings.empty())
         ImGui::TextColored(kOkColor, "No problems");
-    for (const std::string& warning : warnings_) {
+    for (const std::string& warning : warnings) {
         ImGui::PushStyleColor(ImGuiCol_Text, kErrorColor);
         ImGui::TextWrapped("%s", warning.c_str());
         ImGui::PopStyleColor();
@@ -411,25 +526,51 @@ void MapTiles::click(Document& doc, const MapSession& session, FileActions& file
     const std::optional<km::MapInfo> info = z ? z->info(err) : std::nullopt;
     if (doc.play != PlayState::Stopped || doc.prefabEdit || !doc.project || !info || !info->has_tile(t))
         return; // undeclared cells (orphans too) ignore clicks
-    const std::string rel = kast::tileScenePath(z->folder, t);
-    const std::string file = utf8(tileFile(doc.project->root, z->folder, t));
+    toggleScene(doc, files, kast::tileScenePath(z->folder, t), "tile " + mapedit::tile_name(t));
+}
+
+void MapTiles::clickZone(Document& doc, const MapSession& session, FileActions& files, const std::string& zone)
+{
+    const mapedit::MapDoc* z = session.doc();
+    std::string err;
+    const std::optional<km::MapInfo> info = z ? z->info(err) : std::nullopt;
+    if (doc.play != PlayState::Stopped || doc.prefabEdit || !doc.project || !info)
+        return;
+    const km::Zones zones = mapedit::map_zones(*info, z->state, z->folder);
+    if (std::ranges::none_of(zones.list, [&](const km::Zone& each) { return each.id == zone; })) {
+        kast::log::error(std::format("Map: maps/{} has no zone \"{}\"", z->folder, zone));
+        return;
+    }
+    toggleScene(doc, files, kast::zoneScenePath(z->folder, mapedit::zone_scene_id(z->state, zone)), "zone " + zone);
+}
+
+kast::TileCell MapTiles::zoneScene(const Document& doc, const std::string& folder, const std::string& sceneId) const
+{
+    const std::optional<kast::SceneSlot> slot =
+        doc.project ? findOpenScene(doc, utf8((doc.project->root / fromUtf8(kast::zoneScenePath(folder, sceneId))).lexically_normal()))
+                    : std::nullopt;
+    return kast::tileCell(true, zoneSceneFiles_.contains(sceneId), slot.has_value(), slot && sceneDirty(doc, *slot));
+}
+
+void MapTiles::toggleScene(Document& doc, FileActions& files, const std::string& rel, const std::string& what)
+{
+    const std::string file = utf8((doc.project->root / fromUtf8(rel)).lexically_normal());
     nextRefresh_ = 0.0; // counts and states again on the next draw
     if (const std::optional<kast::SceneSlot> slot = findOpenScene(doc, file)) {
-        kast::log::info(std::format("Map: close tile {} ({})", mapedit::tile_name(t), rel));
+        kast::log::info(std::format("Map: close {} ({})", what, rel));
         files.removeScene(*slot); // asks first if it has unsaved changes
         return;
     }
     if (std::error_code ec; std::filesystem::exists(fromUtf8(file), ec)) {
         if (std::string error; openSceneAdditive(doc, file, error))
-            kast::log::info(std::format("Map: opened tile {} ({})", mapedit::tile_name(t), rel));
+            kast::log::info(std::format("Map: opened {} ({})", what, rel));
         else
             kast::log::error(std::format("Map: cannot open {}: {}", rel, error));
         return;
     }
     const kast::SceneSlot slot = addNewScene(doc);
     doc.scene.findScene(slot)->path = file;
-    doc.sceneSaves[slot].saved.reset(); // unsaved until File > Save / Ctrl+S writes it (and makes scenes/)
+    doc.sceneSaves[slot].saved.reset(); // unsaved until File > Save / Ctrl+S writes it (and makes its folder)
     updateDirty(doc);
-    kast::log::info(std::format("Map: created {} for tile {} (unsaved: File > Save or Ctrl+S writes it)", rel,
-                                mapedit::tile_name(t)));
+    kast::log::info(std::format("Map: created {} for {} (unsaved: File > Save or Ctrl+S writes it)", rel, what));
 }

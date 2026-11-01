@@ -139,11 +139,8 @@ std::vector<std::string> validate_zones(Zones& zones, const MapInfo& map) {
     return problems;
 }
 
-std::optional<Zones> parse_zones(std::string_view text, const MapInfo& map, const std::string& folder, std::string& err) {
-    const std::string file = "maps/" + folder + "/zones.json: ";
-    const auto fail = [&](std::string message) -> std::optional<Zones> { err = file + std::move(message); return std::nullopt; };
-    const Json j = Json::parse(text, nullptr, false);
-    if (j.is_discarded()) return fail("not valid JSON");
+std::optional<Zones> read_zones(const Json& j, std::string& err) {
+    const auto fail = [&](std::string message) -> std::optional<Zones> { err = std::move(message); return std::nullopt; };
     if (!j.is_object()) return fail("must be a JSON object");
     if (!j.contains("version") || j["version"] != 1) return fail("\"version\" must be 1");
     const Json& list = j.value("zones", Json());
@@ -151,10 +148,20 @@ std::optional<Zones> parse_zones(std::string_view text, const MapInfo& map, cons
     Zones out;
     for (size_t i = 0; i < list.size(); ++i) {
         auto zone = parse_zone(list[i], "zones[" + std::to_string(i) + "]", err);
-        if (!zone) return fail(err);
+        if (!zone) return std::nullopt;
         out.list.push_back(std::move(*zone));
     }
-    if (const auto problems = validate_zones(out, map); !problems.empty()) return fail(problems.front());
+    return out;
+}
+
+std::optional<Zones> parse_zones(std::string_view text, const MapInfo& map, const std::string& folder, std::string& err) {
+    const std::string file = "maps/" + folder + "/zones.json: ";
+    const auto fail = [&](std::string message) -> std::optional<Zones> { err = file + std::move(message); return std::nullopt; };
+    const Json j = Json::parse(text, nullptr, false);
+    if (j.is_discarded()) return fail("not valid JSON");
+    auto out = read_zones(j, err);
+    if (!out) return fail(err);
+    if (const auto problems = validate_zones(*out, map); !problems.empty()) return fail(problems.front());
     return out;
 }
 

@@ -77,14 +77,6 @@ bool MapPanel::header(const char* label, const char* section, bool defaultOpen)
     return ImGui::CollapsingHeader(label, defaultOpen ? ImGuiTreeNodeFlags_DefaultOpen : 0);
 }
 
-bool MapPanel::save(MapSession& session)
-{
-    const bool saved = session.save();
-    if (!saved && session.doc())
-        focusProblems_ = openProblems_ = true;
-    return saved;
-}
-
 void MapPanel::draw(Document& doc, MapSession& session, FileActions& files)
 {
     const bool locked = doc.play != PlayState::Stopped || doc.prefabEdit.has_value();
@@ -104,6 +96,7 @@ void MapPanel::draw(Document& doc, MapSession& session, FileActions& files)
     if (tool_ != Tool::AreaRect)
         rect_.reset();
     endStroke(session);
+    endZoneStroke(session);
     checkSelection(session.doc());
     defaultPrefabs(session);
     pollPngDialog(session);
@@ -141,10 +134,11 @@ void MapPanel::draw(Document& doc, MapSession& session, FileActions& files)
                 ImGui::PopStyleColor();
             }
             ImGui::BeginDisabled(locked);
-            drawTopBar(session);
+            drawTopBar(doc, session);
             drawTerrainEntity(doc, session);
             drawMap(doc, session);
             drawTiles(doc, session, files, locked);
+            drawZones(doc, session, files);
             drawTerrain(session);
             drawAreas(session);
             drawSpawns(session);
@@ -243,7 +237,7 @@ void MapPanel::drawSceneOverlay(const MapSession& session, ImDrawList* draw, con
     draw->PopClipRect();
 }
 
-void MapPanel::drawTopBar(MapSession& session)
+void MapPanel::drawTopBar(Document& doc, MapSession& session)
 {
     mapedit::MapDoc* z = session.doc();
     if (z) {
@@ -257,7 +251,7 @@ void MapPanel::drawTopBar(MapSession& session)
     }
     ImGui::BeginDisabled(!z);
     if (ImGui::Button("Save Map"))
-        save(session);
+        save(doc, session);
     ImGui::SameLine();
     ImGui::BeginDisabled(!z || !z->canUndo());
     if (ImGui::Button("Undo"))
@@ -484,10 +478,14 @@ void MapPanel::drawTiles(Document& doc, MapSession& session, FileActions& files,
     }
     // Zoom, pan and hover stay live while read-only; clicks are ignored then.
     ImGui::EndDisabled();
-    const std::optional<km::TileKey> t = tiles_.draw(doc, session, files, *info, locked);
+    const std::optional<km::TileKey> t = tiles_.draw(doc, session, files, *info, locked, zone_);
     ImGui::BeginDisabled(locked);
     if (!t)
         return;
+    if (tiles_.mode() == MapTiles::Mode::Zones) {
+        paintZone(*z, *info, *t);
+        return;
+    }
     if (!info->has_tile(*t)) {
         if (mapedit::within_cap(*info, *t))
             z->edit([&](mapedit::MapState& s) { mapedit::add_tile(*info, s, *t); });
@@ -590,7 +588,7 @@ void MapPanel::drawUnsavedPrompt(Document& doc, MapSession& session)
                 session.doc() ? session.doc()->folder.c_str() : "");
     if (ImGui::Button("Save")) {
         ImGui::CloseCurrentPopup();
-        if (save(session)) // blocked: the problems show, the edits stay
+        if (save(doc, session)) // blocked: the problems show, the edits stay
             run(doc, session, std::exchange(pending_, {}));
     }
     ImGui::SameLine();

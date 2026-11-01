@@ -211,6 +211,8 @@ void MapPanel::select(const MapSession& session, const std::string& id)
         area_ = area;
     if (mapedit::find_spawn(z->state, id))
         spawn_ = id;
+    if (id.starts_with("zone:")) // drawZones keeps it if the zone exists
+        zone_ = id.substr(5);
     if (!id.starts_with("object:"))
         return;
     int v[3] = {};

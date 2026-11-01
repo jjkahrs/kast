@@ -87,7 +87,7 @@ constexpr const char* kUsage =
     "[--scene in.scene] [--project dir] [--save-scene out.scene] [--select ID] [--play] [--select-network-entity] [--no-scene-post] [--no-scene-world-ui] [--add-component-popup] "
     "[--new-component-prompt Name] [--new-component Name] [--new-state-machine-prompt Name] [--build dir] "
     "[--open-menu Name] [--open-build-settings] [--open-online-settings] [--open-gui-settings] [--gui-settings-set json] [--game-resolution WxH] [--game-display-scale S] [--gui-preview-scale PERCENT] [--assets-menu path|/] [--assets-create system|fsm|gui|material|shader|shadergraph:folder] [--assets-rename path=name] [--assets-select path] [--assets-edit path] [--material-set field=json] [--material-undo N] [--material-redo N] "
-    "[--focus-panel Window] [--map-click tx,tz]... [--grid-view tx,tz,zoom] [--grid-mode scenes|tiles] [--map-section Map[,Tiles,Problems...]] [--map-tool Raise|Lower|Flatten|SetSpawn|...] [--map-select id|object:tx,tz,index] [--bake] [--mapbake exe] [--open-gui file.rml|file.guiprefab] [--gui-select id] [--gui-preview-size WxH] [--gui-pick X,Y] "
+    "[--focus-panel Window] [--map-click tx,tz]... [--zone-scene-click id]... [--grid-view tx,tz,zoom] [--grid-mode scenes|tiles|zones] [--map-section Map[,Tiles,Problems...]] [--map-tool Raise|Lower|Flatten|SetSpawn|...] [--map-select id|object:tx,tz,index] [--bake] [--mapbake exe] [--open-gui file.rml|file.guiprefab] [--gui-select id] [--gui-preview-size WxH] [--gui-pick X,Y] "
     "[--gui-add Panel|Text|RichText|Button|Toggle|Slider|Dropdown|Spinbox|Progress|ListBox|VirtualList] [--gui-set-attr name=value] [--gui-set-prop name=value] [--gui-rich-wrap tag[=value],start,end] [--gui-undo N] [--gui-redo N] [--gui-save] [--gui-close] [--gui-create-prefab folder|/] [--gui-place-prefab path]... [--gui-revert name|*] [--gui-apply name|*] [--gui-unpack] [--gui-delete] [--gui-move up|down] [--gui-reparent id|/] [--gui-hierarchy-collapse] [--gui-click id] [--gui-hover id] "
     "[--open-graph file.kshadergraph] [--graph-add type[,x,y]] [--graph-link N.pin,M.pin] [--graph-unlink N.pin] [--graph-select N[,M...]] "
     "[--graph-delete N[,M...]] [--graph-set N.setting=json] [--graph-comment title,x,y,w,h] [--graph-paste x,y] [--graph-undo N] [--graph-redo N] "
@@ -177,6 +177,7 @@ struct Options {
     std::optional<std::array<float, 3>> focus; // --focus x,z,distance: the Scene camera's pivot on the map ground
     std::optional<std::array<int, 2>> promptRemoveTile; // --prompt-remove-tile: open the Map tab's remove-tile dialog
     std::vector<std::array<int, 2>> mapClicks; // --map-click: Map tab cell clicks, one a frame (tests, screenshots)
+    std::vector<std::string> zoneSceneClicks;  // --zone-scene-click: a zone's scene button, one a frame after them
     std::optional<std::array<float, 3>> gridView; // --grid-view tx,tz,zoom: the Map tab's tile grid centred there
     std::optional<MapTiles::Mode> gridMode; // --grid-mode: what a click on the Map tab's tile grid does
     bool fileSave = false;  // --file-save: File > Save (as Ctrl+S) at frame kAddComponentPopupFrame, for tests
@@ -720,8 +721,11 @@ std::optional<Options> parseArgs(int argc, char** argv)
                 kast::log::error(std::format("Unknown {} '{}'", arg, argv[i]));
                 return std::nullopt;
             }
-        } else if (arg == "--map-select" && hasValue) {
-            options.mapSelect = argv[++i];
+        } else if ((arg == "--map-select" || arg == "--zone-scene-click") && hasValue) { // one branch: MSVC's nesting limit
+            if (arg == "--map-select")
+                options.mapSelect = argv[++i];
+            else
+                options.zoneSceneClicks.emplace_back(argv[++i]);
         } else if (arg == "--bake") {
             options.bake = true;
         } else if (arg == "--mapbake" && hasValue) {
@@ -950,7 +954,7 @@ std::optional<Options> parseArgs(int argc, char** argv)
     if (!options.editor() && editorFlags) {
         kast::log::error("--select, --play, --select-network-entity, --add-component-popup, --new-component[-prompt], "
                          "--new-state-machine-prompt, --open-menu, --open-build-settings, --open-online-settings, --open-gui-settings, "
-                         "--gui-settings-set, --game-resolution, --game-display-scale, --gui-preview-scale, --focus-panel, --map-click, --grid-view, --grid-mode, --map-section, --map-tool, --map-select, --bake, --mapbake, "
+                         "--gui-settings-set, --game-resolution, --game-display-scale, --gui-preview-scale, --focus-panel, --map-click, --zone-scene-click, --grid-view, --grid-mode, --map-section, --map-tool, --map-select, --bake, --mapbake, "
                          "--assets-menu, "
                          "--assets-create, --assets-rename, --assets-select, --assets-edit, --open-gui, --gui-select, --gui-preview-size, --gui-pick, --gui-add, --gui-save, --gui-close, "
                          "--gui-click, --gui-hover, --open-graph, --preview-model, --open-preferences, --open-external, --world-address, --online-login-env, --online-compose, the prefab "
@@ -1786,7 +1790,7 @@ int main(int argc, char** argv)
     int bakeFrames = 0;       // --bake: frames drawn while kast_mapbake ran
     // A dirty map is part of the unsaved-changes prompt, and File > Save / Ctrl+S writes it after the scene.
     files.extra = {.unsaved = [&] { return session.dirty() ? "maps/" + session.doc()->folder : std::string(); },
-                   .save = [&] { return mapPanel.save(session); },
+                   .save = [&] { return mapPanel.save(doc, session); },
                    .discard = [&] { session.reload(); }};
     // The open map in the Scene view, edit mode only: Play streams the saved map from disk (TerrainStreamer), and a
     // prefab is edited on its own.
@@ -2017,6 +2021,9 @@ int main(int argc, char** argv)
         for (size_t i = 0; i < options->mapClicks.size(); ++i) // one a frame, after --focus-panel
             if (frames.frame() == kAddComponentPopupFrame + 2 + static_cast<int>(i))
                 mapPanel.tiles().click(doc, session, files, {options->mapClicks[i][0], options->mapClicks[i][1]});
+        for (size_t i = 0; i < options->zoneSceneClicks.size(); ++i)
+            if (frames.frame() == kAddComponentPopupFrame + 2 + static_cast<int>(options->mapClicks.size() + i))
+                mapPanel.tiles().clickZone(doc, session, files, options->zoneSceneClicks[i]);
         if (options->bakeProbes && frames.frame() == kAddComponentPopupFrame - 2) // baked next frame, saved after
             panels.requestBakeAll(doc);
         if ((options->bakeLightmaps || options->bakeLightmapsAsync) && frames.frame() == kAddComponentPopupFrame - 2) {

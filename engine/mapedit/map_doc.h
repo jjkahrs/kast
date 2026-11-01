@@ -39,6 +39,9 @@ struct MapState {
     TileMap<Json> objects;       // objects/<tx>_<tz>.json; a tile without objects has no entry (and no file)
     TileMap<Json> interactables; // .server/interactables/<tx>_<tz>.json, kept in step with objects (map_edit.h)
     TileMap<HeightsPtr> heights; // tiles with a heights file or edits; absent: flat at heightMin
+    Json zones;                  // zones.json; null: no file (one implicit zone of every tile)
+    // A renamed zone's id -> its id on disk (its zones/<id>.scene), until save renames the scene file.
+    std::map<std::string, std::string> zoneRenames;
 };
 
 // Same content: JSON equal, heights the same buffers (an edit always makes a new one).

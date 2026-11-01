@@ -101,6 +101,13 @@ that go and the spawns lost)</td>
 <code>.server/interactables/</code> and <code>.server/nav/</code> files are deleted (to the Recycle Bin); its tile scene is <strong>not</strong>: it
 stays on disk as an <a href="#validation">orphan</a>. A created tile scene is written by File &gt; Save / Ctrl+S</td>
 </tr>
+<tr id="zones-row">
+<td><strong>Zones</strong></td>
+<td>the map's <a href="#zones">zones</a>: add, delete, rename (id, name), flags (a JSON object), select; <strong>Paint tiles</strong>
+switches the grid to its <strong>Paint zone</strong> mode; the selected zone's scene opens, closes or is created</td>
+<td><code>zones.json</code> (only when a zone changed); a renamed zone's <code>zones/&lt;id&gt;.scene</code> is renamed on save. A created zone
+scene is written by File &gt; Save / Ctrl+S</td>
+</tr>
 <tr id="terrain">
 <td><strong>Terrain</strong></td>
 <td><strong>Raise</strong>, <strong>Lower</strong>, <strong>Flatten</strong> brushes (left drag in the Scene view; radius, strength, falloff;
@@ -244,6 +251,49 @@ tile asks to remove it (not the map's last tile). Cells that would make the map 
 <code>+</code> and refuse.</p>
 <p><strong>Read-only.</strong> During Play and in prefab edit mode clicks do nothing (zoom, pan and tooltips still work); the note at the
 top of the tab says why. In Play the cells show the scenes that streamed in as open.</p>
+
+<h2 id="zones">Zones</h2>
+<p>A <strong>zone</strong> is a named set of a map's tiles (<code>maps/&lt;folder&gt;/zones.json</code>, format:
+<a href="../services/world/maps.html#zones">Maps, zones</a>). Every declared tile is in exactly one zone, and a zone's tiles
+are connected through shared edges (diagonal neighbours do not connect). A map without <code>zones.json</code> has one
+<strong>implicit</strong> zone: id = the map's folder, name = the map's name, every tile. Nothing is written for it: the first zone edit
+(add, paint, rename, name, flags, delete) makes it explicit, and Save Map then writes <code>zones.json</code>. Saving a map whose zones
+did not change writes no <code>zones.json</code>; keys of a zone the tab does not edit stay as they were.</p>
+<ul>
+<li><strong>Add Zone</strong> appends a zone with no tiles (<code>zone</code>, <code>zone_2</code>, ...), selects it and switches the grid to
+  Paint zone mode. A zone with no tiles blocks the save until painted.</li>
+<li><strong>Paint.</strong> In the Tiles section's <strong>Paint zone</strong> mode a click, or a drag with the left button, moves every
+  declared tile it crosses into the selected zone (one undo step per stroke; a right or middle drag pans). Cells show a thick
+  white line where neighbouring tiles are in different zones, each zone's name on its top-left visible tile, and the selected
+  zone tinted. The overlay shows on every grid mode once the map has a <code>zones.json</code>.</li>
+<li><strong>Id</strong> is applied when the field is left (letters, digits, <code>_</code>, <code>-</code>; not starting with <code>-</code>; unique, else it
+  reverts with an error); <strong>Name</strong> and <strong>Flags</strong> are one undo step per field edit. Flags are checked as you type: the
+  last valid JSON object is kept, an empty field removes them.</li>
+<li><strong>Delete Zone</strong>: its tiles go to the zone of an edge neighbour (below). With none (the last zone) they are in no
+  zone, which blocks the save.</li>
+</ul>
+<p id="zone-neighbour"><strong>Edge neighbour order.</strong> A tile's edge neighbours are tried in the order -x, +x, -z, +z. A tile added in
+Add / remove tiles mode joins the zone of its first neighbour that is in a zone (else the first zone); a deleted zone's tiles
+go to the zone of the first neighbour, of its tiles sorted by z then x, that is in another zone. A removed tile leaves its
+zone.</p>
+<p id="zone-problems"><strong>Problems block the save</strong> (listed in the Zones section as you edit, and in Problems after a save attempt; nothing of
+the map is written): a zone split in two (a paint or a removed tile), a zone with no tiles, a declared tile in no zone, a tile in
+two zones, a bad or duplicate id, a zone tile not declared in <code>map.json</code>, and a renamed zone whose new
+<code>zones/&lt;id&gt;.scene</code> is already taken.</p>
+<h3 id="zone-scenes">Zone scenes</h3>
+<p>Each zone can have its own scene, <code>maps/&lt;folder&gt;/zones/&lt;zoneId&gt;.scene</code>, like a <a href="#tile-scenes">tile scene</a>:
+world coordinates, opened additively beside the map's root scene and never made active. The selected zone's
+<strong>Create Scene</strong> adds an empty, unsaved scene (File &gt; Save / Ctrl+S writes it, making <code>zones/</code>); <strong>Open Scene</strong> /
+<strong>Close Scene</strong> open and close it (asking first if it has unsaved changes). Renaming a zone keeps its scene: until the next
+save the zone's scene is still the file of its old id, and Save Map renames it (and its <code>.meta</code>); an open one follows.
+Each action logs a line: <code>Map: opened zone west (maps/tilegrid/zones/west.scene)</code>, <code>Map: close zone ...</code>,
+<code>Map: created ... for zone east (unsaved: ...)</code>, <code>Map: zone vale renamed from west: its scene is ...</code>.</p>
+<p>Warnings (the Zones section's <strong>Zone scene problems</strong> and the Console, once each; they never block a save): a scene of no
+zone (an <strong>orphan</strong>: deleting a zone leaves its scene file), a root entity outside its zone's tiles (<code>root entity 'West
+Gate' at (300, 300) is in zone east, outside zone west</code>), a file in <code>zones/</code> that is not <code>&lt;zoneId&gt;.scene</code>
+(ignored), and a scene file that does not read.</p>
+<p>The Zones section is read-only during Play and in prefab edit mode, as the rest of the tab. The engine does not stream zone
+scenes yet.</p>
 
 <h2 id="tile-scenes">Tile scenes</h2>
 <p>Each 256 m tile of a map can have its own scene file; in Play the engine streams them in and out around the player like

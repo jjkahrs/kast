@@ -3981,7 +3981,7 @@ void checkBuild()
 void checkBuildSettings()
 {
     check(projectScenes(KAST_TEST_PROJECT_DIR) ==
-              std::vector<std::string>{"additive_a.scene", "additive_b.scene", "additive_player.scene", "area_lights.scene", "audio.scene", "custom_shaders.scene", "dof.scene", "events.scene", "fsm.scene", "gpu_textures.scene", "gpu_textures_bad.scene", "health.scene", "ibl_shader.scene", "ibl_sky.scene", "ibl_sky_cubemap.scene", "lightmap_room.scene", "map_objects.scene", "maps/tilegrid/scenes/0_0.scene", "maps/tilegrid/scenes/0_1.scene", "maps/tilegrid/scenes/1_0.scene", "maps/tilegrid/scenes/1_1.scene", "maps/tilegrid/scenes/3_1.scene", "material_features.scene",
+              std::vector<std::string>{"additive_a.scene", "additive_b.scene", "additive_player.scene", "area_lights.scene", "audio.scene", "custom_shaders.scene", "dof.scene", "events.scene", "fsm.scene", "gpu_textures.scene", "gpu_textures_bad.scene", "health.scene", "ibl_shader.scene", "ibl_sky.scene", "ibl_sky_cubemap.scene", "lightmap_room.scene", "map_objects.scene", "maps/tilegrid/scenes/0_0.scene", "maps/tilegrid/scenes/0_1.scene", "maps/tilegrid/scenes/1_0.scene", "maps/tilegrid/scenes/1_1.scene", "maps/tilegrid/scenes/3_1.scene", "maps/tilegrid/zones/west.scene", "material_features.scene",
                                        "materials.scene", "missing_component.scene", "models.scene",
                                        "models_anim.scene", "models_lua.scene", "models_material.scene",
                                        "models_missing.scene", "net_a.scene", "net_b.scene", "online_auth.scene", "online_npcs.scene", "online_replication.scene", "online_session.scene", "online_world.scene", "orm_split.scene",
@@ -4003,7 +4003,7 @@ void checkBuildSettings()
     std::filesystem::copy_file(root / "scene_b.scene", root / "levels/c.scene");
     writeFile(root / "broken.scene", "{oops");
     check(projectScenes(root) == std::vector<std::string>{"additive_a.scene", "additive_b.scene", "additive_player.scene", "area_lights.scene", "audio.scene", "broken.scene", "custom_shaders.scene", "dof.scene", "events.scene", "fsm.scene",
-                                                          "gpu_textures.scene", "gpu_textures_bad.scene", "health.scene", "ibl_shader.scene", "ibl_sky.scene", "ibl_sky_cubemap.scene", "levels/c.scene", "lightmap_room.scene", "map_objects.scene", "maps/tilegrid/scenes/0_0.scene", "maps/tilegrid/scenes/0_1.scene", "maps/tilegrid/scenes/1_0.scene", "maps/tilegrid/scenes/1_1.scene", "maps/tilegrid/scenes/3_1.scene", "material_features.scene", "materials.scene",
+                                                          "gpu_textures.scene", "gpu_textures_bad.scene", "health.scene", "ibl_shader.scene", "ibl_sky.scene", "ibl_sky_cubemap.scene", "levels/c.scene", "lightmap_room.scene", "map_objects.scene", "maps/tilegrid/scenes/0_0.scene", "maps/tilegrid/scenes/0_1.scene", "maps/tilegrid/scenes/1_0.scene", "maps/tilegrid/scenes/1_1.scene", "maps/tilegrid/scenes/3_1.scene", "maps/tilegrid/zones/west.scene", "material_features.scene", "materials.scene",
                                                           "missing_component.scene", "models.scene",
                                                           "models_anim.scene", "models_lua.scene",
                                                           "models_material.scene", "models_missing.scene", "net_a.scene",

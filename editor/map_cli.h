@@ -29,8 +29,11 @@ constexpr const char* kUsage =
     "--add-object type,prefab,x,z[,yaw[,scale[,box,hx,hy,hz|cylinder,r,h]]] --set-interactable id,range,event[,name[,data]] "
     "--move-object tx,tz,i,x,z --delete-object tx,tz,i --scatter x,z,radius,count,seed,scaleMin,scaleMax,prefab[+prefab] "
     "--erase-visuals x,z,radius --generate-heights seed[,scale,octaves,persistence,lacunarity] "
-    "--terrain-colors pct,r,g,b,pct,r,g,b... --create-terrain-material --save-map --validate --expect-save-fail --undo "
-    "--redo. Then: [--headless] [--no-recycle] [--focus x,z,distance] [--sculpt-loop] [--prompt-remove-tile tx,tz]";
+    "--terrain-colors pct,r,g,b,pct,r,g,b... --create-terrain-material --add-zone id[,name] "
+    "--paint-zone id,tx,tz[,tx2,tz2] --delete-zone id --rename-zone old,new --zone-name id,name --zone-flags id,{json} "
+    "--save-map --validate --expect-save-fail --undo "
+    "--redo. Then: [--headless] [--no-recycle] [--focus x,z,distance] [--sculpt-loop] [--prompt-remove-tile tx,tz] "
+    "[--zone-scene-click id]...";
 
 // One map edit flag and its value (empty for flags without one).
 struct Op {

@@ -162,10 +162,10 @@ Json tile_rects(const TileSet& tiles);
 // Whether declaring tile t keeps the map's bounding box within kMaxMapTiles a side.
 bool within_cap(const kast::map::MapInfo& info, TileKey t);
 // Declares tile t (false if it already is, or it would grow the map past kMaxMapTiles a side). Its heights start flat at heightMin, then take the shared edges of the
-// declared neighbours, so no seam appears.
+// declared neighbours, so no seam appears. With a zones.json it joins a zone (zone_edit.h zones_add_tile).
 bool add_tile(const kast::map::MapInfo& info, MapState& state, TileKey t);
 // Undeclares tile t (false if it is not declared, or is the last one) and drops its heights, spawn, objects and
-// interactables files.
+// interactables files, and leaves its zone (zones_remove_tile).
 bool remove_tile(const kast::map::MapInfo& info, MapState& state, TileKey t);
 
 } // namespace mapedit

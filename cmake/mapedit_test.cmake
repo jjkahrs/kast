@@ -17,6 +17,9 @@
 # MODE bake:      open MAP and Bake Navmesh in the window (MAPBAKE); it must exit 0, write .server/nav/*.navtile and
 #                 have drawn frames while kast_mapbake ran. HEADLESS: with --headless instead (no window, no screenshot).
 #                 Skipped (passes) without kast_mapbake.
+# MODE zones:     open MAP (of PROJECT's copy), run ARGS, save, screenshot (the Zones section); it must validate.
+#                 EXPECT_FILES / EXPECT_GONE: map-relative files that must exist / be gone; EXPECT_JSON / FORBID_JSON:
+#                 regexes zones.json must / must not match; EXPECT_LOG: a regex the editor's output must match.
 # MODE file_save: open SCENE (project-relative) and MAP, run ARGS (edits that make the map invalid and the scene dirty),
 #                 then File > Save (--file-save, as Ctrl+S): the map's files stay byte-identical with the problems in
 #                 the Console, and the scene is still written (it must then contain EXPECT_SCENE).
@@ -24,6 +27,8 @@ string(REPLACE "|" ";" ARGS "${ARGS}") # | in the test command: no ; escaping th
 string(REPLACE "|" ";" EXPECT_FILES "${EXPECT_FILES}")
 string(REPLACE "|" ";" ARGS2 "${ARGS2}")
 string(REPLACE "|" ";" EXPECT_GONE "${EXPECT_GONE}")
+string(REPLACE "|" ";" EXPECT_JSON "${EXPECT_JSON}")
+string(REPLACE "|" ";" FORBID_JSON "${FORBID_JSON}")
 set(copy "${OUT_DIR}/${NAME}")
 set(shot "${OUT_DIR}/${NAME}.png")
 set(work "${OUT_DIR}/${NAME}.run") # the editor's working directory: a fresh imgui.ini, recent list and settings
@@ -191,6 +196,37 @@ ${out}")
   if(TERRAIN_GEN)
     terrain_gen_checks()
   endif()
+elseif(MODE STREQUAL "zones")
+  run(--map "${MAP}" ${ARGS} --save-map --focus-panel Map --map-section Tiles,Zones --grid-mode zones --frames 20
+      --size 1600x1000 --screenshot "${shot}")
+  if(EXPECT_LOG AND NOT out MATCHES "${EXPECT_LOG}")
+    message(FATAL_ERROR "the output does not match ${EXPECT_LOG}:
+${out}")
+  endif()
+  run(--map "${MAP}" --validate --headless)
+  foreach(f ${EXPECT_FILES})
+    if(NOT EXISTS "${copy}/maps/${MAP}/${f}")
+      message(FATAL_ERROR "maps/${MAP}/${f} does not exist")
+    endif()
+  endforeach()
+  foreach(f ${EXPECT_GONE})
+    if(EXISTS "${copy}/maps/${MAP}/${f}")
+      message(FATAL_ERROR "maps/${MAP}/${f} should be gone")
+    endif()
+  endforeach()
+  file(READ "${copy}/maps/${MAP}/zones.json" zones)
+  foreach(re ${EXPECT_JSON})
+    if(NOT zones MATCHES "${re}")
+      message(FATAL_ERROR "zones.json does not match ${re}:
+${zones}")
+    endif()
+  endforeach()
+  foreach(re ${FORBID_JSON})
+    if(zones MATCHES "${re}")
+      message(FATAL_ERROR "zones.json matches ${re}:
+${zones}")
+    endif()
+  endforeach()
 elseif(MODE STREQUAL "bake")
   if(NOT MAPBAKE OR NOT EXISTS "${MAPBAKE}")
     message(STATUS "kast_mapbake not built (${MAPBAKE}): skipped")
