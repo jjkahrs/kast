@@ -1,10 +1,10 @@
-// Assert-style checks for the zone builder's document, file and terrain logic (engine/zone), no window. Works
-// on copies of the sample maps in a temp folder. Exit 0 if every check passes. Run by CTest as zone_self_check.
-#include <zone/process_runner.h>
-#include <zone/terrain_edit.h>
-#include <zone/zone_doc.h>
-#include <zone/zone_edit.h>
-#include <zone/zone_io.h>
+// Assert-style checks for the map builder's document, file and terrain logic (engine/mapedit), no window. Works
+// on copies of the sample maps in a temp folder. Exit 0 if every check passes. Run by CTest as mapedit_self_check.
+#include <mapedit/process_runner.h>
+#include <mapedit/terrain_edit.h>
+#include <mapedit/map_doc.h>
+#include <mapedit/map_edit.h>
+#include <mapedit/map_io.h>
 
 #include <crash_dialogs.h>
 
@@ -43,7 +43,7 @@ namespace {
 
 namespace fs = std::filesystem;
 namespace km = kast::map;
-using namespace zone;
+using namespace mapedit;
 
 int failures = 0;
 
@@ -67,7 +67,7 @@ Json json_file(const fs::path& file) { return Json::parse(bytes(file), nullptr, 
 
 // A fresh copy of a project's maps/ in the temp folder; returns the copy's root.
 fs::path copy_project(const fs::path& project, const std::string& name) {
-    const fs::path root = fs::temp_directory_path() / "kast_zone_self_check" / name;
+    const fs::path root = fs::temp_directory_path() / "kast_mapedit_self_check" / name;
     fs::remove_all(root);
     fs::create_directories(root);
     fs::copy(project / "maps", root / "maps", fs::copy_options::recursive);
@@ -75,8 +75,8 @@ fs::path copy_project(const fs::path& project, const std::string& name) {
     return root;
 }
 
-void print_errors(const std::vector<ZoneError>& errors) {
-    for (const ZoneError& e : errors) std::fprintf(stderr, "  %s: %s\n", e.file.c_str(), e.message.c_str());
+void print_errors(const std::vector<MapError>& errors) {
+    for (const MapError& e : errors) std::fprintf(stderr, "  %s: %s\n", e.file.c_str(), e.message.c_str());
 }
 
 // Load + save with no edits writes nothing; a forced rewrite of every file reads back the same JSON (so every key the
@@ -173,7 +173,7 @@ void check_new_map() {
 
     // Duplicate map id blocks the save and writes nothing.
     const auto mtime = fs::last_write_time(root / "maps" / "plains" / "map.json");
-    loaded->edit([](ZoneState& s) { s.manifest["id"] = 10u; });
+    loaded->edit([](MapState& s) { s.manifest["id"] = 10u; });
     const auto errors = save_map(p, *loaded, false);
     CHECK(errors.size() == 1 && errors[0].file == "maps/plains/map.json" && errors[0].message.find("already used by maps/meadow") != std::string::npos);
     CHECK(fs::last_write_time(root / "maps" / "plains" / "map.json") == mtime);
@@ -187,8 +187,8 @@ void check_undo() {
     CHECK(doc.has_value());
     if (!doc) return;
     const Json original = doc->state.manifest;
-    doc->edit([](ZoneState& s) { s.manifest["name"] = "Changed"; });
-    doc->edit([](ZoneState&) {}); // no change: no step
+    doc->edit([](MapState& s) { s.manifest["name"] = "Changed"; });
+    doc->edit([](MapState&) {}); // no change: no step
     CHECK(doc->dirty() && doc->canUndo());
     doc->undo();
     CHECK(doc->state.manifest == original && !doc->dirty() && !doc->canUndo() && doc->canRedo());
@@ -200,7 +200,7 @@ void check_raycast() {
     km::MapInfo info;
     info.tiles = {{0, 0, 1, 0}};
     info.heightRange = std::array<float, 2>{0.0f, 100.0f};
-    ZoneState state;
+    MapState state;
     auto h = std::make_shared<km::Heights>(km::flat_heights());
     for (auto& s : *h) s = 32768; // ~50 m
     state.heights[{0, 0}] = h;
@@ -216,7 +216,7 @@ void check_raycast() {
 }
 
 // Same files' content (heights compared by value, not buffer).
-bool same_content(const ZoneState& a, const ZoneState& b) {
+bool same_content(const MapState& a, const MapState& b) {
     if (a.manifest != b.manifest || a.areas != b.areas || a.spawns != b.spawns || a.heights.size() != b.heights.size())
         return false;
     for (const auto& [t, h] : a.heights)
@@ -225,24 +225,24 @@ bool same_content(const ZoneState& a, const ZoneState& b) {
 }
 
 // A flat 2 x 2 tile map, heightRange [0, 100], in memory.
-ZoneDoc flat_map(Project& p) {
+MapDoc flat_map(Project& p) {
     std::string err;
     auto doc = new_map(p, "sculpt", "Sculpt", next_map_id(p), 2, 2, err);
     CHECK(doc.has_value());
     return std::move(*doc);
 }
 
-km::MapInfo info_of(const ZoneDoc& doc) {
+km::MapInfo info_of(const MapDoc& doc) {
     std::string err;
     return *doc.info(err);
 }
 
-float height_at(const ZoneDoc& doc, TileKey t, int u, int v) {
+float height_at(const MapDoc& doc, TileKey t, int u, int v) {
     return km::sample_height(tile_heights(doc.state, t)[size_t(v) * km::kTileSamples + size_t(u)], info_of(doc));
 }
 
 // Every pair of tiles sharing an edge or a corner holds the same samples there.
-bool seams_equal(const ZoneDoc& doc) {
+bool seams_equal(const MapDoc& doc) {
     const km::MapInfo info = info_of(doc);
     constexpr int n = km::kTileSamples;
     const auto at = [&](TileKey t, int u, int v) { return tile_heights(doc.state, t)[size_t(v) * n + size_t(u)]; };
@@ -260,14 +260,14 @@ bool seams_equal(const ZoneDoc& doc) {
 void check_brushes() {
     const fs::path root = copy_project(kSource / "samples" / "starter-mmo", "brushes");
     Project p = scan_project(root);
-    ZoneDoc doc = flat_map(p);
+    MapDoc doc = flat_map(p);
     const km::MapInfo info = info_of(doc);
     const float step = 100.0f / 65535.0f; // one quantization step of [0, 100]
 
     Brush brush;
     brush.radius = 10;
     brush.falloff = 0.5f; // full weight within 5 m
-    doc.edit([&](ZoneState& s) { CHECK(apply_brush(info, s, 100, 100, brush, 5).size() == 1); });
+    doc.edit([&](MapState& s) { CHECK(apply_brush(info, s, 100, 100, brush, 5).size() == 1); });
     CHECK(std::fabs(height_at(doc, {0, 0}, 100, 100) - 5) <= step);
     CHECK(std::fabs(height_at(doc, {0, 0}, 103, 100) - 5) <= step); // inside the full-weight core
     const float mid = height_at(doc, {0, 0}, 107, 100);              // in the falloff
@@ -276,32 +276,32 @@ void check_brushes() {
     CHECK(doc.state.heights.size() == 1); // only the touched tile has data
 
     brush.mode = BrushMode::Lower;
-    doc.edit([&](ZoneState& s) { apply_brush(info, s, 100, 100, brush, 2); });
+    doc.edit([&](MapState& s) { apply_brush(info, s, 100, 100, brush, 2); });
     CHECK(std::fabs(height_at(doc, {0, 0}, 100, 100) - 3) <= 2 * step);
 
     brush.mode = BrushMode::Flatten;
     brush.radius = 20;
     brush.target = 10;
-    doc.edit([&](ZoneState& s) { apply_brush(info, s, 100, 100, brush, 1); });
+    doc.edit([&](MapState& s) { apply_brush(info, s, 100, 100, brush, 1); });
     CHECK(std::fabs(height_at(doc, {0, 0}, 100, 100) - 10) <= step);
     CHECK(std::fabs(height_at(doc, {0, 0}, 108, 95) - 10) <= step);
 
     // Range: raising far past the top clamps to heightRange's max; lowering past the bottom to its min.
     brush.mode = BrushMode::Raise;
-    doc.edit([&](ZoneState& s) { apply_brush(info, s, 50, 50, brush, 1000); });
+    doc.edit([&](MapState& s) { apply_brush(info, s, 50, 50, brush, 1000); });
     CHECK(height_at(doc, {0, 0}, 50, 50) == 100);
     brush.mode = BrushMode::Lower;
-    doc.edit([&](ZoneState& s) { apply_brush(info, s, 50, 50, brush, 5000); });
+    doc.edit([&](MapState& s) { apply_brush(info, s, 50, 50, brush, 5000); });
     CHECK(height_at(doc, {0, 0}, 50, 50) == 0);
 
     // A stroke on the corner of all four tiles changes all four, and every shared edge stays equal.
     brush.mode = BrushMode::Raise;
     brush.radius = 30;
     TileSet touched;
-    doc.edit([&](ZoneState& s) { touched = apply_brush(info, s, 256, 256, brush, 7); });
+    doc.edit([&](MapState& s) { touched = apply_brush(info, s, 256, 256, brush, 7); });
     CHECK(touched.size() == 4);
     CHECK(height_at(doc, {0, 0}, 256, 256) > 6.9f && height_at(doc, {1, 1}, 0, 0) == height_at(doc, {0, 0}, 256, 256));
-    for (float x = 240; x < 275; x += 3.7f) doc.edit([&](ZoneState& s) { apply_brush(info, s, x, 256 - (x - 256), brush, 1.3f); });
+    for (float x = 240; x < 275; x += 3.7f) doc.edit([&](MapState& s) { apply_brush(info, s, x, 256 - (x - 256), brush, 1.3f); });
     CHECK(seams_equal(doc));
 
     // The ray hits the raised ground.
@@ -320,17 +320,17 @@ void check_brushes() {
 void check_height_range() {
     const fs::path root = copy_project(kSource / "samples" / "starter-mmo", "range");
     Project p = scan_project(root);
-    ZoneDoc doc = flat_map(p);
+    MapDoc doc = flat_map(p);
     km::MapInfo info = info_of(doc);
     Brush brush;
     brush.radius = 40;
     brush.falloff = 1;
-    doc.edit([&](ZoneState& s) { apply_brush(info, s, 256, 100, brush, 37.5f); });
-    const ZoneState before = doc.state;
+    doc.edit([&](MapState& s) { apply_brush(info, s, 256, 100, brush, 37.5f); });
+    const MapState before = doc.state;
 
     // Wider range: every world height kept within one step of the new range, nothing clipped, flat tiles move too.
     size_t clipped = 99;
-    doc.edit([&](ZoneState& s) { clipped = set_height_range(info, s, -50, 200); });
+    doc.edit([&](MapState& s) { clipped = set_height_range(info, s, -50, 200); });
     CHECK(clipped == 0);
     const km::MapInfo wide = info_of(doc);
     CHECK(km::height_range(wide)[0] == -50 && km::height_range(wide)[1] == 200);
@@ -348,7 +348,7 @@ void check_height_range() {
     // Narrower range: the samples outside clip to it and are counted.
     const size_t expect = count_clipped(wide, doc.state, 10, 20);
     CHECK(expect > 0);
-    doc.edit([&](ZoneState& s) { clipped = set_height_range(wide, s, 10, 20); });
+    doc.edit([&](MapState& s) { clipped = set_height_range(wide, s, 10, 20); });
     CHECK(clipped == expect);
     const km::MapInfo narrow = info_of(doc);
     CHECK(height_at(doc, {0, 0}, 0, 0) == 10 && height_at(doc, {0, 0}, 256, 100) == 20);
@@ -362,7 +362,7 @@ void check_height_range() {
 void check_png() {
     const fs::path root = copy_project(kSource / "samples" / "starter-mmo", "png");
     Project p = scan_project(root);
-    ZoneDoc doc = flat_map(p);
+    MapDoc doc = flat_map(p);
     const km::MapInfo info = info_of(doc);
     km::Heights ramp(size_t(km::kTileSamples) * km::kTileSamples);
     for (size_t i = 0; i < ramp.size(); ++i) ramp[i] = uint16_t((i * 7919) % 65536); // every bit pattern
@@ -371,9 +371,9 @@ void check_png() {
     const auto decoded = km::decode_heights(png, ".png", err);
     CHECK(decoded && *decoded == ramp);
 
-    const ZoneState before = doc.state;
+    const MapState before = doc.state;
     bool ok = false;
-    doc.edit([&](ZoneState& s) { ok = import_png16(info, s, {0, 0}, png, err); });
+    doc.edit([&](MapState& s) { ok = import_png16(info, s, {0, 0}, png, err); });
     CHECK(ok);
     CHECK(*doc.state.heights.at({0, 0}) == ramp);
     CHECK(seams_equal(doc)); // the neighbours' edges took the imported edge
@@ -388,7 +388,7 @@ void check_png() {
         STBIW_FREE(data);
         return out;
     };
-    const ZoneState imported = doc.state;
+    const MapState imported = doc.state;
     CHECK(!import_png16(info, doc.state, {1, 0}, write8(257, 257), err) && err.find("8-bit") != std::string::npos);
     CHECK(!import_png16(info, doc.state, {1, 0}, write8(10, 10), err) && err.find("need 257 x 257") != std::string::npos);
     CHECK(!import_png16(info, doc.state, {1, 0}, "not a png", err) && err.starts_with("png:"));
@@ -399,7 +399,7 @@ void check_png() {
 }
 
 // Every file the state would write, as text: the JSON dumps and the heights' .r16 bytes.
-std::string serialize(const ZoneState& s) {
+std::string serialize(const MapState& s) {
     std::string out = s.manifest.dump() + "\n" + s.areas.dump() + "\n";
     for (const auto& [t, j] : s.spawns) out += tile_name(t) + ":" + j.dump() + "\n";
     for (const auto& [t, j] : s.objects) out += "objects " + tile_name(t) + ":" + j.dump() + "\n";
@@ -415,14 +415,14 @@ std::map<std::string, fs::file_time_type> mtimes(const fs::path& dir) {
     return out;
 }
 
-bool has_error(const std::vector<ZoneError>& errors, const std::string& file, const std::string& text) {
-    for (const ZoneError& e : errors)
+bool has_error(const std::vector<MapError>& errors, const std::string& file, const std::string& text) {
+    for (const MapError& e : errors)
         if (e.file == file && e.message.find(text) != std::string::npos) return true;
     print_errors(errors);
     return false;
 }
 
-// The instance fields (docs/editor/zone-builder.html#instance): a world map made an instance map, its fields set, saved
+// The instance fields (docs/editor/map-builder.html#instance): a world map made an instance map, its fields set, saved
 // and read back; undo returns it to the world map it was; validation as the server's, the exit against the project.
 void check_instance() {
     const fs::path root = copy_project(kSource / "tests" / "project", "instance");
@@ -431,13 +431,13 @@ void check_instance() {
     auto loaded = load_map(p, "cave", err);
     CHECK(loaded.has_value());
     if (!loaded) return;
-    ZoneDoc& doc = *loaded;
+    MapDoc& doc = *loaded;
     const Json before = doc.state.manifest;
     const std::string file = "maps/cave/map.json";
 
-    doc.edit([](ZoneState& s) { set_instance(s, true, {1, {1030, 0, 1060}, 3.14f}); });
-    doc.edit([](ZoneState& s) { set_max_players(s, 4); });
-    doc.edit([](ZoneState& s) { set_empty_timeout(s, 60); });
+    doc.edit([](MapState& s) { set_instance(s, true, {1, {1030, 0, 1060}, 3.14f}); });
+    doc.edit([](MapState& s) { set_max_players(s, 4); });
+    doc.edit([](MapState& s) { set_empty_timeout(s, 60); });
     CHECK(doc.state.manifest["type"] == "instance" && doc.state.manifest["maxPlayers"] == 4 &&
           doc.state.manifest["emptyTimeoutSec"] == 60 && doc.state.manifest["exit"]["map"] == 1);
     print_errors(validate(p, doc));
@@ -451,7 +451,7 @@ void check_instance() {
     CHECK(again && again->state.manifest == doc.state.manifest); // round trip: what the panel wrote is what loads
     // A second save with no edits writes nothing; set_instance on an instance map keeps its exit.
     CHECK(again && !again->dirty());
-    doc.edit([](ZoneState& s) { set_instance(s, true, {9, {0, 0, 0}, 0}); });
+    doc.edit([](MapState& s) { set_instance(s, true, {9, {0, 0, 0}, 0}); });
     CHECK(doc.state.manifest["exit"]["map"] == 1);
 
     // Undo back to the world map, field by field; redo again.
@@ -459,7 +459,7 @@ void check_instance() {
     CHECK(doc.state.manifest == before && !doc.state.manifest.contains("type"));
     for (int i = 0; i < 3; ++i) doc.redo();
     CHECK(doc.state.manifest["maxPlayers"] == 4);
-    doc.edit([](ZoneState& s) { set_max_players(s, std::nullopt); });
+    doc.edit([](MapState& s) { set_max_players(s, std::nullopt); });
     CHECK(!doc.state.manifest.contains("maxPlayers") && validate(p, doc).empty()); // unlimited
 
     // The exit as the server checks it: unknown map, off its tiles, inside a portal there, on an instance map.
@@ -471,23 +471,23 @@ void check_instance() {
         {{2, {10, 0, 10}, 0}, "\"exit\": map 2 is an instance map"}, // itself
     };
     for (const auto& [exit, want] : exits) {
-        doc.edit([&](ZoneState& s) { set_exit(s, exit); });
+        doc.edit([&](MapState& s) { set_exit(s, exit); });
         CHECK(has_error(validate(p, doc), file, want));
     }
-    doc.edit([](ZoneState& s) { set_exit(s, {1, {1030, 0, 1060}, 0}); });
+    doc.edit([](MapState& s) { set_exit(s, {1, {1030, 0, 1060}, 0}); });
     CHECK(validate(p, doc).empty());
 
     // Bad values and misplaced fields: the manifest's parse error, file and field named (the panel's map.json: line).
-    doc.edit([](ZoneState& s) { s.manifest["maxPlayers"] = 0; });
+    doc.edit([](MapState& s) { s.manifest["maxPlayers"] = 0; });
     CHECK(has_error(validate(p, doc), file, "\"maxPlayers\" must be an integer >= 1"));
     CHECK(save_map(p, doc, false).size() == 1); // blocked: nothing written
     doc.undo();
-    doc.edit([](ZoneState& s) { s.manifest.erase("exit"); });
+    doc.edit([](MapState& s) { s.manifest.erase("exit"); });
     CHECK(has_error(validate(p, doc), file, "\"exit\" must be {"));
     doc.undo();
-    doc.edit([](ZoneState& s) { set_instance(s, false); });
+    doc.edit([](MapState& s) { set_instance(s, false); });
     CHECK(!doc.state.manifest.contains("exit") && !doc.state.manifest.contains("emptyTimeoutSec") && validate(p, doc).empty());
-    doc.edit([](ZoneState& s) { s.manifest["emptyTimeoutSec"] = 5; });
+    doc.edit([](MapState& s) { s.manifest["emptyTimeoutSec"] = 5; });
     CHECK(has_error(validate(p, doc), file, "\"emptyTimeoutSec\" is only for instance maps"));
 
     // The sample crypt (an instance map) and the start map's portal into it validate.
@@ -504,9 +504,9 @@ void check_areas() {
     auto loaded = load_map(p, "meadow", err);
     CHECK(loaded.has_value());
     if (!loaded) return;
-    ZoneDoc& doc = *loaded;
+    MapDoc& doc = *loaded;
 
-    doc.edit([](ZoneState& s) {
+    doc.edit([](MapState& s) {
         add_rect_area(s, "town", {60, 20}, {20, 60}, 5); // corners in any order
         areas_list(s)[*find_area(s, "town")]["parent"] = "meadow";
         add_polygon_area(s, "hill", {{100, 100}, {140, 100}, {120, 140}}, 6);
@@ -530,14 +530,14 @@ void check_areas() {
     CHECK(again && again->state.areas == doc.state.areas);
 
     // Fields the tool does not edit survive renames and reshapes; children follow a rename.
-    doc.edit([](ZoneState& s) {
+    doc.edit([](MapState& s) {
         Json& meadow = areas_list(s)[*find_area(s, "meadow")];
         meadow["y"] = Json::parse("[-5, 50]");
         meadow["music"] = "sounds/meadow.ogg";
         meadow["flags"] = {{"pvp", true}};
         meadow["custom"] = 1;
     });
-    doc.edit([](ZoneState& s) {
+    doc.edit([](MapState& s) {
         rename_area(s, *find_area(s, "meadow"), "fields");
         move_area_vertex(areas_list(s)[*find_area(s, "fields")], 2, {250, 250});
     });
@@ -549,7 +549,7 @@ void check_areas() {
     CHECK(validate(p, doc).empty());
 
     // A polygon vertex move, then a whole-area move.
-    doc.edit([](ZoneState& s) {
+    doc.edit([](MapState& s) {
         move_area_vertex(areas_list(s)[*find_area(s, "hill")], 2, {120, 150});
         move_area(areas_list(s)[*find_area(s, "town")], 5, -5);
     });
@@ -558,11 +558,11 @@ void check_areas() {
 
     // Blocked saves write nothing: a portal to an unknown map, then equal-priority overlap.
     const auto before = mtimes(root / "maps");
-    doc.edit([](ZoneState& s) { areas_list(s)[*find_area(s, "hill")]["portal"]["map"] = 999u; });
+    doc.edit([](MapState& s) { areas_list(s)[*find_area(s, "hill")]["portal"]["map"] = 999u; });
     auto errors = save_map(p, doc, false);
     CHECK(has_error(errors, "maps/meadow/areas.json", "area \"hill\": portal to unknown map 999"));
     doc.undo();
-    doc.edit([](ZoneState& s) { add_rect_area(s, "dup", {30, 30}, {50, 50}, 5); });
+    doc.edit([](MapState& s) { add_rect_area(s, "dup", {30, 30}, {50, 50}, 5); });
     errors = save_map(p, doc, false);
     CHECK(has_error(errors, "maps/meadow/areas.json", "overlap with equal priority 5"));
     CHECK(mtimes(root / "maps") == before);
@@ -570,7 +570,7 @@ void check_areas() {
     CHECK(validate(p, doc).empty());
 
     // Deleting a parent makes its children top level.
-    doc.edit([](ZoneState& s) { delete_area(s, *find_area(s, "town")); });
+    doc.edit([](MapState& s) { delete_area(s, *find_area(s, "town")); });
     CHECK(!find_area(doc.state, "town") && !doc.state.areas["areas"][*find_area(doc.state, "hill")].contains("parent"));
     CHECK(validate(p, doc).empty());
 }
@@ -579,14 +579,14 @@ void check_spawns() {
     const fs::path root = copy_project(kSource / "samples" / "starter-mmo", "spawns");
     CHECK(npc_names(kSource / "samples" / "starter-mmo") == (std::vector<std::string>{"Bat", "Elder", "Guard"}));
     Project p = scan_project(root);
-    ZoneDoc doc = flat_map(p);
+    MapDoc doc = flat_map(p);
     std::string err;
     const auto spawns_of = [&](TileKey t) {
         return km::parse_spawns(nlohmann::json(doc.state.spawns.at(t)), t, err);
     };
 
     // Two spawns sharing a path in tile 0_0, and a third with a different path of the same name.
-    doc.edit([](ZoneState& s) {
+    doc.edit([](MapState& s) {
         const SpawnRef a = add_spawn(s, "s1", "Guard", {100, 0, 100}, 0.5f, 30);
         add_path(s, a, "patrol", {{100, 0, 100}, {120, 0, 100}}, 2, true);
         const SpawnRef b = add_spawn(s, "s2", "Guard", {110, 0, 110}, 0, -1);
@@ -596,16 +596,16 @@ void check_spawns() {
     CHECK(spawns_of({0, 0}) && spawns_of({0, 0})->size() == 2 && (*spawns_of({0, 0}))[0].path->points.size() == 2);
 
     // Across the border: s1 moves to 1_0's file with a copy of its path (s2 still uses the original).
-    doc.edit([](ZoneState& s) { move_spawn(s, *find_spawn(s, "s1"), {300, 0, 100}); });
+    doc.edit([](MapState& s) { move_spawn(s, *find_spawn(s, "s1"), {300, 0, 100}); });
     CHECK(find_spawn(doc.state, "s1")->tile == (TileKey{1, 0}));
     CHECK(doc.state.spawns.at({1, 0})["paths"]["patrol"] == doc.state.spawns.at({0, 0})["paths"]["patrol"]);
     CHECK(spawn_json(doc.state, *find_spawn(doc.state, "s1"))["path"] == "patrol");
     // s2 follows: the same path is already there, so it is shared; the old file loses it with its last user.
-    doc.edit([](ZoneState& s) { move_spawn(s, *find_spawn(s, "s2"), {300, 0, 120}); });
+    doc.edit([](MapState& s) { move_spawn(s, *find_spawn(s, "s2"), {300, 0, 120}); });
     CHECK(!doc.state.spawns.at({0, 0})["paths"].contains("patrol") && doc.state.spawns.at({0, 0})["spawns"].empty());
     CHECK(doc.state.spawns.at({1, 0})["paths"].size() == 1);
     // A different path under the same name is renamed on the way in.
-    doc.edit([](ZoneState& s) {
+    doc.edit([](MapState& s) {
         const SpawnRef c = add_spawn(s, "s3", "Bat", {50, 0, 50}, 0, 10);
         add_path(s, c, "patrol", {{50, 0, 50}, {60, 0, 60}, {40, 0, 60}}, 0, false);
         move_spawn(s, *find_spawn(s, "s3"), {260, 0, 50});
@@ -614,7 +614,7 @@ void check_spawns() {
     CHECK(doc.state.spawns.at({1, 0})["paths"]["patrol_2"]["points"].size() == 3);
     CHECK(spawns_of({1, 0}) && spawns_of({1, 0})->size() == 3);
     // Path points and a heading/respawn edit keep the parser happy.
-    doc.edit([](ZoneState& s) {
+    doc.edit([](MapState& s) {
         add_path_point(s, *find_spawn(s, "s3"), {270, 0, 70});
         spawn_json(s, *find_spawn(s, "s3"))["respawnSec"] = -1;
     });
@@ -628,30 +628,30 @@ void check_spawns() {
 
     // Blocked: a duplicate id across files, and a spawn off the map's tiles. Nothing is written.
     const auto before = mtimes(root / "maps");
-    doc.edit([](ZoneState& s) { add_spawn(s, "s1", "Bat", {100, 0, 300}, 0, 10); });
+    doc.edit([](MapState& s) { add_spawn(s, "s1", "Bat", {100, 0, 300}, 0, 10); });
     CHECK(has_error(save_map(p, doc, false), "maps/sculpt/.server/spawns/0_1.json", "spawn \"s1\": duplicate id on this map"));
     doc.undo();
-    doc.edit([](ZoneState& s) { add_spawn(s, "far", "Bat", {600, 0, 100}, 0, 10); });
+    doc.edit([](MapState& s) { add_spawn(s, "far", "Bat", {600, 0, 100}, 0, 10); });
     CHECK(has_error(save_map(p, doc, false), "maps/sculpt/.server/spawns/2_0.json", "tile is not on the map"));
     CHECK(mtimes(root / "maps") == before);
     doc.undo();
 
     // Deleting a path unassigns it.
-    doc.edit([](ZoneState& s) { delete_path(s, {1, 0}, "patrol"); });
+    doc.edit([](MapState& s) { delete_path(s, {1, 0}, "patrol"); });
     CHECK(!spawn_json(doc.state, *find_spawn(doc.state, "s1")).contains("path") && validate(p, doc).empty());
 }
 
-// Zone objects: every type placed, edited, moved across a tile border and deleted, each interactable's server entry in
+// Map objects: every type placed, edited, moved across a tile border and deleted, each interactable's server entry in
 // step; unknown keys survive a save and load; validate() blocks a save on a bad shape, a missing server entry or a
 // duplicate id; an emptied tile's files are deleted.
 // Asset refs (engine/asset_ref.h): with the editor's idOf hook, map.json's material and the objects' prefabs are saved as
-// {"id", "path"} (areas.json and the server's files never); the zone loaders, the engine and the server read them back
+// {"id", "path"} (areas.json and the server's files never); the map loaders, the engine and the server read them back
 // as paths.
 void check_asset_refs() {
     const fs::path root = copy_project(kSource / "samples" / "starter-mmo", "refs");
     Project p = scan_project(root);
-    ZoneDoc doc = flat_map(p);
-    doc.edit([&](ZoneState& s) {
+    MapDoc doc = flat_map(p);
+    doc.edit([&](MapState& s) {
         add_object(s, km::ObjectType::Visual, "prefabs/grass.prefab", {10, 0, 10}, 0.5f, 0.8f);
         s.manifest["material"] = "materials/ground.mat";
     });
@@ -679,10 +679,10 @@ void check_asset_refs() {
 void check_objects() {
     const fs::path root = copy_project(kSource / "samples" / "starter-mmo", "objects");
     Project p = scan_project(root);
-    ZoneDoc doc = flat_map(p);
+    MapDoc doc = flat_map(p);
     using km::ObjectType;
     ObjectRef rock, shrine;
-    doc.edit([&](ZoneState& s) {
+    doc.edit([&](MapState& s) {
         add_object(s, ObjectType::Visual, "prefabs/grass.prefab", {10, 0, 10}, 0.5f, 0.8f);
         rock = add_object(s, ObjectType::Obstacle, "prefabs/rock.prefab", {20, 0, 20}, 0, 1);
         shrine = add_object(s, ObjectType::Interactable, "prefabs/shrine.prefab", {30, 0, 30}, 1, 1);
@@ -697,7 +697,7 @@ void check_objects() {
     CHECK(parsed.errors.empty() && parsed.objects.size() == 3);
 
     // Server-only fields and unknown keys stay through edits, a move across the border and a save + load.
-    doc.edit([&](ZoneState& s) {
+    doc.edit([&](MapState& s) {
         Json& e = *interactable_json(s, {0, 0}, 1);
         e["event"] = "altar.used";
         e["data"] = {{"gold", 5}};
@@ -721,23 +721,23 @@ void check_objects() {
     CHECK(again && again->state.objects == doc.state.objects && again->state.interactables == doc.state.interactables);
 
     // Type changes: an obstacle made interactable gets id 2 and a server entry; back to obstacle loses both.
-    doc.edit([&](ZoneState& s) { set_object_type(s, rock, ObjectType::Interactable); });
+    doc.edit([&](MapState& s) { set_object_type(s, rock, ObjectType::Interactable); });
     CHECK(object_json(doc.state, rock)["id"] == 2 && interactable_json(doc.state, {0, 0}, 2));
-    doc.edit([&](ZoneState& s) { set_interactable_id(s, rock, 7); });
+    doc.edit([&](MapState& s) { set_interactable_id(s, rock, 7); });
     CHECK(object_json(doc.state, rock)["id"] == 7 && interactable_json(doc.state, {0, 0}, 7) && !interactable_json(doc.state, {0, 0}, 2));
-    doc.edit([&](ZoneState& s) { set_object_type(s, rock, ObjectType::Obstacle); });
+    doc.edit([&](MapState& s) { set_object_type(s, rock, ObjectType::Obstacle); });
     CHECK(!object_json(doc.state, rock).contains("id") && !doc.state.interactables.contains({0, 0}) &&
           object_json(doc.state, rock).contains("shape"));
 
     // Blocked saves, nothing written.
     const auto before = mtimes(root / "maps");
-    doc.edit([&](ZoneState& s) { object_json(s, rock)["shape"] = {{"cylinder", {{"radius", -1}, {"height", 1}}}}; });
+    doc.edit([&](MapState& s) { object_json(s, rock)["shape"] = {{"cylinder", {{"radius", -1}, {"height", 1}}}}; });
     CHECK(has_error(save_map(p, doc, false), "maps/sculpt/objects/0_0.json", "objects[1]: \"shape.cylinder\" must be"));
     doc.undo();
-    doc.edit([&](ZoneState& s) { s.interactables.erase({1, 0}); });
+    doc.edit([&](MapState& s) { s.interactables.erase({1, 0}); });
     CHECK(has_error(save_map(p, doc, false), "maps/sculpt/objects/1_0.json", "interactable 1 has no entry in .server/interactables/1_0.json"));
     doc.undo();
-    doc.edit([&](ZoneState& s) {
+    doc.edit([&](MapState& s) {
         const ObjectRef twin = add_object(s, ObjectType::Interactable, "prefabs/shrine.prefab", {280, 0, 60}, 0, 1);
         set_interactable_id(s, twin, 1);
     });
@@ -746,7 +746,7 @@ void check_objects() {
     doc.undo();
 
     // Deleting the last object of a tile deletes its files on save.
-    doc.edit([&](ZoneState& s) { delete_object(s, shrine); });
+    doc.edit([&](MapState& s) { delete_object(s, shrine); });
     CHECK(!doc.state.objects.contains({1, 0}) && !doc.state.interactables.contains({1, 0}));
     print_errors(save_map(p, doc, false));
     CHECK(!fs::exists(dir / "objects" / "1_0.json") && !fs::exists(dir / ".server" / "interactables" / "1_0.json") &&
@@ -758,9 +758,9 @@ void check_objects() {
 void check_scatter() {
     const fs::path root = copy_project(kSource / "samples" / "starter-mmo", "scatter");
     Project p = scan_project(root);
-    ZoneDoc doc = flat_map(p);
+    MapDoc doc = flat_map(p);
     const km::MapInfo info = info_of(doc);
-    doc.edit([&](ZoneState& s) { apply_brush(info, s, 200, 200, Brush{.radius = 60}, 8); }); // a hill: y varies
+    doc.edit([&](MapState& s) { apply_brush(info, s, 200, 200, Brush{.radius = 60}, 8); }); // a hill: y varies
     Scatter brush;
     brush.prefabs = {"prefabs/grass.prefab", "prefabs/flower.prefab"};
     brush.radius = 10;
@@ -768,12 +768,12 @@ void check_scatter() {
     brush.scaleMin = 0.5f;
     brush.scaleMax = 1.5f;
     const auto stroke = [&](uint32_t seed) {
-        ZoneState s = doc.state;
+        MapState s = doc.state;
         ScatterRng rng(seed);
         for (const Point at : {Point{200, 200}, Point{215, 200}, Point{250, 210}}) scatter(info, s, brush, rng, at[0], at[1]);
         return s;
     };
-    const ZoneState a = stroke(7), b = stroke(7), c = stroke(8);
+    const MapState a = stroke(7), b = stroke(7), c = stroke(8);
     CHECK(a.objects == b.objects && !a.objects.empty() && a.objects != c.objects);
     CHECK(all_objects(a).size() == 120); // every point lands on the 2 x 2 map
     std::set<std::string> prefabs;
@@ -796,10 +796,10 @@ void check_scatter() {
     CHECK(doc.state.objects.empty());
     doc.redo();
     // Erase: visuals within 12 m of (200, 200) go, an obstacle there stays.
-    doc.edit([](ZoneState& s) { add_object(s, km::ObjectType::Obstacle, "prefabs/rock.prefab", {201, 0, 201}, 0, 1); });
+    doc.edit([](MapState& s) { add_object(s, km::ObjectType::Obstacle, "prefabs/rock.prefab", {201, 0, 201}, 0, 1); });
     const size_t total = all_objects(doc.state).size();
     size_t erased = 0;
-    doc.edit([&](ZoneState& s) { erased = erase_visuals(s, 200, 200, 12); });
+    doc.edit([&](MapState& s) { erased = erase_visuals(s, 200, 200, 12); });
     CHECK(erased > 0 && all_objects(doc.state).size() == total - erased);
     for (const ObjectRef& ref : all_objects(doc.state)) {
         const Json& o = object_json(doc.state, ref);
@@ -817,11 +817,11 @@ void check_tiles() {
 
     const fs::path root = copy_project(kSource / "samples" / "starter-mmo", "tiles");
     Project p = scan_project(root);
-    ZoneDoc doc = flat_map(p);
+    MapDoc doc = flat_map(p);
     km::MapInfo info = info_of(doc);
     Brush brush;
     brush.radius = 30;
-    doc.edit([&](ZoneState& s) {
+    doc.edit([&](MapState& s) {
         apply_brush(info, s, 500, 200, brush, 20); // a hill on the right edge of tile 1_0 and 1_1 (x 512)
         apply_brush(info, s, 400, 400, brush, 10);
         add_spawn(s, "keeper", "Guard", {400, 0, 400}, 0, 5);
@@ -831,12 +831,12 @@ void check_tiles() {
     CHECK(fs::exists(dir / "heights" / "1_1.r16") && fs::exists(dir / ".server" / "spawns" / "1_1.json"));
 
     // Adding 2_0 takes the hill's edge, so the map has no seam.
-    doc.edit([&](ZoneState& s) { CHECK(add_tile(info, s, {2, 0})); });
+    doc.edit([&](MapState& s) { CHECK(add_tile(info, s, {2, 0})); });
     CHECK(!add_tile(info_of(doc), doc.state, {2, 0})); // already declared
     {   // One cap for both axes: a tile that would grow the bounding box past kMaxMapTiles a side is refused.
         km::MapInfo wide = info_of(doc);
         wide.tiles = {{0, 0, kMaxMapTiles - 1, 0}};
-        ZoneState s = doc.state;
+        MapState s = doc.state;
         CHECK(within_cap(wide, {kMaxMapTiles - 1, kMaxMapTiles - 1}) && within_cap(wide, {3, 1}));
         CHECK(!within_cap(wide, {kMaxMapTiles, 0}) && !within_cap(wide, {-1, 1}));
         CHECK(!within_cap(wide, {0, kMaxMapTiles}) && !within_cap(wide, {0, -kMaxMapTiles}));
@@ -852,7 +852,7 @@ void check_tiles() {
     // Removing 1_1: the files that go are listed, its spawn is dropped, and saving deletes them.
     CHECK(tile_files(p, "sculpt", {1, 1}) ==
           (std::vector<std::string>{"maps/sculpt/heights/1_1.r16", "maps/sculpt/.server/spawns/1_1.json"}));
-    doc.edit([&](ZoneState& s) { CHECK(remove_tile(info, s, {1, 1})); });
+    doc.edit([&](MapState& s) { CHECK(remove_tile(info, s, {1, 1})); });
     CHECK(removed_tile_files(p, doc) == tile_files(p, "sculpt", {1, 1}));
     CHECK(!find_spawn(doc.state, "keeper") && !info_of(doc).has_tile({1, 1}));
     CHECK(save_map(p, doc, false).empty());
@@ -864,10 +864,10 @@ void check_tiles() {
 
     // Removed and added back before saving: flat again, so its old heights file must not be read back.
     info = info_of(doc);
-    doc.edit([&](ZoneState& s) { remove_tile(info, s, {2, 0}); });
-    doc.edit([&](ZoneState& s) { add_tile(info_of(doc), s, {2, 0}); });
+    doc.edit([&](MapState& s) { remove_tile(info, s, {2, 0}); });
+    doc.edit([&](MapState& s) { add_tile(info_of(doc), s, {2, 0}); });
     CHECK(doc.state.heights.contains({2, 0})); // it took 1_0's hill edge again
-    doc.edit([&](ZoneState& s) {
+    doc.edit([&](MapState& s) {
         remove_tile(info_of(doc), s, {1, 0}); // now 2_0 has no shaped neighbour
         remove_tile(info_of(doc), s, {2, 0});
         add_tile(info_of(doc), s, {2, 0});
@@ -899,7 +899,7 @@ void check_process_runner() {
     CHECK(find_mapbake(exe.string()) == exe && find_mapbake("C:/nope/kast_mapbake.exe").empty());
     const fs::path root = copy_project(kSource / "samples" / "starter-mmo", "bake");
     Project p = scan_project(root);
-    ZoneDoc doc = flat_map(p);
+    MapDoc doc = flat_map(p);
     CHECK(save_map(p, doc, false).empty());
     CHECK(run.start(exe, {root / "maps" / "sculpt"}, err));
     while (run.running()) std::this_thread::sleep_for(std::chrono::milliseconds(10));
@@ -911,32 +911,32 @@ void check_process_runner() {
 void check_undo_each() {
     const fs::path root = copy_project(kSource / "samples" / "starter-mmo", "undo_each");
     Project p = scan_project(root);
-    ZoneDoc doc = flat_map(p);
+    MapDoc doc = flat_map(p);
     const km::MapInfo info = info_of(doc);
     const std::string png = encode_png16(km::Heights(size_t(km::kTileSamples) * km::kTileSamples, 1234));
     std::string err;
     Brush brush;
-    const auto first_object = [](const ZoneState& s) { return all_objects(s).front(); };
-    const std::vector<std::tuple<const char*, const char*, std::function<void(ZoneState&)>>> edits = {
-        {"raise", "Edit Terrain", [&](ZoneState& s) { apply_brush(info, s, 256, 256, brush, 5); }},
-        {"flatten", "Edit Terrain", [&](ZoneState& s) { brush.mode = BrushMode::Flatten; brush.target = 2; apply_brush(info, s, 256, 256, brush, 1); }},
-        {"import", "Edit Terrain", [&](ZoneState& s) { import_png16(info, s, {1, 1}, png, err); }},
-        {"height range", "Edit Terrain", [&](ZoneState& s) { set_height_range(info, s, -20, 80); }},
-        {"manifest", "Edit Map", [](ZoneState& s) { s.manifest["name"] = "Renamed"; s.manifest["material"] = "materials/stone.mat"; }},
-        {"add area", "Edit Areas", [](ZoneState& s) { add_rect_area(s, "a", {10, 10}, {90, 90}, 1); }},
-        {"move vertex", "Edit Areas", [](ZoneState& s) { move_area_vertex(areas_list(s)[0], 1, {120, 5}); }},
-        {"portal", "Edit Areas", [](ZoneState& s) { areas_list(s)[0]["portal"] = {{"map", 10u}, {"pos", vec3_json({128, 0, 100})}, {"heading", 0}}; }},
-        {"add spawn", "Edit Spawns", [](ZoneState& s) { add_spawn(s, "x", "Guard", {100, 0, 100}, 0, 5); }},
-        {"add path", "Edit Spawns", [](ZoneState& s) { add_path(s, *find_spawn(s, "x"), "p", {{100, 0, 100}, {150, 0, 100}}, 1, false); }},
-        {"move spawn", "Edit Spawns", [](ZoneState& s) { move_spawn(s, *find_spawn(s, "x"), {400, 0, 400}); }},
-        {"delete spawn", "Edit Spawns", [](ZoneState& s) { delete_spawn(s, *find_spawn(s, "x")); }},
-        {"delete area", "Edit Areas", [](ZoneState& s) { delete_area(s, 0); }},
-        {"add object", "Edit Objects", [](ZoneState& s) { add_object(s, km::ObjectType::Interactable, "prefabs/chest.prefab", {100, 0, 100}, 0, 1); }},
-        {"move object", "Edit Objects", [&](ZoneState& s) { move_object(s, first_object(s), {400, 0, 400}); }}, // into another tile
-        {"delete object", "Edit Objects", [&](ZoneState& s) { delete_object(s, first_object(s)); }},
-        {"add tile", "Edit Terrain", [&](ZoneState& s) { add_tile(info, s, {2, 1}); }},
-        {"remove tile", "Edit Terrain", [&](ZoneState& s) { remove_tile(info, s, {0, 1}); }},
-        {"map spawn", "Edit Map", [](ZoneState& s) { s.manifest["spawn"]["pos"] = vec3_json({300, 1, 300}); }},
+    const auto first_object = [](const MapState& s) { return all_objects(s).front(); };
+    const std::vector<std::tuple<const char*, const char*, std::function<void(MapState&)>>> edits = {
+        {"raise", "Edit Terrain", [&](MapState& s) { apply_brush(info, s, 256, 256, brush, 5); }},
+        {"flatten", "Edit Terrain", [&](MapState& s) { brush.mode = BrushMode::Flatten; brush.target = 2; apply_brush(info, s, 256, 256, brush, 1); }},
+        {"import", "Edit Terrain", [&](MapState& s) { import_png16(info, s, {1, 1}, png, err); }},
+        {"height range", "Edit Terrain", [&](MapState& s) { set_height_range(info, s, -20, 80); }},
+        {"manifest", "Edit Map", [](MapState& s) { s.manifest["name"] = "Renamed"; s.manifest["material"] = "materials/stone.mat"; }},
+        {"add area", "Edit Areas", [](MapState& s) { add_rect_area(s, "a", {10, 10}, {90, 90}, 1); }},
+        {"move vertex", "Edit Areas", [](MapState& s) { move_area_vertex(areas_list(s)[0], 1, {120, 5}); }},
+        {"portal", "Edit Areas", [](MapState& s) { areas_list(s)[0]["portal"] = {{"map", 10u}, {"pos", vec3_json({128, 0, 100})}, {"heading", 0}}; }},
+        {"add spawn", "Edit Spawns", [](MapState& s) { add_spawn(s, "x", "Guard", {100, 0, 100}, 0, 5); }},
+        {"add path", "Edit Spawns", [](MapState& s) { add_path(s, *find_spawn(s, "x"), "p", {{100, 0, 100}, {150, 0, 100}}, 1, false); }},
+        {"move spawn", "Edit Spawns", [](MapState& s) { move_spawn(s, *find_spawn(s, "x"), {400, 0, 400}); }},
+        {"delete spawn", "Edit Spawns", [](MapState& s) { delete_spawn(s, *find_spawn(s, "x")); }},
+        {"delete area", "Edit Areas", [](MapState& s) { delete_area(s, 0); }},
+        {"add object", "Edit Objects", [](MapState& s) { add_object(s, km::ObjectType::Interactable, "prefabs/chest.prefab", {100, 0, 100}, 0, 1); }},
+        {"move object", "Edit Objects", [&](MapState& s) { move_object(s, first_object(s), {400, 0, 400}); }}, // into another tile
+        {"delete object", "Edit Objects", [&](MapState& s) { delete_object(s, first_object(s)); }},
+        {"add tile", "Edit Terrain", [&](MapState& s) { add_tile(info, s, {2, 1}); }},
+        {"remove tile", "Edit Terrain", [&](MapState& s) { remove_tile(info, s, {0, 1}); }},
+        {"map spawn", "Edit Map", [](MapState& s) { s.manifest["spawn"]["pos"] = vec3_json({300, 1, 300}); }},
     };
     for (const auto& [name, step, fn] : edits) {
         const std::string before = serialize(doc.state);
@@ -953,17 +953,17 @@ void check_undo_each() {
     }
 }
 
-// The zone's history (docs/editor/undo-redo.html): a stroke is one step, no-op edits record nothing, undo is refused
+// The map's history (docs/editor/undo-redo.html): a stroke is one step, no-op edits record nothing, undo is refused
 // mid-stroke, a new edit discards the redo branch, 100 steps at most, the saved state is clean again after undo / redo,
 // and each map (each loaded doc) has its own steps.
 void check_undo_history() {
     const fs::path root = copy_project(kSource / "samples" / "starter-mmo", "undo_history");
     Project p = scan_project(root);
-    ZoneDoc doc = flat_map(p);
-    ZoneDoc capped = flat_map(p); // before doc is saved over the folder new_map wants
+    MapDoc doc = flat_map(p);
+    MapDoc capped = flat_map(p); // before doc is saved over the folder new_map wants
     CHECK(!doc.canUndo() && !doc.canRedo() && doc.history().size() == 0);
     const km::MapInfo info = info_of(doc);
-    const auto dab = [&](ZoneState& s, float x) { apply_brush(info, s, x, 256, Brush{}, 2); };
+    const auto dab = [&](MapState& s, float x) { apply_brush(info, s, x, 256, Brush{}, 2); };
 
     // A stroke of several dabs: one step; undo is refused until it ends.
     const std::string start = serialize(doc.state);
@@ -980,8 +980,8 @@ void check_undo_history() {
     CHECK(serialize(doc.state) == stroked);
 
     // No-op edits: nothing changed, or changed and changed back within one gesture (a field typed and restored).
-    doc.edit([](ZoneState&) {});
-    doc.edit([](ZoneState& s) {
+    doc.edit([](MapState&) {});
+    doc.edit([](MapState& s) {
         const Json name = s.manifest["name"];
         s.manifest["name"] = "Typing";
         s.manifest["name"] = name;
@@ -989,10 +989,10 @@ void check_undo_history() {
     CHECK(doc.history().size() == 1);
 
     // A new edit after undo discards the redo branch.
-    doc.edit([](ZoneState& s) { s.manifest["name"] = "A"; });
+    doc.edit([](MapState& s) { s.manifest["name"] = "A"; });
     doc.undo();
     CHECK(doc.canRedo());
-    doc.edit([](ZoneState& s) { s.manifest["name"] = "B"; });
+    doc.edit([](MapState& s) { s.manifest["name"] = "B"; });
     CHECK(!doc.canRedo() && doc.history().size() == 2 && doc.state.manifest["name"] == "B");
     doc.undo();
     CHECK(doc.state.manifest["name"] != "A" && doc.state.manifest["name"] != "B");
@@ -1001,7 +1001,7 @@ void check_undo_history() {
 
     // Save point: clean after save, dirty after an edit, clean when undone to it, dirty again on redo.
     CHECK(save_map(p, doc, false).empty() && !doc.dirty());
-    doc.edit([&](ZoneState& s) { dab(s, 256); });
+    doc.edit([&](MapState& s) { dab(s, 256); });
     CHECK(doc.dirty());
     doc.undo();
     CHECK(!doc.dirty());
@@ -1014,19 +1014,19 @@ void check_undo_history() {
     CHECK(other.has_value() && !other->canUndo());
     if (other) {
         const Json name = other->state.manifest["name"];
-        other->edit([](ZoneState& s) { s.manifest["name"] = "Other"; });
+        other->edit([](MapState& s) { s.manifest["name"] = "Other"; });
         const std::string mine = serialize(doc.state);
         const size_t mySteps = doc.history().size();
         other->undo();
         CHECK(other->state.manifest["name"] == name && serialize(doc.state) == mine && doc.history().size() == mySteps);
-        const ZoneDoc copy = *other;
+        const MapDoc copy = *other;
         CHECK(!copy.canUndo() && !copy.canRedo() && other->canRedo());
     }
 
     // The cap: 105 edits keep the last 100; undoing them all lands on the state after the 5th.
     std::string afterFifth;
     for (int i = 1; i <= 105; ++i) {
-        capped.edit([i](ZoneState& s) { s.manifest["name"] = "Edit " + std::to_string(i); });
+        capped.edit([i](MapState& s) { s.manifest["name"] = "Edit " + std::to_string(i); });
         if (i == 5) afterFifth = serialize(capped.state);
     }
     CHECK(capped.history().size() == UndoStack::kMaxSteps);
@@ -1037,7 +1037,7 @@ void check_undo_history() {
 } // namespace
 
 // Same heights: the same tiles with equal samples.
-bool same_heights(const ZoneState& a, const ZoneState& b) {
+bool same_heights(const MapState& a, const MapState& b) {
     if (a.heights.size() != b.heights.size()) return false;
     for (const auto& [t, h] : a.heights) {
         const auto it = b.heights.find(t);
@@ -1047,16 +1047,16 @@ bool same_heights(const ZoneState& a, const ZoneState& b) {
 }
 
 // A raise dab at map (x, z) as one undo step; true if it changed a tile.
-bool sculpt_at(ZoneDoc& doc, float x, float z) {
+bool sculpt_at(MapDoc& doc, float x, float z) {
     std::string err;
     const auto info = doc.info(err);
     TileSet touched;
-    doc.edit([&](ZoneState& s) { touched = apply_brush(*info, s, x, z, Brush{}, 10.0f); });
+    doc.edit([&](MapState& s) { touched = apply_brush(*info, s, x, z, Brush{}, 10.0f); });
     return !touched.empty();
 }
 
 // Every declared pair of neighbours has equal samples on its shared edge.
-bool seamless(const km::MapInfo& info, const ZoneState& state) {
+bool seamless(const km::MapInfo& info, const MapState& state) {
     constexpr int n = km::kTileSamples;
     for (TileKey t : declared_tiles(info)) {
         const km::Heights& a = tile_heights(state, t);
@@ -1109,21 +1109,21 @@ void check_terrain_gen() {
     auto doc = new_map(p, "gen", "Gen", next_map_id(p), 2, 2, err);
     CHECK(doc.has_value());
     if (!doc) return;
-    doc->edit([&](ZoneState& s) { add_tile(*doc->info(err), s, {2, 0}); });
+    doc->edit([&](MapState& s) { add_tile(*doc->info(err), s, {2, 0}); });
     const auto info = doc->info(err);
     CHECK(info && info->has_tile({2, 0}) && !info->has_tile({2, 1}));
     if (!info) return;
-    const ZoneState before = doc->state;
+    const MapState before = doc->state;
     NoiseParams params;
     params.seed = 7;
-    doc->edit([&](ZoneState& s) { generate_heights(*info, s, params); });
+    doc->edit([&](MapState& s) { generate_heights(*info, s, params); });
     CHECK(doc->state.heights.size() == 5);
     uint16_t lo = 65535, hi = 0;
     for (const auto& [t, h] : doc->state.heights)
         for (uint16_t s : *h) lo = std::min(lo, s), hi = std::max(hi, s);
     CHECK(lo == 0 && hi == 65535);
     CHECK(seamless(*info, doc->state));
-    ZoneState again = before, other = before;
+    MapState again = before, other = before;
     generate_heights(*info, again, params);
     params.seed = 8;
     generate_heights(*info, other, params);
@@ -1140,7 +1140,7 @@ void check_terrain_gen() {
     // Bake: 256 px per tile over the bounding box (3x2 tiles), grey off the map (2_1), the end colors at the lowest
     // and highest ground.
     const Gradient bw = {{0.0f, {0, 0, 1}}, {1.0f, {1, 0, 0}}};
-    ZoneState plateau = before;
+    MapState plateau = before;
     auto h = std::make_shared<km::Heights>(km::flat_heights());
     for (int v = 10; v <= 30; ++v)
         for (int u = 10; u <= 30; ++u) (*h)[size_t(v) * km::kTileSamples + size_t(u)] = 65535;
@@ -1160,7 +1160,7 @@ void check_terrain_gen() {
     const auto wideInfo = km::parse_manifest(nlohmann::json(wide), err);
     CHECK(wideInfo.has_value());
     if (wideInfo) {
-        const TerrainImage capped = bake_terrain(*wideInfo, ZoneState{}, bw);
+        const TerrainImage capped = bake_terrain(*wideInfo, MapState{}, bw);
         CHECK(capped.width == kMaxTerrainImage && capped.height == 204);
     }
 
@@ -1171,7 +1171,7 @@ void check_terrain_gen() {
             for (const auto& e : fs::recursive_directory_iterator(f))
                 if (e.is_regular_file()) others[e.path()] = bytes(e.path());
     CHECK(!others.empty());
-    doc->edit([&](ZoneState& s) {
+    doc->edit([&](MapState& s) {
         s.manifest["terrainColors"] = gradient_json(bw);
         s.manifest["terrainUv"] = "map";
         s.manifest["material"] = terrain_material_path("gen");
@@ -1197,7 +1197,7 @@ void check_terrain_gen() {
     CHECK(other2.has_value());
     if (!other2) return;
     kast::writeFileAtomic(root / "materials" / "gen2_terrain.mat", "hand made");
-    other2->edit([&](ZoneState& s) {
+    other2->edit([&](MapState& s) {
         s.manifest["terrainColors"] = gradient_json(bw);
         s.manifest["terrainUv"] = "map";
         s.manifest["material"] = terrain_material_path("gen2");
@@ -1209,7 +1209,7 @@ void check_terrain_gen() {
 }
 
 // Tile scenes (engine/tile_scenes.h, the Map tab and Play's streaming): paths, cell states, out-of-bounds roots, the
-// streaming diff, event payloads, the thumbnail colors, and a tile removed in the Zone tab keeping its scene (an orphan).
+// streaming diff, event payloads, the thumbnail colors, and a tile removed in the Map tab keeping its scene (an orphan).
 // The editor's Scene view: meshes for the tiles around the camera's pivot, and a manifest edit rebuilds them only when
 // what the renderer reads from the map changed.
 void check_edit_view() {
@@ -1324,7 +1324,7 @@ void check_tile_scenes() {
     CHECK(!kast::summarizeTileScene(R"({"entities": 1})", err));
 
     // Thumbnails: grayscale without terrainColors, the gradient's colors with; row 0 is the tile's max z.
-    ZoneState state;
+    MapState state;
     auto heights = std::make_shared<km::Heights>(km::flat_heights());
     (*heights)[size_t(km::kTileSamples - 1) * km::kTileSamples] = 65535; // u 0, v 256: the north-west corner
     state.heights[{0, 0}] = heights;
@@ -1337,7 +1337,7 @@ void check_tile_scenes() {
     CHECK(tinted.rgb[0] == 0 && tinted.rgb[2] == 255 && tinted.rgb[(7 * 8) * 3] == 255 && tinted.rgb[(7 * 8) * 3 + 2] == 0);
     CHECK(tile_thumbnail(state, {5, 5}, std::nullopt, 4).rgb == std::vector<uint8_t>(4 * 4 * 3, 0)); // no heights: flat
 
-    // The test map: 9 tiles, scenes on 4 of them plus the orphan 3_1. Removing 1_1 in the zone keeps its scene.
+    // The test map: 9 tiles, scenes on 4 of them plus the orphan 3_1. Removing 1_1 in the map keeps its scene.
     const fs::path root = copy_project(kSource / "tests" / "project", "tile_scenes");
     const fs::path scenes = root / "maps" / "tilegrid" / "scenes";
     fs::create_directories(scenes / "sub");
@@ -1353,7 +1353,7 @@ void check_tile_scenes() {
     auto info = doc->info(err);
     CHECK(info && declared_tiles(*info).size() == 9 && !info->has_tile({3, 1}));
     if (!info) return;
-    doc->edit([&](ZoneState& s) { remove_tile(*info, s, {1, 1}); });
+    doc->edit([&](MapState& s) { remove_tile(*info, s, {1, 1}); });
     CHECK(save_map(p, *doc, false).empty());
     CHECK(fs::exists(scenes / "1_1.scene") && !fs::exists(root / "maps" / "tilegrid" / "heights" / "1_1.png") &&
           !fs::exists(root / "maps" / "tilegrid" / "heights" / "1_1.r16"));
@@ -1361,7 +1361,7 @@ void check_tile_scenes() {
     CHECK(info && kast::tileCell(info->has_tile({1, 1}), true, false, false) == TileCell::Orphan);
 }
 
-// The Map tab's and Zone tab's tile grid: the default view fits the map (an 8 x 8 cell area at least, as before zoom),
+// The Map tab's tile grid: the default view fits the map (an 8 x 8 cell area at least, as before zoom),
 // the wheel zooms about the mouse, a drag pans but never loses the map, and only the cells on the area are visited.
 void check_grid_view() {
     const km::TileRect three{2, 3, 4, 5}; // 3 x 3 in the Map tab's 8 x 8 area, 400 px wide: 48 px cells, gap 2
@@ -1440,6 +1440,6 @@ int main(int argc, char** argv) {
     check_edit_view();
     check_grid_view();
     if (failures) std::fprintf(stderr, "%d check(s) failed\n", failures);
-    else std::printf("zone builder self-check: all passed\n");
+    else std::printf("map builder self-check: all passed\n");
     return failures ? 1 : 0;
 }

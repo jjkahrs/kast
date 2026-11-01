@@ -97,7 +97,7 @@ public:
     // dropping: reason "disconnected", just before world.disconnected. Exactly one world.reply per request.
     uint32_t request(const std::string& name, const nlohmann::json& data,
                      std::chrono::milliseconds timeout = std::chrono::seconds(2));
-    // Interact{objectId}: activates a zone object (an interactable's id). The server answers only through its Lua.
+    // Interact{objectId}: activates a map object (an interactable's id). The server answers only through its Lua.
     void interact(uint32_t objectId);
     // Move{position, heading (radians, atan2(dx, dz)), clientTimeMs, seq, epoch}: seq and epoch are the caller's
     // (Replication's MoveHistory). A rejected move comes back as world.correction {position, ackSeq, epoch}.

@@ -115,7 +115,7 @@ TileCell tileCell(bool declared, bool hasFile, bool open, bool unsaved)
 const char* tileCellName(TileCell cell)
 {
     switch (cell) {
-    case TileCell::Undeclared: return "not a zone tile";
+    case TileCell::Undeclared: return "not a map tile";
     case TileCell::Declared: return "no scene";
     case TileCell::HasScene: return "has a scene";
     case TileCell::Open: return "open";

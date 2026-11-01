@@ -19,7 +19,7 @@ joined only by transfers. Players and NPCs on different maps never see each othe
 &lt;MAP_ROOT&gt;/&lt;folder&gt;/heights/&lt;tx&gt;_&lt;tz&gt;.r16|.png   optional: tile heightmaps (docs/engine/terrain.html; see Ground)
 &lt;MAP_ROOT&gt;/&lt;folder&gt;/.server/spawns/&lt;tx&gt;_&lt;tz&gt;.json   optional, server only: the NPCs a tile places (see NPC spawns)
 &lt;MAP_ROOT&gt;/&lt;folder&gt;/.server/nav/&lt;tx&gt;_&lt;tz&gt;.navtile   optional, server only: the tile's baked navmesh (see Navmesh)
-&lt;MAP_ROOT&gt;/&lt;folder&gt;/objects/&lt;tx&gt;_&lt;tz&gt;.json   optional, client and kast_mapbake: the tile's zone objects (see Objects)
+&lt;MAP_ROOT&gt;/&lt;folder&gt;/objects/&lt;tx&gt;_&lt;tz&gt;.json   optional, client and kast_mapbake: the tile's map objects (see Objects)
 &lt;MAP_ROOT&gt;/&lt;folder&gt;/.server/interactables/&lt;tx&gt;_&lt;tz&gt;.json   optional, server only: its interactables (see Objects)
 </code></pre>
 <pre><code class="language-json">{ &quot;version&quot;: 1, &quot;id&quot;: 1, &quot;name&quot;: &quot;Eastlands&quot;,
@@ -43,7 +43,7 @@ joined only by transfers. Players and NPCs on different maps never see each othe
   <code>material</code>, <code>terrainUv</code> (<code>"tiled"</code> or <code>"map"</code>; anything else fails the map), <code>nav</code> and <code>type</code> (<code>"world"</code> or <code>"instance"</code>, with the
   <a href="instances.html#manifest">instance fields</a>, which on a world map fail it) and <code>layerCap</code> (world maps
   only, <a href="#layers">Layers</a>) are optional, and unknown keys
-  (such as the editor Zone Builder's <code>terrainColors</code>) are ignored. The game client's terrain uses <code>heightRange</code>,
+  (such as the editor Map Builder's <code>terrainColors</code>) are ignored. The game client's terrain uses <code>heightRange</code>,
   <code>material</code>, <code>terrainUv</code> and <code>nav.maxSlopeDeg</code> (<a href="../../engine/terrain.html">Engine, Terrain</a>); the server uses <code>heightRange</code> and the heightmaps for the <a href="#ground">ground</a>. <code>map/heights.h</code> (heightmap decoding and the shared
   ground triangles) is part of <code>kast_map</code>, so the server build needs vcpkg's <code>stb</code>.</li>
 <li><strong>Startup:</strong> every map is loaded and logged (<code>maps loaded</code>). Any bad manifest (with the file and the problem, such as
@@ -151,7 +151,7 @@ different layers of a map never see or hear each other; everything else about th
   runs one context, exactly as before. On an instance map it fails the map (<code>maps/crypt/map.json: "layerCap" is only for world
   maps; an instance map uses "maxPlayers"</code>), as does a value below 1 (<code>"layerCap" must be an integer &gt;= 1</code>).
   <code>emptyTimeoutSec</code> (default 300) is allowed with it: how long an empty extra layer lives on. Parsed in <code>kast_map</code>, so the
-  editor's Zone Builder and <code>kast_mapbake</code> check it too.</li>
+  editor's Map Builder and <code>kast_mapbake</code> check it too.</li>
 <li><strong>The base layer:</strong> instanceId 0, the map's ordinary context. It starts with the scripts, at startup, and never closes.</li>
 <li><strong>Extra layers</strong> are <a href="instances.html">instance copies</a> of the world map, made by the same machinery: each its own
   <a href="#map-contexts">context</a> (registry, AOI grid, Lua state with its own <code>init</code>, tile activation and NPC spawns) with a
@@ -232,9 +232,9 @@ counted the long way round (Chebyshev: <code>max(|dx|, |dz|)</code>), on the pla
 <li><strong>Lua:</strong> <code>kast.map.ground(map, x, z)</code> is the height there, or <code>nil</code> off the map.</li>
 </ul>
 <h2 id="objects">Objects</h2>
-<p>Zone objects are what a map places on its tiles besides the ground: grass and flowers, rocks and trees, a shrine a
-player can use. The editor's Zone tab authors them (<a href="../../editor/zone-builder.html#objects">Zone Builder, Objects</a>);
-<code>map/objects.h</code> (part of <code>kast_map</code>) parses both files for the game client, the server, <code>kast_mapbake</code> and the editor's Zone Builder.</p>
+<p>Map objects are what a map places on its tiles besides the ground: grass and flowers, rocks and trees, a shrine a
+player can use. The editor's Map tab authors them (<a href="../../editor/map-builder.html#objects">Map Builder, Objects</a>);
+<code>map/objects.h</code> (part of <code>kast_map</code>) parses both files for the game client, the server, <code>kast_mapbake</code> and the editor's Map Builder.</p>
 <table>
 <tr><th>Type</th><th>Client</th><th>Server</th></tr>
 <tr><td><code>visual</code></td><td>the prefab, no collision</td><td>nothing: never in a server file</td></tr>
@@ -271,7 +271,7 @@ player can use. The editor's Zone tab authors them (<a href="../../editor/zone-b
 <ul>
 <li><code>id</code>, <code>pos</code> (on the tile), <code>shape</code> and <code>event</code> (a non-empty event name, at most 255 bytes) are required; <code>yaw</code>,
   <code>range</code> (metres, &gt; 0, default 3), <code>data</code> (a JSON object, at most 31 deep so the event payload stays within the bus's 32) and
-  <code>name</code> are optional. The Zone Builder writes <code>pos</code>, <code>yaw</code>, <code>shape</code> and <code>name</code> from the object and keeps the rest.</li>
+  <code>name</code> are optional. The Map Builder writes <code>pos</code>, <code>yaw</code>, <code>shape</code> and <code>name</code> from the object and keeps the rest.</li>
 <li><strong>Range</strong> is the horizontal distance from the player's position to the shape's edge (0 inside it):
   <code>map::footprint_distance</code>, the same on the client's <code>kast.nearestInteractable</code>.</li>
 <li><strong>Unknown keys</strong> are ignored in both files, so tools may keep their own.</li>
@@ -331,7 +331,7 @@ player can use. The editor's Zone tab authors them (<a href="../../editor/zone-b
   bakes; a navtile over it (baked for a smaller map) refuses the start. <code>DT_POLYREF64</code> (Detour rebuilt, not needed so far)
   lifts it. Paths are capped by <code>kMaxNodes</code> 4096, <code>kMaxPathPolys</code> 1024 and <code>kMaxPathPoints</code> 256
   (<code>nav.cpp</code>): a path across much of a big map can come back <code>nil</code>
-  (<a href="../../editor/zone-builder.html#map-size-limits">Map size limits</a>). No dynamic obstacles (an object that stops blocking, such as an opened door) or off-mesh links
+  (<a href="../../editor/map-builder.html#map-size-limits">Map size limits</a>). No dynamic obstacles (an object that stops blocking, such as an opened door) or off-mesh links
   (jumps, ladders) in the bake, and the client does no pathing.</li>
 <li><strong>Sample:</strong> <code>tests/project/maps/hills</code> has a mesa (x 170-200, z 316-346, 25 m flat top, 81 degree walls) and the
   Sentry (<code>.server/spawns/0_1.json</code>) patrolling from (150, 331) to (215, 331), straight through it and through a 3 m obstacle

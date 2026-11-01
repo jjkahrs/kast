@@ -769,7 +769,7 @@ void LuaSystems::State::bindApi()
         return sol::make_object(lua, registry.get<PersistentId>(e).value);
     });
 
-    // Zone objects (docs/engine/terrain.html#objects): the game binds the keys. kast.nearestInteractable(position,
+    // Map objects (docs/engine/terrain.html#objects): the game binds the keys. kast.nearestInteractable(position,
     // maxDistance) -> {id, name, pos = {x, y, z}, distance} of the streamed interactable nearest by the horizontal
     // distance to its shape's edge, or nil. kast.interact(id) sends Interact while in the world (true), else false;
     // the server's Lua answers, if it does, with an event.

@@ -5,26 +5,32 @@
 set(KAST_TILEGRID "${KAST_TEST_PROJECT}/scenes/tilegrid.scene")
 set(map_smoke "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
 set(map_copy "${CMAKE_CURRENT_SOURCE_DIR}/cmake/map_test.cmake")
-set(map_orphan "Map: maps/tilegrid/scenes/3_1.scene is an orphan: tile 3_1 is not a zone tile")
+set(map_orphan "Map: maps/tilegrid/scenes/3_1.scene is an orphan: tile 3_1 is not a map tile")
 set(map_bounds "Map: maps/tilegrid/scenes/0_1.scene: root entity 'Stray Rock' at \\(600, 400\\) is in tile 2_1, outside tile 0_1")
 
-# The tab docked beside Entities and Zone (default layout, and a layout saved before the tab existed: tests/layouts/
-# pre_map.ini, the default layout of the editor before it), the 3 x 3 grid in its 8 x 8 bounds.
+# The tab docked beside Entities (default layout; tests/layouts/pre_map.ini, a layout saved with the old Zone tab and no
+# Map tab: Map takes the Zone tab's place; pre_mapedit.ini, saved before either), the 3 x 3 grid in its 8 x 8 bounds.
+# A saved Zone window is dropped (zone_own_dock.ini: Zone alone in a dock node below Map), leaving no empty window.
 add_test(NAME editor_map_tab
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/map_tab.png"
-          "-DEXTRA_ARGS=--scene ${KAST_TILEGRID} --size 1600x1000" -DFOCUS_PANEL=Map "-DLAYOUT_SAME_DOCK=Entities;Zone;Map"
+          "-DEXTRA_ARGS=--scene ${KAST_TILEGRID} --size 1600x1000" -DFOCUS_PANEL=Map "-DLAYOUT_SAME_DOCK=Entities;Map"
           "-DEXPECT_OUTPUT=Map: maps/tilegrid \\(9 tiles, 5 tile scenes\\)" "-DFORBID_OUTPUT=\\[error\\]" -P "${map_smoke}")
 add_test(NAME editor_map_tab_old_layout
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/map_tab_old_layout.png"
           "-DEXTRA_ARGS=--scene ${KAST_TILEGRID} --size 1600x1000" -DFOCUS_PANEL=Map
-          "-DLAYOUT_FROM=${CMAKE_CURRENT_SOURCE_DIR}/tests/layouts/pre_map.ini" "-DLAYOUT_SAME_DOCK=Entities;Zone;Map" -DLAYOUT_FIRST_TAB=Entities
-          "-DFORBID_OUTPUT=\\[error\\]" -P "${map_smoke}")
-add_test(NAME editor_map_tab_pre_zone_layout
-  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/map_tab_pre_zone_layout.png"
+          "-DLAYOUT_FROM=${CMAKE_CURRENT_SOURCE_DIR}/tests/layouts/pre_map.ini" "-DLAYOUT_SAME_DOCK=Entities;Map" -DLAYOUT_FIRST_TAB=Entities
+          "-DLAYOUT_MUST_NOT_CONTAIN=[Window][Zone]" "-DFORBID_OUTPUT=\\[error\\]" -P "${map_smoke}")
+add_test(NAME editor_map_tab_zone_own_dock
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/map_tab_zone_own_dock.png"
           "-DEXTRA_ARGS=--scene ${KAST_TILEGRID} --size 1600x1000" -DFOCUS_PANEL=Map
-          "-DLAYOUT_FROM=${CMAKE_CURRENT_SOURCE_DIR}/tests/layouts/pre_zone.ini" "-DLAYOUT_SAME_DOCK=Entities;Zone;Map;Systems"
+          "-DLAYOUT_FROM=${CMAKE_CURRENT_SOURCE_DIR}/tests/layouts/zone_own_dock.ini" "-DLAYOUT_SAME_DOCK=Entities;Map"
+          "-DLAYOUT_MUST_NOT_CONTAIN=[Window][Zone]" "-DFORBID_OUTPUT=\\[error\\]" -P "${map_smoke}")
+add_test(NAME editor_map_tab_pre_mapedit_layout
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/map_tab_pre_mapedit_layout.png"
+          "-DEXTRA_ARGS=--scene ${KAST_TILEGRID} --size 1600x1000" -DFOCUS_PANEL=Map
+          "-DLAYOUT_FROM=${CMAKE_CURRENT_SOURCE_DIR}/tests/layouts/pre_mapedit.ini" "-DLAYOUT_SAME_DOCK=Entities;Map;Systems"
           "-DFORBID_OUTPUT=\\[error\\]" -P "${map_smoke}")
-# No Terrain entity, no project: the tab says so (as the Zone tab), and nothing is logged.
+# No Terrain entity, no project: the tab says so, and nothing is logged.
 add_test(NAME editor_map_no_terrain
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/map_no_terrain.png"
           "-DEXTRA_ARGS=--scene ${KAST_TEST_PROJECT}/scene_b.scene --map-click 0,0" -DFOCUS_PANEL=Map
@@ -84,11 +90,11 @@ add_test(NAME editor_map_warnings
           "-DEXTRA_ARGS=--scene @PROJECT@/scenes/tilegrid.scene --size 1600x1000 --file-save" -DFOCUS_PANEL=Map -DFRAMES=300
           "-DEXPECT_ONCE=${map_orphan};${map_bounds}" "-DEXPECT_OUTPUT=Saved scene '[^']*scenes/tilegrid.scene'"
           "-DFORBID_OUTPUT=\\[error\\]" -P "${map_copy}")
-# Removing tile 1_1 in the zone (saved) leaves its scene on disk, now an orphan.
+# Removing tile 1_1 in the map (saved) leaves its scene on disk, now an orphan.
 add_test(NAME editor_map_orphan_after_remove
   COMMAND "${CMAKE_COMMAND}" "-DSOURCE=${KAST_TEST_PROJECT}" "-DEDITOR=$<TARGET_FILE:kast_editor>"
           "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/map_orphan_after_remove.png"
-          "-DEXTRA_ARGS=--scene @PROJECT@/scenes/tilegrid.scene --size 1600x1000 --map tilegrid --remove-tile 1,1 --save-zone --no-recycle"
+          "-DEXTRA_ARGS=--scene @PROJECT@/scenes/tilegrid.scene --size 1600x1000 --map tilegrid --remove-tile 1,1 --save-map --no-recycle"
           -DFOCUS_PANEL=Map "-DEXPECT_ONCE=Map: maps/tilegrid/scenes/1_1.scene is an orphan"
           "-DMUST_EXIST=@PROJECT@/maps/tilegrid/scenes/1_1.scene" "-DFORBID_OUTPUT=\\[error\\]" -P "${map_copy}")
 
@@ -102,7 +108,8 @@ add_test(NAME editor_map_play_stream
           -DFOCUS_PANEL=Map -DFRAMES=230
           "-DEXPECT_OUTPUT=Unloaded scene 'maps/tilegrid/scenes/1_1.scene'.*map stream: unloaded map 7 tile 1,1 .*${map_stream_head}.*${map_stream_tail}.*Stop"
           "-DFORBID_OUTPUT=\\[error\\]" -P "${map_smoke}")
-set_tests_properties(editor_map_tab editor_map_tab_old_layout editor_map_tab_pre_zone_layout editor_map_no_terrain
+set_tests_properties(editor_map_tab editor_map_tab_old_layout editor_map_tab_pre_mapedit_layout editor_map_tab_zone_own_dock
+                     editor_map_no_terrain
                      editor_map_no_project editor_map_click_open
                      editor_map_click_open_hierarchy editor_map_click_close editor_map_click_undeclared
                      editor_map_click_create editor_map_click_create_save editor_map_click_create_close_prompt

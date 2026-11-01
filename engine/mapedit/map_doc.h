@@ -1,5 +1,5 @@
-// The zone builder's document: one map's files as JSON (edited in place, so keys the tool does not know survive), its
-// tile heights, and its undo history (docs/editor/undo-redo.html). No file IO (zone_io.h) and no window.
+// The map builder's document: one map's files as JSON (edited in place, so keys the tool does not know survive), its
+// tile heights, and its undo history (docs/editor/undo-redo.html). No file IO (map_io.h) and no window.
 #pragma once
 #include <heights.h>
 #include <map.h>
@@ -15,7 +15,7 @@
 #include <string>
 #include <vector>
 
-namespace zone {
+namespace mapedit {
 
 using Json = nlohmann::ordered_json; // keeps the files' key order
 using kast::map::TileKey;
@@ -32,31 +32,31 @@ using TileMap = std::map<TileKey, T, TileLess>;
 using HeightsPtr = std::shared_ptr<const kast::map::Heights>;
 
 // Everything a map's files hold.
-struct ZoneState {
+struct MapState {
     Json manifest;               // map.json
     Json areas;                  // areas.json; null: no file
     TileMap<Json> spawns;        // .server/spawns/<tx>_<tz>.json
     TileMap<Json> objects;       // objects/<tx>_<tz>.json; a tile without objects has no entry (and no file)
-    TileMap<Json> interactables; // .server/interactables/<tx>_<tz>.json, kept in step with objects (zone_edit.h)
+    TileMap<Json> interactables; // .server/interactables/<tx>_<tz>.json, kept in step with objects (map_edit.h)
     TileMap<HeightsPtr> heights; // tiles with a heights file or edits; absent: flat at heightMin
 };
 
 // Same content: JSON equal, heights the same buffers (an edit always makes a new one).
-bool same(const ZoneState& a, const ZoneState& b);
+bool same(const MapState& a, const MapState& b);
 
 // A problem in one file, as the world server reports it ("maps/meadow/areas.json", "area \"x\": ...").
-struct ZoneError {
+struct MapError {
     std::string file, message;
 };
 
 // "tx_tz"
 std::string tile_name(TileKey t);
 
-class ZoneDoc {
+class MapDoc {
 public:
     std::string folder;              // maps/<folder>
-    ZoneState state;                 // what the tool shows and saves
-    ZoneState saved;                 // what is on disk (empty for a new map)
+    MapState state;                 // what the tool shows and saves
+    MapState saved;                 // what is on disk (empty for a new map)
     TileMap<std::string> heightExt;  // the heights file on disk per tile: ".r16" or ".png"
 
     // The manifest parsed; nullopt with err set if it is invalid.
@@ -96,7 +96,7 @@ private:
         }
     };
     History history_;
-    std::optional<ZoneState> pending_; // the state at begin()
+    std::optional<MapState> pending_; // the state at begin()
 };
 
-} // namespace zone
+} // namespace mapedit

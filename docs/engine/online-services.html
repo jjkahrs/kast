@@ -579,13 +579,13 @@ saved in scenes like any other:</p>
   <code>NetworkLocalPlayer</code> is placed where the old one stood, with no <code>Move</code> sent for it) and the players and NPCs in view (the
   new scene's template is cloned for each, where it was last shown; an NPC from the new scene's NPC templates). That
   holds across a scene with no <code>NetworkLocalPlayer</code> or template too, such as a character select scene that enters the
-  world and then loads a zone's scene. The new scene's scripts then get, before any other event, <code>world.entered</code>
+  world and then loads a map's scene. The new scene's scripts then get, before any other event, <code>world.entered</code>
   (the player's server id, map, position and heading now; publisher <code>kast.replication</code>), <code>world.component</code> for each
   replicated value and <code>world.entitySpawned</code> for each clone, as if they had just entered. A game's one-time
   <code>server.*</code> events (sent once on entering) are caught up with <code>kast.subscribe(name, fn, {replay = true})</code>
   (<a href="events.html">Events</a>), which calls <code>fn</code> at once with the connection's last event of that name.
-  <code>samples/starter-mmo</code> loads one scene per zone this way
-  (<a href="../editor/zone-builder.html#one-scene-per-zone">Zone Builder</a>).</li>
+  <code>samples/starter-mmo</code> loads one scene per map this way
+  (<a href="../editor/map-builder.html#one-scene-per-map">Map Builder</a>).</li>
 <li><strong>NPCs</strong>: the world server's NPCs (<a href="../services/world/npcs.html">World Server, NPCs</a>) arrive like players, with <code>kind</code> <code>"npc"</code> and a
   <code>template</code>. Put one entity per NPC type under an entity named in <code>npcTemplates</code> (e.g. <code>NPC Templates</code> &gt; <code>Guard</code>,
   <code>Merchant</code>), named after the template the server's <code>kast.create</code> uses. Players are never cloned from them.</li>

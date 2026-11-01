@@ -203,7 +203,7 @@ public:
     // changed on disk since loaded reload first. shadowViews: the first of kShadowViews views, all before view. With a
     // target (setTarget) the blended draws go to its blendView, after the SCREEN_TEXTURE / DEPTH_TEXTURE copies.
     // extra: another scene whose meshes, models and terrain draw too, lit by scene's lights, sky and fog (the editor's
-    // open zone over the edited scene).
+    // open map over the edited scene).
     void render(const Scene& scene, const std::filesystem::path& projectRoot, bgfx::ViewId view, const float* viewMtx,
                 const float* projMtx, bgfx::ViewId shadowViews, const Scene* extra = nullptr);
     // Into an already encoded (sRGB) target after post, depth-tested against the scene's depth. selected: the
@@ -211,8 +211,8 @@ public:
     void renderOverlays(const Scene& scene, bgfx::ViewId view, const float* viewMtx, const float* projMtx,
                         entt::entity selected);
     // Until replaced (empty materialPath: none), terrain whose map material is materialPath draws with material, and
-    // the sRGB texture texturePath is image instead of either file: the editor's zone preview of a material not
-    // saved yet (Zone Builder, Create texture & material).
+    // the sRGB texture texturePath is image instead of either file: the editor's map preview of a material not
+    // saved yet (Map Builder, Create texture & material).
     void setPreview(const std::string& materialPath, const Material& material, const std::string& texturePath,
                     MipImage image);
     // What the next render() draws into with view (PostProcess::target(): RGBA16F color, D24S8 depth) and its size, so

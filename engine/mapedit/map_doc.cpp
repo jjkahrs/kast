@@ -1,20 +1,20 @@
-#include "zone_doc.h"
+#include "map_doc.h"
 
 #include <log.h>
 
 #include <format>
 #include <set>
 
-namespace zone {
+namespace mapedit {
 
-bool same(const ZoneState& a, const ZoneState& b) {
+bool same(const MapState& a, const MapState& b) {
     return a.manifest == b.manifest && a.areas == b.areas && a.spawns == b.spawns && a.objects == b.objects &&
            a.interactables == b.interactables && a.heights == b.heights;
 }
 
 std::string tile_name(TileKey t) { return std::to_string(t.x) + "_" + std::to_string(t.z); }
 
-std::optional<kast::map::MapInfo> ZoneDoc::info(std::string& err) const {
+std::optional<kast::map::MapInfo> MapDoc::info(std::string& err) const {
     return kast::map::parse_manifest(nlohmann::json(state.manifest), err);
 }
 
@@ -24,8 +24,8 @@ namespace {
 template <typename T>
 using TileChanges = TileMap<std::optional<T>>;
 
-// The parts of a ZoneState one edit changed, as they were before it or after it.
-struct ZonePart {
+// The parts of a MapState one edit changed, as they were before it or after it.
+struct MapPart {
     std::optional<Json> manifest, areas;
     TileChanges<Json> spawns, objects, interactables;
     TileChanges<HeightsPtr> heights;
@@ -56,7 +56,7 @@ void apply(const TileChanges<T>& changes, TileMap<T>& tiles) {
         else tiles.erase(t);
 }
 
-void apply(const ZonePart& part, ZoneState& state) {
+void apply(const MapPart& part, MapState& state) {
     if (part.manifest) state.manifest = *part.manifest;
     if (part.areas) state.areas = *part.areas;
     apply(part.spawns, state.spawns);
@@ -66,7 +66,7 @@ void apply(const ZonePart& part, ZoneState& state) {
 }
 
 // The step's name, for the part that changed (the first of these if several did).
-std::string step_name(const ZonePart& changed) {
+std::string step_name(const MapPart& changed) {
     if (!changed.heights.empty()) return "Edit Terrain";
     if (changed.manifest) return "Edit Map";
     if (!changed.objects.empty() || !changed.interactables.empty()) return "Edit Objects";
@@ -76,13 +76,13 @@ std::string step_name(const ZonePart& changed) {
 
 } // namespace
 
-void ZoneDoc::begin() { pending_ = state; }
+void MapDoc::begin() { pending_ = state; }
 
-void ZoneDoc::commit() {
+void MapDoc::commit() {
     if (!pending_) return;
-    const ZoneState before = std::move(*pending_);
+    const MapState before = std::move(*pending_);
     pending_.reset();
-    auto parts = std::make_shared<std::pair<ZonePart, ZonePart>>(); // before, after
+    auto parts = std::make_shared<std::pair<MapPart, MapPart>>(); // before, after
     auto& [was, now] = *parts;
     if (before.manifest != state.manifest) {
         was.manifest = before.manifest;
@@ -103,16 +103,16 @@ void ZoneDoc::commit() {
                          [this, parts] { apply(parts->second, state); }});
 }
 
-void ZoneDoc::undo() {
+void MapDoc::undo() {
     if (editing() || !canUndo()) return;
     kast::log::info(std::format("Undo {}", history_.stack.undoName()));
     history_.stack.undo();
 }
 
-void ZoneDoc::redo() {
+void MapDoc::redo() {
     if (editing() || !canRedo()) return;
     kast::log::info(std::format("Redo {}", history_.stack.redoName()));
     history_.stack.redo();
 }
 
-} // namespace zone
+} // namespace mapedit

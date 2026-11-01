@@ -2183,7 +2183,7 @@ void checkProjectDocument()
           "Open: the project is found walking up from the scene");
     check(projectScenePath(doc) == "scenes/start.scene", "the scene's project-relative path");
     check(windowTitle(doc) == "Kast Editor - Alpha - start", "title with a project");
-    check(windowTitle(doc, true) == "Kast Editor - Alpha - start*", "title with unsaved zone changes only");
+    check(windowTitle(doc, true) == "Kast Editor - Alpha - start*", "title with unsaved map changes only");
     doc.dirty = true;
     check(windowTitle(doc) == "Kast Editor - Alpha - start*", "title with a project and unsaved changes");
     resetToDefault(doc);
@@ -3981,7 +3981,7 @@ void checkBuild()
 void checkBuildSettings()
 {
     check(projectScenes(KAST_TEST_PROJECT_DIR) ==
-              std::vector<std::string>{"additive_a.scene", "additive_b.scene", "additive_player.scene", "area_lights.scene", "audio.scene", "custom_shaders.scene", "dof.scene", "events.scene", "fsm.scene", "gpu_textures.scene", "gpu_textures_bad.scene", "health.scene", "ibl_shader.scene", "ibl_sky.scene", "ibl_sky_cubemap.scene", "lightmap_room.scene", "maps/tilegrid/scenes/0_0.scene", "maps/tilegrid/scenes/0_1.scene", "maps/tilegrid/scenes/1_0.scene", "maps/tilegrid/scenes/1_1.scene", "maps/tilegrid/scenes/3_1.scene", "material_features.scene",
+              std::vector<std::string>{"additive_a.scene", "additive_b.scene", "additive_player.scene", "area_lights.scene", "audio.scene", "custom_shaders.scene", "dof.scene", "events.scene", "fsm.scene", "gpu_textures.scene", "gpu_textures_bad.scene", "health.scene", "ibl_shader.scene", "ibl_sky.scene", "ibl_sky_cubemap.scene", "lightmap_room.scene", "map_objects.scene", "maps/tilegrid/scenes/0_0.scene", "maps/tilegrid/scenes/0_1.scene", "maps/tilegrid/scenes/1_0.scene", "maps/tilegrid/scenes/1_1.scene", "maps/tilegrid/scenes/3_1.scene", "material_features.scene",
                                        "materials.scene", "missing_component.scene", "models.scene",
                                        "models_anim.scene", "models_lua.scene", "models_material.scene",
                                        "models_missing.scene", "net_a.scene", "net_b.scene", "online_auth.scene", "online_npcs.scene", "online_replication.scene", "online_session.scene", "online_world.scene", "orm_split.scene",
@@ -3991,8 +3991,7 @@ void checkBuildSettings()
                                        "point_lights.scene",
                                        "point_shadows.scene", "post_processing.scene", "prefabs.scene", "reflection_probe.scene", "reflection_probe_missing.scene", "reflection_probe_priority.scene", "scene_a.scene", "scene_b.scene", "scenes/tilegrid.scene", "sdfgi_outdoor.scene",
                                        "shader_errors.scene", "shader_graph_demo.scene", "shader_graphs.scene", "shader_light.scene", "shader_light_local.scene", "shader_screen.scene", "shader_screen_identity.scene", "shader_showcase.scene", "shader_vertex.scene", "shader_vertex_offset.scene", "shader_vertex_offset_reference.scene", "shadows.scene", "sky_cubemap.scene", "sky_cubemap_back.scene", "sky_mismatched.scene",
-                                       "sky_missing_face.scene", "sky_procedural.scene", "spot_area_shadows.scene", "spot_lights.scene", "ssao.scene", "ssr.scene", "terrain.scene", "ui.scene", "ui_bind.scene", "ui_drag.scene", "ui_effects.scene", "ui_lists.scene", "ui_masks.scene", "ui_prefab.scene", "ui_richtext.scene", "ui_scale.scene", "ui_scale_api.scene", "ui_scale_display.scene", "ui_scale_editor.scene", "ui_tooltip.scene", "ui_tooltip_override.scene", "ui_widgets.scene", "volumetric_fog.scene", "voxelgi_room.scene", "world_ui.scene", "world_ui_input.scene", "world_ui_overflow.scene", "world_ui_scene_view.scene", "world_ui_world.scene",
-                                       "zone_objects.scene"},
+                                       "sky_missing_face.scene", "sky_procedural.scene", "spot_area_shadows.scene", "spot_lights.scene", "ssao.scene", "ssr.scene", "terrain.scene", "ui.scene", "ui_bind.scene", "ui_drag.scene", "ui_effects.scene", "ui_lists.scene", "ui_masks.scene", "ui_prefab.scene", "ui_richtext.scene", "ui_scale.scene", "ui_scale_api.scene", "ui_scale_display.scene", "ui_scale_editor.scene", "ui_tooltip.scene", "ui_tooltip_override.scene", "ui_widgets.scene", "volumetric_fog.scene", "voxelgi_room.scene", "world_ui.scene", "world_ui_input.scene", "world_ui_overflow.scene", "world_ui_scene_view.scene", "world_ui_world.scene"},
           "tests/project lists its scenes, sorted");
 
     const std::filesystem::path root = looseTestDir("kast_build_settings_check") / "game";
@@ -4004,7 +4003,7 @@ void checkBuildSettings()
     std::filesystem::copy_file(root / "scene_b.scene", root / "levels/c.scene");
     writeFile(root / "broken.scene", "{oops");
     check(projectScenes(root) == std::vector<std::string>{"additive_a.scene", "additive_b.scene", "additive_player.scene", "area_lights.scene", "audio.scene", "broken.scene", "custom_shaders.scene", "dof.scene", "events.scene", "fsm.scene",
-                                                          "gpu_textures.scene", "gpu_textures_bad.scene", "health.scene", "ibl_shader.scene", "ibl_sky.scene", "ibl_sky_cubemap.scene", "levels/c.scene", "lightmap_room.scene", "maps/tilegrid/scenes/0_0.scene", "maps/tilegrid/scenes/0_1.scene", "maps/tilegrid/scenes/1_0.scene", "maps/tilegrid/scenes/1_1.scene", "maps/tilegrid/scenes/3_1.scene", "material_features.scene", "materials.scene",
+                                                          "gpu_textures.scene", "gpu_textures_bad.scene", "health.scene", "ibl_shader.scene", "ibl_sky.scene", "ibl_sky_cubemap.scene", "levels/c.scene", "lightmap_room.scene", "map_objects.scene", "maps/tilegrid/scenes/0_0.scene", "maps/tilegrid/scenes/0_1.scene", "maps/tilegrid/scenes/1_0.scene", "maps/tilegrid/scenes/1_1.scene", "maps/tilegrid/scenes/3_1.scene", "material_features.scene", "materials.scene",
                                                           "missing_component.scene", "models.scene",
                                                           "models_anim.scene", "models_lua.scene",
                                                           "models_material.scene", "models_missing.scene", "net_a.scene",
@@ -4015,8 +4014,7 @@ void checkBuildSettings()
                                                           "point_lights.scene", "point_shadows.scene",
                                                           "post_processing.scene", "prefabs.scene", "reflection_probe.scene", "reflection_probe_missing.scene", "reflection_probe_priority.scene", "scene_a.scene", "scene_b.scene", "scenes/tilegrid.scene", "sdfgi_outdoor.scene",
                                                           "shader_errors.scene", "shader_graph_demo.scene", "shader_graphs.scene", "shader_light.scene", "shader_light_local.scene", "shader_screen.scene", "shader_screen_identity.scene", "shader_showcase.scene", "shader_vertex.scene", "shader_vertex_offset.scene", "shader_vertex_offset_reference.scene", "shadows.scene", "sky_cubemap.scene", "sky_cubemap_back.scene", "sky_mismatched.scene",
-                                                          "sky_missing_face.scene", "sky_procedural.scene", "spot_area_shadows.scene", "spot_lights.scene", "ssao.scene", "ssr.scene", "terrain.scene", "ui.scene", "ui_bind.scene", "ui_drag.scene", "ui_effects.scene", "ui_lists.scene", "ui_masks.scene", "ui_prefab.scene", "ui_richtext.scene", "ui_scale.scene", "ui_scale_api.scene", "ui_scale_display.scene", "ui_scale_editor.scene", "ui_tooltip.scene", "ui_tooltip_override.scene", "ui_widgets.scene", "volumetric_fog.scene", "voxelgi_room.scene", "world_ui.scene", "world_ui_input.scene", "world_ui_overflow.scene", "world_ui_scene_view.scene", "world_ui_world.scene",
-                                                          "zone_objects.scene"},
+                                                          "sky_missing_face.scene", "sky_procedural.scene", "spot_area_shadows.scene", "spot_lights.scene", "ssao.scene", "ssr.scene", "terrain.scene", "ui.scene", "ui_bind.scene", "ui_drag.scene", "ui_effects.scene", "ui_lists.scene", "ui_masks.scene", "ui_prefab.scene", "ui_richtext.scene", "ui_scale.scene", "ui_scale_api.scene", "ui_scale_display.scene", "ui_scale_editor.scene", "ui_tooltip.scene", "ui_tooltip_override.scene", "ui_widgets.scene", "volumetric_fog.scene", "voxelgi_room.scene", "world_ui.scene", "world_ui_input.scene", "world_ui_overflow.scene", "world_ui_scene_view.scene", "world_ui_world.scene"},
           "Start Scene choices: sorted '/' paths, no dotfile or dot-directory scenes (the pak rule)");
 
     Document doc;
@@ -5829,7 +5827,7 @@ void checkAssetRefs()
     const kast::map::ParsedObjects parsed = kast::map::parse_objects(objects, {0, 0});
     check(parsed.errors.empty() && parsed.objects.size() == 2 && parsed.objects[0].prefab == "art/box.prefab" &&
               parsed.objects[1].prefab == "art/old.prefab",
-          "asset refs: zone object prefab refs and legacy strings load by path (engine and server)");
+          "asset refs: map object prefab refs and legacy strings load by path (engine and server)");
     GuiDoc gui;
     gui.setPrefabContext(root, "art/ui/hud.rml");
     check(gui.parse(std::format(R"(<rml><head><link type="text/rcss" href="hud.rcss" {}="{}"/></head><body>)"
@@ -5895,7 +5893,7 @@ void checkAssetRefs()
           "asset refs: a file renamed without its .meta is re-paired and its refs resolve");
     check(saveFile(doc, (root / "art/main.scene").string(), error), "asset refs: save the re-paired scene");
 
-    // The rename pass over unopened files: scene, .mat, GUI, project.kast startScene, map.json material, zone objects.
+    // The rename pass over unopened files: scene, .mat, GUI, project.kast startScene, map.json material, map objects.
     writeFile(root / "art/ui/hud.rml", std::format("<rml>\n<head>\n<link type=\"text/rcss\" href=\"hud.rcss\"/>\n</head>\n<body>\n"
                                                    "<div id=\"b\" data-prefab=\"art/ui/box.guiprefab\"/>\n</body>\n</rml>\n"));
     const std::optional<std::string> withIds = editAssetRefs("art/ui/hud.rml", readText(root / "art/ui/hud.rml"),
@@ -5912,10 +5910,10 @@ void checkAssetRefs()
     check(kast::loadProject(root / kast::kProjectFileName, opened, error) && kast::saveProject(opened, error) &&
               jsonOf(root / kast::kProjectFileName)["startScene"] == ref(*assetIds().idOf("art/main.scene"), "art/main.scene"),
           "asset refs: project.kast's startScene is written as a ref");
-    // map.json and zone object files, as the zone editor writes them with the hooks (zone_self_check checks that).
-    nlohmann::json zoneMap = manifest;
-    zoneMap["material"] = nlohmann::json::parse(ref(*assetIds().idOf("art/red.mat"), "art/red.mat").dump());
-    writeFile(root / "maps/m/map.json", zoneMap.dump(2));
+    // map.json and map object files, as the map editor writes them with the hooks (mapedit_self_check checks that).
+    nlohmann::json mapMap = manifest;
+    mapMap["material"] = nlohmann::json::parse(ref(*assetIds().idOf("art/red.mat"), "art/red.mat").dump());
+    writeFile(root / "maps/m/map.json", mapMap.dump(2));
     writeFile(root / "art/box.prefab", "{}");
     assetIds().scan(root);
     objects["objects"][0]["prefab"] = nlohmann::json::parse(ref(*assetIds().idOf("art/box.prefab"), "art/box.prefab").dump());
@@ -5954,14 +5952,14 @@ void checkAssetRefs()
     std::string bus = "UI", inside = "ui/x.png";
     check(!remapAssetPath(bus, "ui", "hud") && remapAssetPath(inside, "ui", "hud") && inside == "hud/x.png",
           "remapAssetPath: a plain string equal to a folder name (an enum value) is no path; one inside it is");
-    // An open zone's in-memory map.json and objects (loaded refs are plain paths) follow a rename (ZoneSession::remap).
-    nlohmann::ordered_json zoneManifest = {{"name", "Hills"}, {"material", "gfx/ground.mat"}},
-                           zoneObjects = {{"objects", {{{"type", "visual"}, {"prefab", "gfx/props/crate.prefab"}}}}};
-    check(remapAssetPaths(zoneManifest, "gfx/ground.mat", "gfx/dirt.mat") && zoneManifest["material"] == "gfx/dirt.mat" &&
-              remapAssetPaths(zoneObjects, "gfx/props", "props") &&
-              zoneObjects["objects"][0]["prefab"] == "props/crate.prefab" && zoneObjects["objects"][0]["type"] == "visual" &&
-              !remapAssetPaths(zoneManifest, "gfx/ground.mat", "gfx/dirt.mat"),
-          "remapAssetPaths: an open zone's material and object prefab paths follow a rename and a folder move");
+    // An open map's in-memory map.json and objects (loaded refs are plain paths) follow a rename (MapSession::remap).
+    nlohmann::ordered_json mapManifest = {{"name", "Hills"}, {"material", "gfx/ground.mat"}},
+                           mapObjects = {{"objects", {{{"type", "visual"}, {"prefab", "gfx/props/crate.prefab"}}}}};
+    check(remapAssetPaths(mapManifest, "gfx/ground.mat", "gfx/dirt.mat") && mapManifest["material"] == "gfx/dirt.mat" &&
+              remapAssetPaths(mapObjects, "gfx/props", "props") &&
+              mapObjects["objects"][0]["prefab"] == "props/crate.prefab" && mapObjects["objects"][0]["type"] == "visual" &&
+              !remapAssetPaths(mapManifest, "gfx/ground.mat", "gfx/dirt.mat"),
+          "remapAssetPaths: an open map's material and object prefab paths follow a rename and a folder move");
 
     // Build ships fresh hints: a file renamed with its .meta in Explorer, the scene not saved since.
     fs::rename(root / "gfx/audio/hit.wav", root / "gfx/audio/boom.wav");
@@ -14381,11 +14379,11 @@ void checkTerrainPlay()
     check(doc.scene.registry().view<kast::TerrainTile>().empty(), "terrain Play: Stop leaves no tiles in the scene");
 }
 
-// Zone objects (docs/engine/terrain.html#objects) on the hills' fixtures (maps/hills/objects): each streams in with its
+// Map objects (docs/engine/terrain.html#objects) on the hills' fixtures (maps/hills/objects): each streams in with its
 // tile as the tile's child, an object entity at its pos and yaw holding the prefab instance (scaled), and for an obstacle
 // or interactable a static Collider from its shape standing on pos; Jolt collides with the shape. nearestInteractable
 // measures to the shape's edge. A bad entry and a missing prefab are logged with the file and skipped, the rest kept.
-void checkZoneObjects()
+void checkMapObjects()
 {
     kast::TerrainStreamer streamer;
     streamer.start(std::filesystem::path(KAST_TEST_PROJECT_DIR));
@@ -14400,7 +14398,7 @@ void checkZoneObjects()
             objects[std::format("{}_{} {}", tile.tx, tile.tz, scene.registry().get<kast::Name>(child).value)] = child;
     check(objects.size() == 4 && objects.contains("0_0 visual Crate") && objects.contains("1_0 obstacle Crate") &&
               objects.contains("0_1 interactable Crate") && objects.contains("0_1 obstacle Crate"),
-          "zone objects: hills' 4 fixtures are their tiles' children");
+          "map objects: hills' 4 fixtures are their tiles' children");
     if (objects.size() != 4)
         return;
     const auto& reg = scene.registry();
@@ -14414,16 +14412,16 @@ void checkZoneObjects()
     check(!reg.all_of<kast::Collider>(visual) && scene.children(visual).size() == 1 &&
               near(reg.get<kast::Transform>(scene.children(visual)[0]).scale, {0.4f, 0.4f, 0.4f}, 1e-5f) &&
               near(worldPos(visual).x, 248.0f) && near(worldPos(visual).z, 244.0f),
-          "zone objects: a visual has no Collider, its prefab instance is scaled 0.4, at its map position");
+          "map objects: a visual has no Collider, its prefab instance is scaled 0.4, at its map position");
     const kast::Collider* box = reg.try_get<kast::Collider>(wall);
     check(box && box->shape == kast::ColliderShape::Box && near(box->size, {2.0f, 2.0f, 2.0f}, 1e-5f) &&
               near(box->center, {0.0f, 1.0f, 0.0f}, 1e-5f) && !reg.all_of<kast::Rigidbody>(wall) &&
               near(worldPos(wall).x, 266.0f) && near(reg.get<kast::Transform>(wall).position.x, 10.0f),
-          "zone objects: an obstacle's box shape is a static Collider standing on its pos (local to tile 1_0)");
+          "map objects: an obstacle's box shape is a static Collider standing on its pos (local to tile 1_0)");
     const kast::Collider* post = reg.try_get<kast::Collider>(shrine);
     check(post && post->shape == kast::ColliderShape::Cylinder && near(post->radius, 0.6f) && near(post->height, 1.0f) &&
               near(post->center, {0.0f, 0.5f, 0.0f}, 1e-5f),
-          "zone objects: an interactable's cylinder shape is a Collider too");
+          "map objects: an interactable's cylinder shape is a Collider too");
 
     kast::Physics physics;
     physics.start(scene, bus);
@@ -14431,22 +14429,22 @@ void checkZoneObjects()
     const float base = worldPos(shrine).y;
     const auto hit = physics.raycast({250.0f, base + 20.0f, 266.0f}, {0.0f, -1.0f, 0.0f}, 40.0f);
     check(hit && hit->entity == shrine && near(hit->point.y, base + 1.0f, 0.02f),
-          "zone objects: Jolt hits the cylinder's top, 1 m above its pos (the shape, not the 1 m crate mesh)");
+          "map objects: Jolt hits the cylinder's top, 1 m above its pos (the shape, not the 1 m crate mesh)");
     const auto through = physics.raycast({248.0f, worldPos(visual).y + 20.0f, 244.0f}, {0.0f, -1.0f, 0.0f}, 40.0f);
-    check(through && reg.all_of<kast::TerrainTile>(through->entity), "zone objects: a raycast passes through the visual");
+    check(through && reg.all_of<kast::TerrainTile>(through->entity), "map objects: a raycast passes through the visual");
 
     const auto nearest = kast::nearestInteractable(scene, 250.0f, 268.5f, 3.0f);
     check(nearest && nearest->object->id == 1 && nearest->object->name == "Test Shrine" && near(nearest->distance, 1.9f, 1e-3f),
-          "zone objects: nearestInteractable finds Test Shrine 1.9 m from its edge");
-    check(!kast::nearestInteractable(scene, 250.0f, 280.0f, 3.0f), "zone objects: none beyond maxDistance");
+          "map objects: nearestInteractable finds Test Shrine 1.9 m from its edge");
+    check(!kast::nearestInteractable(scene, 250.0f, 280.0f, 3.0f), "map objects: none beyond maxDistance");
 
     scene.registry().get<kast::Terrain>(terrain).radius = 0; // the centre tile 0_0 only: 0_1 and 1_0 stream out
     streamer.update(scene, bus);
     check(!scene.valid(wall) && !scene.valid(shrine) && scene.valid(visual) && !kast::nearestInteractable(scene, 250.0f, 268.5f, 3.0f),
-          "zone objects: they go with their tile");
+          "map objects: they go with their tile");
 
     // A copy of the hills with a bad entry and a missing prefab (twice): logged, skipped, the rest kept.
-    const std::filesystem::path root = std::filesystem::temp_directory_path() / "kast_zone_objects_check";
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "kast_map_objects_check";
     std::filesystem::remove_all(root);
     std::filesystem::create_directories(root / "maps");
     std::filesystem::copy(std::filesystem::path(KAST_TEST_PROJECT_DIR) / "maps" / "hills", root / "maps" / "hills",
@@ -14470,20 +14468,20 @@ void checkZoneObjects()
               logged(std::format("Terrain: {}: objects[1]: \"type\" must be \"visual\", \"obstacle\" or \"interactable\"; "
                                  "that object is skipped", file)) &&
               logged(std::format("Terrain: {}: prefab \"prefabs/NopeZoneObject.prefab\":", file)) && count == 1,
-          std::format("zone objects: a bad entry and a missing prefab (logged once) are skipped, the other 2 kept ({})",
+          std::format("map objects: a bad entry and a missing prefab (logged once) are skipped, the other 2 kept ({})",
                       brokenScene.children(tile).size()).c_str());
     std::filesystem::remove_all(root);
 }
 
-// tests/project/zone_objects.scene in editor Play (scripts/zone_objects.lua): the Hero walking +x stops at the
+// tests/project/map_objects.scene in editor Play (scripts/map_objects.lua): the Hero walking +x stops at the
 // obstacle crate's side (x 265 - its 0.4 m radius); the Walker walks through the visual crate; the Lua API answers.
-void checkZoneObjectsPlay()
+void checkMapObjectsPlay()
 {
     Document doc;
     std::string error;
     const std::filesystem::path root = KAST_TEST_PROJECT_DIR;
-    check(openProject(doc, root / kast::kProjectFileName, error) && openFile(doc, (root / "zone_objects.scene").string(), error),
-          ("zone objects Play: opens zone_objects.scene: " + error).c_str());
+    check(openProject(doc, root / kast::kProjectFileName, error) && openFile(doc, (root / "map_objects.scene").string(), error),
+          ("map objects Play: opens map_objects.scene: " + error).c_str());
     startPlay(doc);
     for (int i = 0; i < 330; ++i)
         updatePlay(doc, 1.0f / 60.0f);
@@ -14491,12 +14489,12 @@ void checkZoneObjectsPlay()
     const float heroX = hero != entt::null ? doc.scene.registry().get<kast::Transform>(hero).position.x : 0.0f;
     const float walkerX = walker != entt::null ? doc.scene.registry().get<kast::Transform>(walker).position.x : 0.0f;
     check(heroX > 263.5f && heroX < 264.7f,
-          std::format("zone objects Play: the Hero is stopped by the obstacle crate (x {:.2f}, its side at 264.6)", heroX).c_str());
-    check(walkerX > 249.5f, std::format("zone objects Play: the Walker walked through the visual crate at 248 (x {:.2f})", walkerX).c_str());
-    check(logged("zone objects: nearest 1 Test Shrine 1.90 m at 250, 266") && logged("none within 3 m of (250, 280): true") &&
-              logged("zone objects: interact offline false") &&
+          std::format("map objects Play: the Hero is stopped by the obstacle crate (x {:.2f}, its side at 264.6)", heroX).c_str());
+    check(walkerX > 249.5f, std::format("map objects Play: the Walker walked through the visual crate at 248 (x {:.2f})", walkerX).c_str());
+    check(logged("map objects: nearest 1 Test Shrine 1.90 m at 250, 266") && logged("none within 3 m of (250, 280): true") &&
+              logged("map objects: interact offline false") &&
               logged("interact(0) false") && logged("kast.interact: id must be a whole number from 1 to 4294967295, got 0"),
-          "zone objects Play: kast.nearestInteractable and kast.interact from Lua");
+          "map objects Play: kast.nearestInteractable and kast.interact from Lua");
     stopPlay(doc);
 }
 
@@ -18402,8 +18400,8 @@ int main(int argc, char** argv)
     checkTerrainPhysics();
     checkTerrainStreaming();
     checkTerrainPlay();
-    checkZoneObjects();
-    checkZoneObjectsPlay();
+    checkMapObjects();
+    checkMapObjectsPlay();
     checkColliderWireframe();
     checkAudioDecode();
     checkAudioMix();

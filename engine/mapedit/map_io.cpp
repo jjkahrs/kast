@@ -1,4 +1,4 @@
-#include "zone_io.h"
+#include "map_io.h"
 
 #include "terrain_edit.h"
 
@@ -13,7 +13,7 @@
 #include <set>
 #include <tuple>
 
-namespace zone {
+namespace mapedit {
 namespace {
 
 namespace fs = std::filesystem;
@@ -123,12 +123,12 @@ uint16_t next_map_id(const Project& project) {
     return id;
 }
 
-std::optional<ZoneDoc> load_map(const Project& project, const std::string& folder, std::string& err) {
+std::optional<MapDoc> load_map(const Project& project, const std::string& folder, std::string& err) {
     const fs::path dir = project.root / "maps" / u8path(folder);
-    ZoneDoc doc;
+    MapDoc doc;
     doc.folder = folder;
     bool exists = false;
-    const auto fail = [&](const std::string& file, const std::string& message) -> std::optional<ZoneDoc> {
+    const auto fail = [&](const std::string& file, const std::string& message) -> std::optional<MapDoc> {
         err = where(folder, file) + ": " + message;
         return std::nullopt;
     };
@@ -183,7 +183,7 @@ std::optional<ZoneDoc> load_map(const Project& project, const std::string& folde
     return doc;
 }
 
-std::optional<ZoneDoc> new_map(const Project& project, const std::string& folder, const std::string& name, uint16_t id,
+std::optional<MapDoc> new_map(const Project& project, const std::string& folder, const std::string& name, uint16_t id,
                                int width, int depth, std::string& err) {
     static const std::regex plain(R"([A-Za-z0-9_][A-Za-z0-9_-]*)");
     if (!std::regex_match(folder, plain)) {
@@ -198,7 +198,7 @@ std::optional<ZoneDoc> new_map(const Project& project, const std::string& folder
         err = std::format("tiles {} x {}: 1 to {} each way", width, depth, kMaxMapTiles);
         return std::nullopt;
     }
-    ZoneDoc doc;
+    MapDoc doc;
     doc.folder = folder;
     doc.state.manifest = {{"version", 1},
                           {"id", id},
@@ -209,8 +209,8 @@ std::optional<ZoneDoc> new_map(const Project& project, const std::string& folder
     return doc;
 }
 
-std::vector<ZoneError> validate(const Project& project, const ZoneDoc& doc) {
-    std::vector<ZoneError> errors;
+std::vector<MapError> validate(const Project& project, const MapDoc& doc) {
+    std::vector<MapError> errors;
     std::string err;
     const auto info = doc.info(err);
     if (!info) return {{where(doc.folder, "map.json"), err}};
@@ -336,7 +336,7 @@ std::vector<std::string> tile_files(const Project& project, const std::string& f
     return files;
 }
 
-std::vector<std::string> removed_tile_files(const Project& project, const ZoneDoc& doc) {
+std::vector<std::string> removed_tile_files(const Project& project, const MapDoc& doc) {
     std::string err;
     const auto before = doc.saved.manifest.is_null() ? std::nullopt : km::parse_manifest(nlohmann::json(doc.saved.manifest), err);
     const auto now = doc.info(err);
@@ -349,8 +349,8 @@ std::vector<std::string> removed_tile_files(const Project& project, const ZoneDo
     return files;
 }
 
-std::vector<ZoneError> save_map(Project& project, ZoneDoc& doc, bool recycle) {
-    std::vector<ZoneError> errors = validate(project, doc);
+std::vector<MapError> save_map(Project& project, MapDoc& doc, bool recycle) {
+    std::vector<MapError> errors = validate(project, doc);
     if (!errors.empty()) return errors;
     std::vector<std::string> removed = removed_tile_files(project, doc);
     // A tile still declared that lost its heights (removed and added back: flat again) or its spawn file: its old files
@@ -433,4 +433,4 @@ std::vector<ZoneError> save_map(Project& project, ZoneDoc& doc, bool recycle) {
     return {};
 }
 
-} // namespace zone
+} // namespace mapedit

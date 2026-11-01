@@ -9,7 +9,7 @@
 #include <thread>
 #include <vector>
 
-namespace zone {
+namespace mapedit {
 
 class ProcessRunner {
 public:
@@ -38,4 +38,4 @@ private:
 // {release,debug}/kast_mapbake.exe and next to this program that exists; empty if none.
 std::filesystem::path find_mapbake(const std::string& setting);
 
-} // namespace zone
+} // namespace mapedit

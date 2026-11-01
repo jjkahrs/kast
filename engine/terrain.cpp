@@ -62,7 +62,7 @@ std::shared_ptr<const PrefabAsset> PrefabCache::get(const std::string& path, std
     return it->second.first;
 }
 
-entt::entity spawnZoneObject(Scene& scene, entt::entity parent, const bx::Vec3& origin, const map::ZoneObject& object,
+entt::entity spawnMapObject(Scene& scene, entt::entity parent, const bx::Vec3& origin, const map::ZoneObject& object,
                              PrefabCache& prefabs, std::string& error)
 {
     const std::shared_ptr<const PrefabAsset> prefab = prefabs.get(object.prefab, error);
@@ -258,7 +258,7 @@ void TerrainStreamer::spawnObjects(Scene& scene, entt::entity tile, const Loaded
                                        object.prefab, error));
             continue;
         }
-        if (spawnZoneObject(scene, tile, origin, object, prefabs_, error) == entt::null)
+        if (spawnMapObject(scene, tile, origin, object, prefabs_, error) == entt::null)
             log::error(std::format("Terrain: {}: {}; that object is skipped", file.string(), error));
     }
 }

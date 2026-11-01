@@ -9,10 +9,10 @@
 <body>
 <header class="top"><a class="brand" href="../index.html">Kast Docs</a><nav><a href="index.html">Editor</a><a href="../engine/index.html">Engine</a><a href="../services/auth/index.html">Auth Server</a><a href="../services/world/index.html">World Server</a><a href="../services/chat/index.html">Chat Server</a><a href="../services/admin/index.html">Admin App</a><a href="../development/tests.html">Development</a></nav></header>
 <div class="layout">
-<nav class="side"><h2>Editor</h2><ul><li><a href="index.html">Overview</a></li><li><a href="command-line.html">Command line</a></li><li><a href="controls.html">Editor controls</a></li><li><a href="undo-redo.html" class="active">Undo and redo</a></li><li><a href="multi-scene.html">Multi-scene editing</a></li><li><a href="project-manager.html">Project Manager</a></li><li><a href="projects.html">Projects</a></li><li><a href="build.html">Build</a></li><li><a href="online-tooling.html">Online Services tooling</a></li><li><a href="gui-builder.html">GUI Builder</a></li><li><a href="prefabs.html">Prefabs</a></li><li><a href="shaders.html">Shaders</a></li><li><a href="shader-graph.html">Shader Graph</a></li><li><a href="zone-builder.html">Zone Builder</a></li><li><a href="map-builder.html">Map Builder</a></li><li><a href="model-preview.html">Model Preview</a></li><li><a href="assets.html">Assets and asset ids</a></li></ul></nav>
+<nav class="side"><h2>Editor</h2><ul><li><a href="index.html">Overview</a></li><li><a href="command-line.html">Command line</a></li><li><a href="controls.html">Editor controls</a></li><li><a href="undo-redo.html" class="active">Undo and redo</a></li><li><a href="multi-scene.html">Multi-scene editing</a></li><li><a href="project-manager.html">Project Manager</a></li><li><a href="projects.html">Projects</a></li><li><a href="build.html">Build</a></li><li><a href="online-tooling.html">Online Services tooling</a></li><li><a href="gui-builder.html">GUI Builder</a></li><li><a href="prefabs.html">Prefabs</a></li><li><a href="shaders.html">Shaders</a></li><li><a href="shader-graph.html">Shader Graph</a></li><li><a href="map-builder.html">Map Builder</a></li><li><a href="model-preview.html">Model Preview</a></li><li><a href="assets.html">Assets and asset ids</a></li></ul></nav>
 <main>
 <h1 id="undo-redo">Undo and redo</h1>
-<p>Every in-memory edit in the Scene (and a prefab in prefab edit mode), the GUI Builder and the Zone builder can be undone
+<p>Every in-memory edit in the Scene (and a prefab in prefab edit mode), the GUI Builder and the Map builder can be undone
 and redone. Each document keeps its own history of steps; a step is one user gesture with a name ("Move Cube", "Delete
 Panel", "Edit Terrain"). Nothing on disk is ever undone: file writes, asset create / rename / delete, project and build
 changes are not steps.</p>
@@ -35,10 +35,10 @@ Console.</p>
 <li><strong>Scene</strong>: Scene view, Entities, Inspector, Lighting, Post Processing, Physics and every other panel not
   listed below (menus keep the panel focused before them). In prefab edit mode these act on the open prefab instead.</li>
 <li><strong>GUI Builder</strong>: GUI Inspector, GUI Style and GUI Preview (with its GUI Hierarchy inset) act on the open GUI.</li>
-<li><strong>Zone</strong>: the Zone tab acts on the open zone map (a sculpt in the Scene view is the zone's step, undone from
-  the Zone tab).</li>
+<li><strong>Map</strong>: the Map tab acts on the open map (a sculpt in the Scene view is the map's step, undone from
+  the Map tab).</li>
 </ul>
-<p>The histories are independent: undo in the GUI Builder never touches the scene, a zone undo never touches the
+<p>The histories are independent: undo in the GUI Builder never touches the scene, a map undo never touches the
 scene or a GUI, and so on.</p>
 
 <h2 id="steps">What is undoable</h2>
@@ -59,8 +59,8 @@ scene or a GUI, and so on.</p>
 <li><a href="gui-builder.html#prefabs">GUI prefabs</a>: Create GUI Prefab (undo restores the element; the files stay), placing an
 instance, Revert, Revert All and Unpack.</li>
 </ul>
-<h3 id="zone">Zone builder</h3>
-<p>Every edit that marks the zone unsaved: terrain sculpt / flatten strokes, height range, heightmap import and
+<h3 id="map">Map builder</h3>
+<p>Every edit that marks the map unsaved: terrain sculpt / flatten strokes, height range, heightmap import and
 generation, terrain colors, tiles added / removed, the map's fields and spawn point, areas and their vertices and portals,
 spawns and their paths, objects placed / moved / deleted / edited and scatter / erase strokes. A step holds only the parts
 of the map the edit changed (the tiles a stroke touched, the areas file, a tile's objects), as they were before and
@@ -77,7 +77,7 @@ that moves nothing) records no step, and leaves the unsaved mark as it was.</p>
 <li><strong>Cap</strong>: 100 steps per document; the 101st drops the oldest.</li>
 <li><strong>Redo branch</strong>: a new edit after an undo discards the steps that could have been redone.</li>
 <li><strong>Save point</strong>: undoing or redoing back to the state that was last saved clears the unsaved <code>*</code> in the
-  title (the Zone tab's <code>* unsaved</code> for a map); moving away sets it again. A saved state that was discarded from
+  title (the Map tab's <code>* unsaved</code> for a map); moving away sets it again. A saved state that was discarded from
   the redo branch or dropped by the cap is out of reach: the document stays unsaved.</li>
 <li><strong>Selection</strong> follows undo / redo: the entity (by its id) or GUI element the step affected is selected again;
   if it no longer exists the selection is cleared.</li>
@@ -93,12 +93,12 @@ that moves nothing) records no step, and leaves the unsaved mark as it was.</p>
   in prefab mode also clears the waiting scene's history if it has instances.</li>
 <li><strong>GUI Builder</strong>: opening another GUI, reloading it from disk, or closing it; a GUI prefab Apply (it writes the
 <code>.guiprefab</code>) and a prefab changed on disk refreshing the open GUI's instances.</li>
-<li><strong>Zone</strong>: opening another map or creating a New Map (each map loads with an empty history).</li>
+<li><strong>Map</strong>: opening another map or creating a New Map (each map loads with an empty history).</li>
 </ul>
 
 <h2 id="play">Play mode</h2>
 <p>During Play and Pause, Undo and Redo are greyed and the shortcuts do nothing; edits made while playing are never
-recorded. Stop restores the scene as it was before Play, so the history is intact and usable after Stop. The Zone tab is
+recorded. Stop restores the scene as it was before Play, so the history is intact and usable after Stop. The Map tab is
 read-only during Play and in prefab edit mode, and its undo is blocked then too.</p>
 
 <h2 id="testing">Test flags and checks</h2>
@@ -107,12 +107,12 @@ read-only during Play and in prefab edit mode, and its undo is blocked then too.
 <tbody>
 <tr><td><code>--scene-undo &lt;N&gt;</code>, <code>--scene-redo &lt;N&gt;</code></td><td>Undo the scene (or open prefab) N times, then redo N times, after the startup edits.</td></tr>
 <tr><td><code>--gui-undo &lt;N&gt;</code>, <code>--gui-redo &lt;N&gt;</code></td><td>With <code>--open-gui</code>: the same on the open GUI.</td></tr>
-<tr><td><code>--undo</code>, <code>--redo</code></td><td>Zone edit flags: undo / redo one step of the open map.</td></tr>
+<tr><td><code>--undo</code>, <code>--redo</code></td><td>Map edit flags: undo / redo one step of the open map.</td></tr>
 <tr><td><code>--focus-panel &lt;Window&gt; --open-menu Edit</code></td><td>Screenshot the Edit menu as that panel's document sees it.</td></tr>
 </tbody>
 </table>
 <p>See <a href="command-line.html">Command line</a>. <code>kast_self_check --undo</code> checks the undo stack, scene, prefab
-mode and GUI histories; <code>kast_zone_self_check</code> checks the zone's (every edit type undone and redone exactly, one
+mode and GUI histories; <code>kast_mapedit_self_check</code> checks the map's (every edit type undone and redone exactly, one
 step per stroke, no-op edits, the cap, the redo branch, the save point and per-map histories).</p>
 </main>
 </div>

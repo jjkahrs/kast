@@ -1,7 +1,7 @@
-// The zone edit flags (zone_cli.h): parsing each one and running it on the ZoneSession.
-#include "zone_cli.h"
+// The map edit flags (map_cli.h): parsing each one and running it on the MapSession.
+#include "map_cli.h"
 
-#include "zone_panel.h"
+#include "map_panel.h"
 
 #include <files.h>
 #include <log.h>
@@ -9,8 +9,8 @@
 
 #include <bx/math.h>
 
-#include <zone/terrain_edit.h>
-#include <zone/zone_edit.h>
+#include <mapedit/terrain_edit.h>
+#include <mapedit/map_edit.h>
 
 #include <algorithm>
 #include <charconv>
@@ -20,11 +20,11 @@
 #include <limits>
 #include <thread>
 
-namespace zone_cli {
+namespace map_cli {
 namespace {
 
 namespace fs = std::filesystem;
-using zone::Json;
+using mapedit::Json;
 
 // Flags that are edits taking a value, run in command-line order.
 constexpr std::string_view kValueOps[] = {"--map", "--new-map", "--falloff", "--sculpt", "--flatten", "--height-range",
@@ -35,7 +35,7 @@ constexpr std::string_view kValueOps[] = {"--map", "--new-map", "--falloff", "--
                                           "--remove-tile", "--set-spawn", "--add-object", "--set-interactable",
                                           "--move-object", "--delete-object", "--scatter", "--erase-visuals",
                                           "--instance"};
-constexpr std::string_view kFlagOps[] = {"--save-zone", "--expect-save-fail", "--undo", "--redo", "--validate",
+constexpr std::string_view kFlagOps[] = {"--save-map", "--expect-save-fail", "--undo", "--redo", "--validate",
                                          "--create-terrain-material", "--world-map"};
 constexpr float kLoopRadius = 24.0f; // --sculpt-loop's brush
 
@@ -82,10 +82,10 @@ std::optional<std::vector<float>> parseFloats(std::string_view text, size_t min,
 }
 
 // "tx,tz,file": the file may itself contain commas.
-std::optional<std::pair<zone::TileKey, fs::path>> parseTileFile(std::string_view text)
+std::optional<std::pair<mapedit::TileKey, fs::path>> parseTileFile(std::string_view text)
 {
     const auto parts = split(text, ',');
-    zone::TileKey t;
+    mapedit::TileKey t;
     if (parts.size() < 3 || !parseInt(parts[0], t.x) || !parseInt(parts[1], t.z))
         return std::nullopt;
     const std::string_view file = text.substr(parts[0].size() + parts[1].size() + 2);
@@ -93,101 +93,101 @@ std::optional<std::pair<zone::TileKey, fs::path>> parseTileFile(std::string_view
 }
 
 // The terrain edits (the old Session's), one undo step each.
-bool sculpt(zone::ZoneDoc& doc, const zone::Brush& brush, float x, float z, float amount)
+bool sculpt(mapedit::MapDoc& doc, const mapedit::Brush& brush, float x, float z, float amount)
 {
     std::string err;
     const auto info = doc.info(err);
     if (!info)
         return false;
-    zone::TileSet touched;
-    doc.edit([&](zone::ZoneState& s) { touched = zone::apply_brush(*info, s, x, z, brush, amount); });
+    mapedit::TileSet touched;
+    doc.edit([&](mapedit::MapState& s) { touched = mapedit::apply_brush(*info, s, x, z, brush, amount); });
     return !touched.empty();
 }
 
-bool setHeightRange(zone::ZoneDoc& doc, float min, float max)
+bool setHeightRange(mapedit::MapDoc& doc, float min, float max)
 {
     std::string err;
     const auto info = doc.info(err);
     if (!info || !(min <= max)) {
-        kast::log::error("Zone: height range: min must be <= max");
+        kast::log::error("Map: height range: min must be <= max");
         return false;
     }
     size_t clipped = 0;
-    doc.edit([&](zone::ZoneState& s) { clipped = zone::set_height_range(*info, s, min, max); });
-    kast::log::info(std::format("Zone: height range now {} .. {} m{}", min, max,
+    doc.edit([&](mapedit::MapState& s) { clipped = mapedit::set_height_range(*info, s, min, max); });
+    kast::log::info(std::format("Map: height range now {} .. {} m{}", min, max,
                                 clipped ? std::format(" ({} samples clipped)", clipped) : ""));
     return true;
 }
 
-bool importPng(zone::ZoneDoc& doc, zone::TileKey tile, const fs::path& file)
+bool importPng(mapedit::MapDoc& doc, mapedit::TileKey tile, const fs::path& file)
 {
     std::string err, bytes;
     const auto info = doc.info(err);
     if (!info || !info->has_tile(tile)) {
-        kast::log::error("Zone: import PNG: tile " + zone::tile_name(tile) + " is not on the map");
+        kast::log::error("Map: import PNG: tile " + mapedit::tile_name(tile) + " is not on the map");
         return false;
     }
     bool ok = kast::readFile(file, bytes);
     if (!ok)
         err = "cannot read the file";
     else
-        doc.edit([&](zone::ZoneState& s) { ok = zone::import_png16(*info, s, tile, bytes, err); });
+        doc.edit([&](mapedit::MapState& s) { ok = mapedit::import_png16(*info, s, tile, bytes, err); });
     if (ok)
-        kast::log::info(std::format("Zone: imported {} into tile {}", utf8(file), zone::tile_name(tile)));
+        kast::log::info(std::format("Map: imported {} into tile {}", utf8(file), mapedit::tile_name(tile)));
     else
-        kast::log::error(std::format("Zone: import PNG {}: {}", utf8(file), err));
+        kast::log::error(std::format("Map: import PNG {}: {}", utf8(file), err));
     return ok;
 }
 
-bool exportPng(const zone::ZoneDoc& doc, zone::TileKey tile, const fs::path& file)
+bool exportPng(const mapedit::MapDoc& doc, mapedit::TileKey tile, const fs::path& file)
 {
     std::string err;
     const auto info = doc.info(err);
     if (!info || !info->has_tile(tile)) {
-        kast::log::error("Zone: export PNG: tile " + zone::tile_name(tile) + " is not on the map");
+        kast::log::error("Map: export PNG: tile " + mapedit::tile_name(tile) + " is not on the map");
         return false;
     }
-    const bool ok = kast::writeFileAtomic(file, zone::encode_png16(zone::tile_heights(doc.state, tile)));
+    const bool ok = kast::writeFileAtomic(file, mapedit::encode_png16(mapedit::tile_heights(doc.state, tile)));
     if (ok)
-        kast::log::info(std::format("Zone: exported tile {} to {}", zone::tile_name(tile), utf8(file)));
+        kast::log::info(std::format("Map: exported tile {} to {}", mapedit::tile_name(tile), utf8(file)));
     else
-        kast::log::error("Zone: export PNG: cannot write " + utf8(file));
+        kast::log::error("Map: export PNG: cannot write " + utf8(file));
     return ok;
 }
 
-bool generateHeights(zone::ZoneDoc& doc, const zone::NoiseParams& params)
+bool generateHeights(mapedit::MapDoc& doc, const mapedit::NoiseParams& params)
 {
     std::string err;
     const auto info = doc.info(err);
     if (!info)
         return false;
-    doc.edit([&](zone::ZoneState& s) {
-        zone::generate_heights(*info, s, params);
+    doc.edit([&](mapedit::MapState& s) {
+        mapedit::generate_heights(*info, s, params);
         // The spawn stays on the ground (it is on the map: the manifest parsed).
-        s.manifest["spawn"]["pos"][1] = kast::jsonNumber(*zone::ground_y(*info, s, info->spawn[0], info->spawn[2]));
+        s.manifest["spawn"]["pos"][1] = kast::jsonNumber(*mapedit::ground_y(*info, s, info->spawn[0], info->spawn[2]));
     });
-    kast::log::info(std::format("Zone: generated heights (seed {}, scale {} m, {} octaves)", params.seed, params.scale,
+    kast::log::info(std::format("Map: generated heights (seed {}, scale {} m, {} octaves)", params.seed, params.scale,
                                 params.octaves));
     return true;
 }
 
-void createTerrainMaterial(zone::ZoneDoc& doc)
+void createTerrainMaterial(mapedit::MapDoc& doc)
 {
     std::string err;
-    const bool hasColors = zone::parse_gradient(doc.state.manifest, err).has_value();
-    doc.edit([&](zone::ZoneState& s) {
+    const bool hasColors = mapedit::parse_gradient(doc.state.manifest, err).has_value();
+    doc.edit([&](mapedit::MapState& s) {
         if (!hasColors)
-            s.manifest["terrainColors"] = zone::gradient_json(zone::default_gradient());
+            s.manifest["terrainColors"] = mapedit::gradient_json(mapedit::default_gradient());
         s.manifest["terrainUv"] = "map";
-        s.manifest["material"] = zone::terrain_material_path(doc.folder);
+        s.manifest["material"] = mapedit::terrain_material_path(doc.folder);
     });
-    kast::log::info("Zone: terrain material " + zone::terrain_material_path(doc.folder) + " and " +
-                    zone::terrain_texture_path(doc.folder) + " assigned; written on save");
+    kast::log::info("Map: terrain material " + mapedit::terrain_material_path(doc.folder) + " and " +
+                    mapedit::terrain_texture_path(doc.folder) + " assigned; written on save");
 }
 
 // The area, spawn, path and object edits (one undo step each); nullopt if op is not one of them. Positions snap to the
 // ground.
-std::optional<bool> objectEdit(zone::ZoneDoc& doc, const Op& op)
+std::optional<bool> objectEdit(mapedit::MapDoc& doc, const Op& op)
 {
     const auto parts = split(op.value, ',');
     const auto bad = [&](const char* form) -> std::optional<bool> {
@@ -205,33 +205,33 @@ std::optional<bool> objectEdit(zone::ZoneDoc& doc, const Op& op)
     std::string err;
     const auto info = doc.info(err);
     const auto ground = [&](float x, float z) {
-        return zone::Vec3{x, info ? zone::ground_y(*info, doc.state, x, z).value_or(0.0f) : 0.0f, z};
+        return mapedit::Vec3{x, info ? mapedit::ground_y(*info, doc.state, x, z).value_or(0.0f) : 0.0f, z};
     };
-    const auto area = [&](const std::string& id) { return zone::find_area(doc.state, id); };
-    const auto spawn = [&](const std::string& id) { return zone::find_spawn(doc.state, id); };
+    const auto area = [&](const std::string& id) { return mapedit::find_area(doc.state, id); };
+    const auto spawn = [&](const std::string& id) { return mapedit::find_spawn(doc.state, id); };
     int priority = 0;
 
     if (op.flag == "--add-area") {
         const auto v = parts.size() == 6 && parseInt(parts[1], priority) ? floats(2) : std::nullopt;
         if (!v)
             return bad("id,priority,x0,z0,x1,z1");
-        doc.edit([&](zone::ZoneState& s) { zone::add_rect_area(s, parts[0], {(*v)[0], (*v)[1]}, {(*v)[2], (*v)[3]}, priority); });
+        doc.edit([&](mapedit::MapState& s) { mapedit::add_rect_area(s, parts[0], {(*v)[0], (*v)[1]}, {(*v)[2], (*v)[3]}, priority); });
         return true;
     }
     if (op.flag == "--add-polygon") {
         const auto v = parts.size() >= 8 && parts.size() % 2 == 0 && parseInt(parts[1], priority) ? floats(2) : std::nullopt;
         if (!v)
             return bad("id,priority,x,z,x,z,x,z[,...]");
-        std::vector<zone::Point> points;
+        std::vector<mapedit::Point> points;
         for (size_t i = 0; i < v->size(); i += 2)
             points.push_back({(*v)[i], (*v)[i + 1]});
-        doc.edit([&](zone::ZoneState& s) { zone::add_polygon_area(s, parts[0], points, priority); });
+        doc.edit([&](mapedit::MapState& s) { mapedit::add_polygon_area(s, parts[0], points, priority); });
         return true;
     }
     if (op.flag == "--area-parent") {
         if (parts.size() != 2 || !area(parts[0]))
             return bad("id,parent (an existing area)");
-        doc.edit([&](zone::ZoneState& s) { zone::areas_list(s)[*area(parts[0])]["parent"] = parts[1]; });
+        doc.edit([&](mapedit::MapState& s) { mapedit::areas_list(s)[*area(parts[0])]["parent"] = parts[1]; });
         return true;
     }
     if (op.flag == "--area-portal") {
@@ -239,9 +239,9 @@ std::optional<bool> objectEdit(zone::ZoneDoc& doc, const Op& op)
         const auto v = parts.size() == 6 && parseInt(parts[1], map) && map >= 0 && map <= 0xFFFF ? floats(2) : std::nullopt;
         if (!v || !area(parts[0]))
             return bad("id,map,x,y,z,heading (an existing area)");
-        doc.edit([&](zone::ZoneState& s) {
-            zone::areas_list(s)[*area(parts[0])]["portal"] = {{"map", unsigned(map)},
-                                                              {"pos", zone::vec3_json({(*v)[0], (*v)[1], (*v)[2]})},
+        doc.edit([&](mapedit::MapState& s) {
+            mapedit::areas_list(s)[*area(parts[0])]["portal"] = {{"map", unsigned(map)},
+                                                              {"pos", mapedit::vec3_json({(*v)[0], (*v)[1], (*v)[2]})},
                                                               {"heading", kast::jsonNumber((*v)[3])}};
         });
         return true;
@@ -251,35 +251,35 @@ std::optional<bool> objectEdit(zone::ZoneDoc& doc, const Op& op)
         const auto v = parts.size() == 4 && parseInt(parts[1], index) && index >= 0 ? floats(2) : std::nullopt;
         if (!v || !area(parts[0]))
             return bad("id,vertex,x,z (an existing area)");
-        doc.edit([&](zone::ZoneState& s) {
-            zone::move_area_vertex(zone::areas_list(s)[*area(parts[0])], size_t(index), {(*v)[0], (*v)[1]});
+        doc.edit([&](mapedit::MapState& s) {
+            mapedit::move_area_vertex(mapedit::areas_list(s)[*area(parts[0])], size_t(index), {(*v)[0], (*v)[1]});
         });
         return true;
     }
     if (op.flag == "--delete-area") {
         if (!area(op.value))
             return bad("id (an existing area)");
-        doc.edit([&](zone::ZoneState& s) { zone::delete_area(s, *area(op.value)); });
+        doc.edit([&](mapedit::MapState& s) { mapedit::delete_area(s, *area(op.value)); });
         return true;
     }
     if (op.flag == "--add-spawn") {
         const auto v = parts.size() >= 4 && parts.size() <= 6 ? floats(2) : std::nullopt;
         if (!v)
             return bad("id,npc,x,z[,heading[,respawnSec]]");
-        doc.edit([&](zone::ZoneState& s) {
-            zone::add_spawn(s, parts[0], parts[1], ground((*v)[0], (*v)[1]), v->size() > 2 ? (*v)[2] : 0.0f,
+        doc.edit([&](mapedit::MapState& s) {
+            mapedit::add_spawn(s, parts[0], parts[1], ground((*v)[0], (*v)[1]), v->size() > 2 ? (*v)[2] : 0.0f,
                             v->size() > 3 ? (*v)[3] : 60.0f);
         });
         return true;
     }
-    // Zone objects: addressed by tile and index in its objects file ("tx,tz,i"), interactables by id.
-    const auto objectAt = [&](size_t from) -> std::optional<zone::ObjectRef> {
+    // Map objects: addressed by tile and index in its objects file ("tx,tz,i"), interactables by id.
+    const auto objectAt = [&](size_t from) -> std::optional<mapedit::ObjectRef> {
         int tx = 0, tz = 0, index = 0;
         if (parts.size() < from + 3 || !parseInt(parts[from], tx) || !parseInt(parts[from + 1], tz) ||
             !parseInt(parts[from + 2], index))
             return std::nullopt;
-        const zone::ObjectRef ref{{tx, tz}, size_t(index)};
-        const auto refs = zone::all_objects(doc.state);
+        const mapedit::ObjectRef ref{{tx, tz}, size_t(index)};
+        const auto refs = mapedit::all_objects(doc.state);
         return std::find(refs.begin(), refs.end(), ref) != refs.end() ? std::optional(ref) : std::nullopt;
     };
     if (op.flag == "--add-object") {
@@ -296,26 +296,26 @@ std::optional<bool> objectEdit(zone::ZoneDoc& doc, const Op& op)
         const bool cylinder = parts.size() > 6 && parts[6] == "cylinder" && shape && shape->size() == 2;
         if (type == types.end() || parts.size() < 4 || v.size() < 2 || (parts.size() > 6 && !box && !cylinder))
             return bad(form.c_str());
-        doc.edit([&](zone::ZoneState& s) {
-            const zone::ObjectRef ref = zone::add_object(s, kast::map::ObjectType(type - types.begin()), parts[1],
+        doc.edit([&](mapedit::MapState& s) {
+            const mapedit::ObjectRef ref = mapedit::add_object(s, kast::map::ObjectType(type - types.begin()), parts[1],
                                                          ground(v[0], v[1]), v.size() > 2 ? v[2] : 0.0f,
                                                          v.size() > 3 ? v[3] : 1.0f);
-            Json& o = zone::object_json(s, ref);
+            Json& o = mapedit::object_json(s, ref);
             if (box)
-                o["shape"] = {{"box", {{"halfExtents", zone::vec3_json({(*shape)[0], (*shape)[1], (*shape)[2]})}}}};
+                o["shape"] = {{"box", {{"halfExtents", mapedit::vec3_json({(*shape)[0], (*shape)[1], (*shape)[2]})}}}};
             if (cylinder)
                 o["shape"] = {{"cylinder", {{"radius", kast::jsonNumber((*shape)[0])}, {"height", kast::jsonNumber((*shape)[1])}}}};
             if (o.value("type", "") == "interactable")
-                zone::sync_interactable(s, ref);
+                mapedit::sync_interactable(s, ref);
         });
         return true;
     }
     if (op.flag == "--set-interactable") { // id,range,event[,name[,data]]: data is the rest, commas and all
         int id = 0;
         float range = 0;
-        std::optional<zone::ObjectRef> ref;
-        for (const zone::ObjectRef& r : zone::all_objects(doc.state))
-            if (parts.size() >= 3 && parseInt(parts[0], id) && zone::object_json(doc.state, r).value("id", Json()) == id)
+        std::optional<mapedit::ObjectRef> ref;
+        for (const mapedit::ObjectRef& r : mapedit::all_objects(doc.state))
+            if (parts.size() >= 3 && parseInt(parts[0], id) && mapedit::object_json(doc.state, r).value("id", Json()) == id)
                 ref = r;
         Json data;
         if (parts.size() > 4) {
@@ -324,11 +324,11 @@ std::optional<bool> objectEdit(zone::ZoneDoc& doc, const Op& op)
         }
         if (!ref || !parseFloat(parts[1], range) || (parts.size() > 4 && !data.is_object()))
             return bad("id,range,event[,name[,data JSON object]] (an existing interactable)");
-        doc.edit([&](zone::ZoneState& s) {
+        doc.edit([&](mapedit::MapState& s) {
             if (parts.size() > 3 && !parts[3].empty())
-                zone::object_json(s, *ref)["name"] = parts[3];
-            zone::sync_interactable(s, *ref);
-            Json& entry = *zone::interactable_json(s, ref->tile, uint32_t(id));
+                mapedit::object_json(s, *ref)["name"] = parts[3];
+            mapedit::sync_interactable(s, *ref);
+            Json& entry = *mapedit::interactable_json(s, ref->tile, uint32_t(id));
             entry["range"] = kast::jsonNumber(range);
             entry["event"] = parts[2];
             if (data.is_object())
@@ -341,18 +341,18 @@ std::optional<bool> objectEdit(zone::ZoneDoc& doc, const Op& op)
         const auto v = ref && parts.size() == 5 ? floats(3) : std::nullopt;
         if (!v)
             return bad("tx,tz,index,x,z (an existing object)");
-        doc.edit([&](zone::ZoneState& s) { zone::move_object(s, *ref, ground((*v)[0], (*v)[1])); });
+        doc.edit([&](mapedit::MapState& s) { mapedit::move_object(s, *ref, ground((*v)[0], (*v)[1])); });
         return true;
     }
     if (op.flag == "--delete-object") {
         const auto ref = objectAt(0);
         if (!ref || parts.size() != 3)
             return bad("tx,tz,index (an existing object)");
-        doc.edit([&](zone::ZoneState& s) { zone::delete_object(s, *ref); });
+        doc.edit([&](mapedit::MapState& s) { mapedit::delete_object(s, *ref); });
         return true;
     }
     if (op.flag == "--scatter") { // one stroke of one dab, as the Scatter tool's
-        zone::Scatter brush;
+        mapedit::Scatter brush;
         int count = 0, seed = 0;
         std::vector<float> f; // x, z, radius, scaleMin, scaleMax
         for (const size_t i : {0, 1, 2, 5, 6})
@@ -365,10 +365,10 @@ std::optional<bool> objectEdit(zone::ZoneDoc& doc, const Op& op)
         brush.scaleMin = f[3];
         brush.scaleMax = f[4];
         brush.prefabs = split(parts[7], '+');
-        zone::ScatterRng rng{uint32_t(seed)};
+        mapedit::ScatterRng rng{uint32_t(seed)};
         size_t placed = 0;
-        doc.edit([&](zone::ZoneState& s) { placed = zone::scatter(*info, s, brush, rng, f[0], f[1]); });
-        kast::log::info(std::format("Zone: --scatter: {} visual(s) placed", placed));
+        doc.edit([&](mapedit::MapState& s) { placed = mapedit::scatter(*info, s, brush, rng, f[0], f[1]); });
+        kast::log::info(std::format("Map: --scatter: {} visual(s) placed", placed));
         return true;
     }
     if (op.flag == "--erase-visuals") {
@@ -376,21 +376,21 @@ std::optional<bool> objectEdit(zone::ZoneDoc& doc, const Op& op)
         if (!v)
             return bad("x,z,radius");
         size_t erased = 0;
-        doc.edit([&](zone::ZoneState& s) { erased = zone::erase_visuals(s, (*v)[0], (*v)[1], (*v)[2]); });
-        kast::log::info(std::format("Zone: --erase-visuals: {} visual(s) removed", erased));
+        doc.edit([&](mapedit::MapState& s) { erased = mapedit::erase_visuals(s, (*v)[0], (*v)[1], (*v)[2]); });
+        kast::log::info(std::format("Map: --erase-visuals: {} visual(s) removed", erased));
         return true;
     }
     if (op.flag == "--move-spawn") {
         const auto v = parts.size() == 3 ? floats(1) : std::nullopt;
         if (!v || !spawn(parts[0]))
             return bad("id,x,z (an existing spawn)");
-        doc.edit([&](zone::ZoneState& s) { zone::move_spawn(s, *spawn(parts[0]), ground((*v)[0], (*v)[1])); });
+        doc.edit([&](mapedit::MapState& s) { mapedit::move_spawn(s, *spawn(parts[0]), ground((*v)[0], (*v)[1])); });
         return true;
     }
     if (op.flag == "--delete-spawn") {
         if (!spawn(op.value))
             return bad("id (an existing spawn)");
-        doc.edit([&](zone::ZoneState& s) { zone::delete_spawn(s, *spawn(op.value)); });
+        doc.edit([&](mapedit::MapState& s) { mapedit::delete_spawn(s, *spawn(op.value)); });
         return true;
     }
     if (op.flag == "--add-path") {
@@ -399,17 +399,17 @@ std::optional<bool> objectEdit(zone::ZoneDoc& doc, const Op& op)
         float wait = 0;
         if (!v || !parseFloat(parts[1], wait) || !spawn(parts[0]))
             return bad("spawnId,wait,loop(0|1),x,z[,x,z...]");
-        std::vector<zone::Vec3> points;
+        std::vector<mapedit::Vec3> points;
         for (size_t i = 0; i < v->size(); i += 2)
             points.push_back(ground((*v)[i], (*v)[i + 1]));
-        doc.edit([&](zone::ZoneState& s) { zone::add_path(s, *spawn(parts[0]), parts[0] + "_path", points, wait, loop != 0); });
+        doc.edit([&](mapedit::MapState& s) { mapedit::add_path(s, *spawn(parts[0]), parts[0] + "_path", points, wait, loop != 0); });
         return true;
     }
     return std::nullopt;
 }
 
-// Runs one zone edit; false (logged) stops the run. brush: --falloff's, for later sculpts.
-bool runOp(ZoneSession& zone, const Op& op, zone::Brush& brush)
+// Runs one map edit; false (logged) stops the run. brush: --falloff's, for later sculpts.
+bool runOp(MapSession& session, const Op& op, mapedit::Brush& brush)
 {
     const auto bad = [&](std::string_view form) {
         kast::log::error(std::format("{} {}: expected {}", op.flag, op.value, form));
@@ -422,33 +422,33 @@ bool runOp(ZoneSession& zone, const Op& op, zone::Brush& brush)
     }
     std::string err;
     if (op.flag == "--map") {
-        if (!zone.open(op.value, err))
+        if (!session.open(op.value, err))
             kast::log::error(std::format("--map {}: {}", op.value, err));
         return err.empty();
     }
     if (op.flag == "--new-map") {
         const auto parts = split(op.value, ',');
-        int w = 2, d = 2, id = zone::next_map_id(zone.project());
+        int w = 2, d = 2, id = mapedit::next_map_id(session.project());
         if ((parts.size() != 1 && parts.size() != 3 && parts.size() != 4) ||
             (parts.size() >= 3 && (!parseInt(parts[1], w) || !parseInt(parts[2], d))) ||
             (parts.size() == 4 && (!parseInt(parts[3], id) || id < 0 || id > 0xFFFF)))
             return bad("folder[,W,H[,id]]");
-        if (!zone.newMap(parts[0], parts[0], uint16_t(id), w, d, err))
+        if (!session.newMap(parts[0], parts[0], uint16_t(id), w, d, err))
             kast::log::error(std::format("--new-map {}: {}", op.value, err));
         return err.empty();
     }
-    zone::ZoneDoc* doc = zone.zone();
+    mapedit::MapDoc* doc = session.doc();
     if (!doc) {
         kast::log::error(op.flag + ": no map open (--map or --new-map first)");
         return false;
     }
-    if (op.flag == "--save-zone")
-        return zone.save();
+    if (op.flag == "--save-map")
+        return session.save();
     if (op.flag == "--sculpt") {
         const auto v = parseFloats(op.value, 4, 4);
         if (!v || (*v)[2] <= 0)
             return bad("x,z,radius,metres");
-        brush.mode = (*v)[3] >= 0 ? zone::BrushMode::Raise : zone::BrushMode::Lower;
+        brush.mode = (*v)[3] >= 0 ? mapedit::BrushMode::Raise : mapedit::BrushMode::Lower;
         brush.radius = (*v)[2];
         if (!sculpt(*doc, brush, (*v)[0], (*v)[1], std::fabs((*v)[3])))
             kast::log::warn(op.flag + " " + op.value + ": no change");
@@ -458,7 +458,7 @@ bool runOp(ZoneSession& zone, const Op& op, zone::Brush& brush)
         const auto v = parseFloats(op.value, 4, 5);
         if (!v || (*v)[2] <= 0)
             return bad("x,z,radius,height[,fraction]");
-        brush.mode = zone::BrushMode::Flatten;
+        brush.mode = mapedit::BrushMode::Flatten;
         brush.radius = (*v)[2];
         brush.target = (*v)[3];
         if (!sculpt(*doc, brush, (*v)[0], (*v)[1], v->size() == 5 ? (*v)[4] : 1.0f))
@@ -468,21 +468,21 @@ bool runOp(ZoneSession& zone, const Op& op, zone::Brush& brush)
     if (const auto edit = objectEdit(*doc, op); edit)
         return *edit;
     if (op.flag == "--add-tile" || op.flag == "--remove-tile") {
-        zone::TileKey t;
+        mapedit::TileKey t;
         const auto parts = split(op.value, ',');
         const auto info = doc->info(err);
         if (parts.size() != 2 || !parseInt(parts[0], t.x) || !parseInt(parts[1], t.z) || !info)
             return bad("tx,tz");
         if (op.flag == "--remove-tile") // what the confirm dialog lists
-            for (const std::string& f : zone::tile_files(zone.project(), doc->folder, t))
-                kast::log::info("Zone: removing tile " + zone::tile_name(t) + " deletes " + f + " on save");
+            for (const std::string& f : mapedit::tile_files(session.project(), doc->folder, t))
+                kast::log::info("Map: removing tile " + mapedit::tile_name(t) + " deletes " + f + " on save");
         bool changed = false;
-        doc->edit([&](zone::ZoneState& s) {
-            changed = op.flag == "--add-tile" ? zone::add_tile(*info, s, t) : zone::remove_tile(*info, s, t);
+        doc->edit([&](mapedit::MapState& s) {
+            changed = op.flag == "--add-tile" ? mapedit::add_tile(*info, s, t) : mapedit::remove_tile(*info, s, t);
         });
         if (!changed)
             return bad(op.flag == "--add-tile"
-                           ? std::format("a tile not on the map, within {} tiles a side", zone::kMaxMapTiles)
+                           ? std::format("a tile not on the map, within {} tiles a side", mapedit::kMaxMapTiles)
                            : "a tile on the map (not the last)");
         return true;
     }
@@ -491,9 +491,9 @@ bool runOp(ZoneSession& zone, const Op& op, zone::Brush& brush)
         const auto info = doc->info(err);
         if (!v || !info)
             return bad("x,z[,heading]");
-        const float y = zone::ground_y(*info, doc->state, (*v)[0], (*v)[1]).value_or(0.0f);
-        doc->edit([&](zone::ZoneState& s) {
-            s.manifest["spawn"]["pos"] = zone::vec3_json({(*v)[0], y, (*v)[1]});
+        const float y = mapedit::ground_y(*info, doc->state, (*v)[0], (*v)[1]).value_or(0.0f);
+        doc->edit([&](mapedit::MapState& s) {
+            s.manifest["spawn"]["pos"] = mapedit::vec3_json({(*v)[0], y, (*v)[1]});
             if (v->size() == 3)
                 s.manifest["spawn"]["heading"] = kast::jsonNumber((*v)[2]);
         });
@@ -504,28 +504,28 @@ bool runOp(ZoneSession& zone, const Op& op, zone::Brush& brush)
         const auto whole = [](float f, float max) { return f >= 0 && f <= max && f == std::floor(f); };
         if (!v || !whole((*v)[0], 1e9f) || !whole((*v)[1], 31536000) || !whole((*v)[2], 0xFFFF))
             return bad("maxPlayers,emptyTimeoutSec,exitMap,x,y,z[,heading] (maxPlayers 0: no limit)");
-        doc->edit([&](zone::ZoneState& s) {
-            zone::set_instance(s, true);
-            zone::set_max_players(s, (*v)[0] > 0 ? std::optional(uint32_t((*v)[0])) : std::nullopt);
-            zone::set_empty_timeout(s, uint32_t((*v)[1]));
-            zone::set_exit(s, {uint16_t((*v)[2]), {(*v)[3], (*v)[4], (*v)[5]}, v->size() == 7 ? (*v)[6] : 0.0f});
+        doc->edit([&](mapedit::MapState& s) {
+            mapedit::set_instance(s, true);
+            mapedit::set_max_players(s, (*v)[0] > 0 ? std::optional(uint32_t((*v)[0])) : std::nullopt);
+            mapedit::set_empty_timeout(s, uint32_t((*v)[1]));
+            mapedit::set_exit(s, {uint16_t((*v)[2]), {(*v)[3], (*v)[4], (*v)[5]}, v->size() == 7 ? (*v)[6] : 0.0f});
         });
         return true;
     }
     if (op.flag == "--world-map") {
-        doc->edit([](zone::ZoneState& s) { zone::set_instance(s, false); });
+        doc->edit([](mapedit::MapState& s) { mapedit::set_instance(s, false); });
         return true;
     }
     if (op.flag == "--map-id") {
         int id = 0;
         if (!parseInt(op.value, id) || id < 0 || id > 0xFFFF)
             return bad("0..65535");
-        doc->edit([&](zone::ZoneState& s) { s.manifest["id"] = unsigned(id); });
-        zone.renumber(id); // the Terrain entity follows (main.cpp), as the Zone tab's Id field does
+        doc->edit([&](mapedit::MapState& s) { s.manifest["id"] = unsigned(id); });
+        session.renumber(id); // the Terrain entity follows (main.cpp), as the Map tab's Id field does
         return true;
     }
     if (op.flag == "--material") { // project-relative .mat, or "" for the default material
-        doc->edit([&](zone::ZoneState& s) {
+        doc->edit([&](mapedit::MapState& s) {
             if (op.value.empty())
                 s.manifest.erase("material");
             else
@@ -547,7 +547,7 @@ bool runOp(ZoneSession& zone, const Op& op, zone::Brush& brush)
     }
     if (op.flag == "--generate-heights") {
         const auto parts = split(op.value, ',');
-        zone::NoiseParams p;
+        mapedit::NoiseParams p;
         const auto [end, ec] = std::from_chars(parts[0].data(), parts[0].data() + parts[0].size(), p.seed);
         const auto v = parts.size() > 1 ? parseFloats(op.value.substr(parts[0].size() + 1), 1, 4) : std::vector<float>();
         if (ec != std::errc() || end != parts[0].data() + parts[0].size() || !v)
@@ -568,10 +568,10 @@ bool runOp(ZoneSession& zone, const Op& op, zone::Brush& brush)
         const auto v = parseFloats(op.value, 8, 4 * 64);
         if (!v || v->size() % 4)
             return bad("pct,r,g,b,pct,r,g,b... (at least 2 stops)");
-        zone::Gradient g;
+        mapedit::Gradient g;
         for (size_t i = 0; i < v->size(); i += 4)
             g.push_back({(*v)[i] / 100.0f, {(*v)[i + 1], (*v)[i + 2], (*v)[i + 3]}});
-        doc->edit([&](zone::ZoneState& s) { s.manifest["terrainColors"] = zone::gradient_json(g); });
+        doc->edit([&](mapedit::MapState& s) { s.manifest["terrainColors"] = mapedit::gradient_json(g); });
         return true;
     }
     if (op.flag == "--create-terrain-material") {
@@ -579,13 +579,13 @@ bool runOp(ZoneSession& zone, const Op& op, zone::Brush& brush)
         return true;
     }
     if (op.flag == "--validate") { // fails the run on any problem, writes nothing
-        if (zone.check())
+        if (session.check())
             return true;
-        kast::log::error(std::format("--validate: maps/{} has {} problem(s)", doc->folder, zone.problems().size()));
+        kast::log::error(std::format("--validate: maps/{} has {} problem(s)", doc->folder, session.problems().size()));
         return false;
     }
     if (op.flag == "--expect-save-fail") {
-        if (zone.save()) {
+        if (session.save()) {
             kast::log::error("--expect-save-fail: the save succeeded");
             return false;
         }
@@ -603,7 +603,7 @@ bool runOp(ZoneSession& zone, const Op& op, zone::Brush& brush)
             doc->redo();
         // An undone --map-id: the Terrain entity follows the manifest's id again.
         if (const auto info = doc->info(err))
-            zone.renumber(info->id);
+            session.renumber(info->id);
         return true;
     }
     return false;
@@ -620,21 +620,21 @@ std::optional<bool> takesValue(std::string_view arg)
     return std::nullopt;
 }
 
-bool run(ZoneSession& zone, const std::vector<Op>& ops)
+bool run(MapSession& session, const std::vector<Op>& ops)
 {
-    zone::Brush brush;
+    mapedit::Brush brush;
     for (const Op& op : ops)
-        if (!runOp(zone, op, brush))
+        if (!runOp(session, op, brush))
             return false;
     return true;
 }
 
-int bakeHeadless(ZoneSession& zone, const std::filesystem::path& settingsFile, const std::string& mapbake)
+int bakeHeadless(MapSession& session, const std::filesystem::path& settingsFile, const std::string& mapbake)
 {
-    ZonePanel panel(settingsFile);
+    MapPanel panel(settingsFile);
     if (!mapbake.empty())
         panel.setMapbake(mapbake);
-    if (!panel.startBake(zone))
+    if (!panel.startBake(session))
         return 1;
     while (panel.baking()) {
         panel.pollBake();
@@ -659,18 +659,18 @@ std::optional<std::array<int, 2>> parseTile(std::string_view text)
     return t;
 }
 
-float groundY(const zone::ZoneDoc* zone, float x, float z)
+float groundY(const mapedit::MapDoc* doc, float x, float z)
 {
     std::string err;
-    const auto info = zone ? zone->info(err) : std::nullopt;
-    return info ? zone::ground_y(*info, zone->state, x, z).value_or(0.0f) : 0.0f;
+    const auto info = doc ? doc->info(err) : std::nullopt;
+    return info ? mapedit::ground_y(*info, doc->state, x, z).value_or(0.0f) : 0.0f;
 }
 
-void frameZone(EditorCamera& camera, const zone::ZoneDoc& zone)
+void frameMap(EditorCamera& camera, const mapedit::MapDoc& doc)
 {
     namespace km = kast::map;
     std::string err;
-    const auto info = zone.info(err);
+    const auto info = doc.info(err);
     if (!info)
         return;
     const auto range = km::height_range(*info);
@@ -680,19 +680,19 @@ void frameZone(EditorCamera& camera, const zone::ZoneDoc& zone)
         box.min = bx::min(box.min, {r.x0 * km::kTileSize, range[0], r.z0 * km::kTileSize});
         box.max = bx::max(box.max, {(r.x1 + 1) * km::kTileSize, range[1], (r.z1 + 1) * km::kTileSize});
     }
-    // A map bigger than the Scene view meshes (zone::kEditRadius around the pivot): the meshed tiles around its centre.
+    // A map bigger than the Scene view meshes (mapedit::kEditRadius around the pivot): the meshed tiles around its centre.
     const km::TileKey c = km::tile_of((box.min.x + box.max.x) * 0.5f, (box.min.z + box.max.z) * 0.5f);
-    box.min = bx::max(box.min, {(c.x - zone::kEditRadius) * km::kTileSize, range[0],
-                                (c.z - zone::kEditRadius) * km::kTileSize});
-    box.max = bx::min(box.max, {(c.x + zone::kEditRadius + 1) * km::kTileSize, range[1],
-                                (c.z + zone::kEditRadius + 1) * km::kTileSize});
+    box.min = bx::max(box.min, {(c.x - mapedit::kEditRadius) * km::kTileSize, range[0],
+                                (c.z - mapedit::kEditRadius) * km::kTileSize});
+    box.max = bx::min(box.max, {(c.x + mapedit::kEditRadius + 1) * km::kTileSize, range[1],
+                                (c.z + mapedit::kEditRadius + 1) * km::kTileSize});
     camera.focus(box);
 }
 
-void sculptLoop(zone::ZoneDoc& zone, int frame)
+void sculptLoop(mapedit::MapDoc& doc, int frame)
 {
     std::string err;
-    const auto info = zone.info(err);
+    const auto info = doc.info(err);
     if (!info)
         return;
     float lo[2] = {1e9f, 1e9f}, hi[2] = {-1e9f, -1e9f};
@@ -702,14 +702,14 @@ void sculptLoop(zone::ZoneDoc& zone, int frame)
         hi[0] = std::max(hi[0], (r.x1 + 1) * kast::map::kTileSize);
         hi[1] = std::max(hi[1], (r.z1 + 1) * kast::map::kTileSize);
     }
-    // Within the tiles meshed around a framed map's centre (zone::kEditRadius), so it sculpts what the view shows.
-    const float meshed = float(2 * zone::kEditRadius + 1) * kast::map::kTileSize;
+    // Within the tiles meshed around a framed map's centre (mapedit::kEditRadius), so it sculpts what the view shows.
+    const float meshed = float(2 * mapedit::kEditRadius + 1) * kast::map::kTileSize;
     const float angle = float(frame) * 0.01f, reach = 0.35f * std::min({hi[0] - lo[0], hi[1] - lo[1], meshed});
     const float x = (lo[0] + hi[0]) * 0.5f + reach * std::cos(angle), z = (lo[1] + hi[1]) * 0.5f + reach * std::sin(angle);
-    zone::Brush brush;
+    mapedit::Brush brush;
     brush.radius = kLoopRadius;
-    brush.mode = (frame / 120) % 2 ? zone::BrushMode::Lower : zone::BrushMode::Raise;
-    zone::apply_brush(*info, zone.state, x, z, brush, 0.25f);
+    brush.mode = (frame / 120) % 2 ? mapedit::BrushMode::Lower : mapedit::BrushMode::Raise;
+    mapedit::apply_brush(*info, doc.state, x, z, brush, 0.25f);
 }
 
-} // namespace zone_cli
+} // namespace map_cli

@@ -7,7 +7,7 @@
 #include <string>
 
 // One document's undo history (docs/editor/undo-redo.html): steps already done, each a name ("Move Cube") and the
-// actions that undo and redo it. Knows nothing of what it edits: each surface (scene, GUI doc, zone) makes its own
+// actions that undo and redo it. Knows nothing of what it edits: each surface (scene, GUI doc, map) makes its own
 // steps.
 class UndoStack {
 public:

@@ -12,9 +12,9 @@
 <nav class="side"><h2>World Server</h2><ul><li><a href="index.html">Overview</a></li><li><a href="setup.html">Setup and commands</a></li><li><a href="configuration.html">Configuration</a></li><li><a href="security.html">Security behaviour</a></li><li><a href="maps.html">Maps</a></li><li><a href="areas.html" class="active">Areas</a></li><li><a href="instances.html">Instances</a></li><li><a href="persistence.html">Persistence</a></li><li><a href="lua.html">Lua components and systems</a></li><li><a href="npcs.html">NPCs</a></li><li><a href="events.html">Events</a></li><li><a href="state-machines.html">State machines</a></li><li><a href="operations.html">Operations</a></li><li><a href="tests.html">Tests</a></li><li><a href="simplifications.html">Deliberate simplifications</a></li><li><a href="protocol.html">Protocol</a></li></ul></nav>
 <main>
 <h1 id="areas">Areas</h1>
-<p>A map can name its regions (zones, subzones, towns) in an optional <code>areas.json</code> next to its <code>map.json</code>. The server
+<p>A map can name its regions (provinces, districts, towns) in an optional <code>areas.json</code> next to its <code>map.json</code>. The server
 always knows which area every player is in. It publishes enter/leave events on the <a href="events.html#events">event bus</a>, answers
-area lookups from Lua, and treats an area with a <code>portal</code> as a zone line to another map.</p>
+area lookups from Lua, and treats an area with a <code>portal</code> as a portal to another map.</p>
 <pre><code class="language-json">{ &quot;version&quot;: 1, &quot;areas&quot;: [
   {&quot;id&quot;: &quot;eastvale&quot;, &quot;name&quot;: &quot;Eastvale&quot;, &quot;priority&quot;: 0, &quot;rect&quot;: [0, 0, 2048, 2048],
    &quot;flags&quot;: {&quot;pvp&quot;: false, &quot;noMount&quot;: false}, &quot;music&quot;: &quot;sounds/eastvale.ogg&quot;},

@@ -14,7 +14,7 @@
 
 // Tile scenes (docs/engine/terrain.html#tile-scenes, docs/editor/map-builder.html): each 256 m tile of a map may have
 // its own scene file, maps/<folder>/scenes/<tx>_<tz>.scene (project-relative; the file exists <=> the tile has one),
-// its entities in world coordinates. The zone's root scene (the one with the Terrain entity) stays the active scene; tile
+// its entities in world coordinates. The map's root scene (the one with the Terrain entity) stays the active scene; tile
 // scenes load additively: opened from the editor's Map tab, streamed around the player in Play (LuaSystems). Pure: the
 // paths, the cell states and the streaming diff, no window and no Scene.
 namespace kast {

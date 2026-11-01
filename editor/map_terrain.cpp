@@ -1,7 +1,7 @@
-// The Zone tab's Terrain section and the sculpt brushes' Scene view input:
+// The Map tab's Terrain section and the sculpt brushes' Scene view input:
 // Raise/Lower/Flatten settings, the height range (with the clip prompt), heightmap PNG import/export, Generate
-// (fBm), Height colors and Create texture & material. The math is zone/terrain_edit.h.
-#include "zone_panel.h"
+// (fBm), Height colors and Create texture & material. The math is mapedit/terrain_edit.h.
+#include "map_panel.h"
 
 #include "ui_common.h"
 
@@ -32,22 +32,22 @@ std::string utf8(const fs::path& p)
     return std::string(s.begin(), s.end());
 }
 
-const char* brushName(zone::BrushMode mode)
+const char* brushName(mapedit::BrushMode mode)
 {
-    return mode == zone::BrushMode::Raise ? "Raise" : mode == zone::BrushMode::Lower ? "Lower" : "Flatten";
+    return mode == mapedit::BrushMode::Raise ? "Raise" : mode == mapedit::BrushMode::Lower ? "Lower" : "Flatten";
 }
 
 } // namespace
 
-void ZonePanel::drawTerrain(ZoneSession& zone)
+void MapPanel::drawTerrain(MapSession& session)
 {
     if (!header("Terrain", "Terrain"))
         return;
-    zone::ZoneDoc* z = zone.zone();
+    mapedit::MapDoc* z = session.doc();
     std::string err;
     const auto info = z ? z->info(err) : std::nullopt;
     if (!info) {
-        ImGui::TextDisabled(z ? "map.json is invalid (see Map)" : "No zone open");
+        ImGui::TextDisabled(z ? "map.json is invalid (see Map)" : "No map open");
         return;
     }
 
@@ -72,7 +72,7 @@ void ZonePanel::drawTerrain(ZoneSession& zone)
         rangeEdited_ = true;
     ImGui::BeginDisabled((rangeMin_ == range[0] && rangeMax_ == range[1]) || rangeMin_ > rangeMax_);
     if (ImGui::Button("Apply range")) {
-        rangeClips_ = zone::count_clipped(*info, z->state, rangeMin_, rangeMax_);
+        rangeClips_ = mapedit::count_clipped(*info, z->state, rangeMin_, rangeMax_);
         if (rangeClips_ == 0) {
             setHeightRange(*z, rangeMin_, rangeMax_);
             rangeEdited_ = false;
@@ -90,7 +90,7 @@ void ZonePanel::drawTerrain(ZoneSession& zone)
     ImGui::SeparatorText("Heightmap");
     if (!info->has_tile(tile_))
         tile_ = {info->tiles[0].x0, info->tiles[0].z0};
-    ImGui::Text("Tile %s (click the terrain to choose)", zone::tile_name(tile_).c_str());
+    ImGui::Text("Tile %s (click the terrain to choose)", mapedit::tile_name(tile_).c_str());
     ImGui::BeginDisabled(pngDialogOpen_);
     // ponytail: no parent window, as the Systems panel's script dialog: the dialog is not modal to the editor.
     if (ImGui::Button("Import PNG...")) {
@@ -111,7 +111,7 @@ void ZonePanel::drawTerrain(ZoneSession& zone)
     drawTerrainColors(*z);
 }
 
-void ZonePanel::drawGenerate(zone::ZoneDoc& z, const km::MapInfo& info)
+void MapPanel::drawGenerate(mapedit::MapDoc& z, const km::MapInfo& info)
 {
     ImGui::SeparatorText("Generate");
     ImGui::InputScalar("Seed", ImGuiDataType_U32, &noise_.seed);
@@ -125,26 +125,26 @@ void ZonePanel::drawGenerate(zone::ZoneDoc& z, const km::MapInfo& info)
     const auto range = km::height_range(info);
     ImGui::BeginDisabled(range[1] <= range[0]);
     if (ImGui::Button("Generate heights")) {
-        z.edit([&](zone::ZoneState& s) {
-            zone::generate_heights(info, s, noise_);
+        z.edit([&](mapedit::MapState& s) {
+            mapedit::generate_heights(info, s, noise_);
             // The spawn stays on the ground (it is on the map: the manifest parsed).
-            s.manifest["spawn"]["pos"][1] = kast::jsonNumber(*zone::ground_y(info, s, info.spawn[0], info.spawn[2]));
+            s.manifest["spawn"]["pos"][1] = kast::jsonNumber(*mapedit::ground_y(info, s, info.spawn[0], info.spawn[2]));
         });
-        kast::log::info(std::format("Zone: generated heights (seed {}, scale {} m, {} octaves)", noise_.seed,
+        kast::log::info(std::format("Map: generated heights (seed {}, scale {} m, {} octaves)", noise_.seed,
                                     noise_.scale, noise_.octaves));
     }
     ImGui::EndDisabled();
     ImGui::TextDisabled("Replaces every tile's heights, over the whole height range");
 }
 
-void ZonePanel::drawTerrainColors(zone::ZoneDoc& z)
+void MapPanel::drawTerrainColors(mapedit::MapDoc& z)
 {
     ImGui::SeparatorText("Height colors");
     std::string err;
     // Edits go to the manifest as they happen and are one undo step from the first change until no widget is active
     // (a drag, a color picker).
     if (!colorsEditing_ && !ImGui::IsAnyItemActive())
-        gradient_ = zone::parse_gradient(z.state.manifest, err).value_or(zone::default_gradient());
+        gradient_ = mapedit::parse_gradient(z.state.manifest, err).value_or(mapedit::default_gradient());
     bool changed = false;
     std::optional<size_t> remove;
     for (size_t i = 0; i < gradient_.size(); ++i) {
@@ -168,7 +168,7 @@ void ZonePanel::drawTerrainColors(zone::ZoneDoc& z)
         if (!colorsEditing_)
             z.begin();
         colorsEditing_ = true;
-        z.state.manifest["terrainColors"] = zone::gradient_json(gradient_);
+        z.state.manifest["terrainColors"] = mapedit::gradient_json(gradient_);
     }
     if (colorsEditing_ && !ImGui::IsAnyItemActive()) {
         z.commit();
@@ -176,57 +176,57 @@ void ZonePanel::drawTerrainColors(zone::ZoneDoc& z)
     }
     if (remove && !colorsEditing_) {
         gradient_.erase(gradient_.begin() + std::ptrdiff_t(*remove));
-        z.edit([&](zone::ZoneState& s) { s.manifest["terrainColors"] = zone::gradient_json(gradient_); });
+        z.edit([&](mapedit::MapState& s) { s.manifest["terrainColors"] = mapedit::gradient_json(gradient_); });
     }
     if (ImGui::Button("Add stop") && !colorsEditing_) {
         // Halfway between the two highest stops, in the color already there: the look does not change until edited.
         std::vector<float> pos;
-        for (const zone::ColorStop& c : gradient_)
+        for (const mapedit::ColorStop& c : gradient_)
             pos.push_back(c.pos);
         std::ranges::sort(pos);
         const float at = (pos[pos.size() - 2] + pos.back()) / 2.0f;
-        gradient_.push_back({at, zone::gradient_color(gradient_, at)});
-        z.edit([&](zone::ZoneState& s) { s.manifest["terrainColors"] = zone::gradient_json(gradient_); });
+        gradient_.push_back({at, mapedit::gradient_color(gradient_, at)});
+        z.edit([&](mapedit::MapState& s) { s.manifest["terrainColors"] = mapedit::gradient_json(gradient_); });
     }
     ImGui::TextDisabled("Position: %% of the height range (0 = min, 100 = max)");
 
     ImGui::SeparatorText("Terrain texture");
-    const std::string material = zone::terrain_material_path(z.folder);
+    const std::string material = mapedit::terrain_material_path(z.folder);
     if (ImGui::Button("Create texture & material")) {
         // Assigns the generated material with "terrainUv": "map", adding the default colors if there are none; save
         // writes (and every later save re-bakes) the texture and material.
-        const bool hasColors = zone::parse_gradient(z.state.manifest, err).has_value();
-        z.edit([&](zone::ZoneState& s) {
+        const bool hasColors = mapedit::parse_gradient(z.state.manifest, err).has_value();
+        z.edit([&](mapedit::MapState& s) {
             if (!hasColors)
-                s.manifest["terrainColors"] = zone::gradient_json(zone::default_gradient());
+                s.manifest["terrainColors"] = mapedit::gradient_json(mapedit::default_gradient());
             s.manifest["terrainUv"] = "map";
             s.manifest["material"] = material;
         });
-        kast::log::info(std::format("Zone: terrain material {} and {} assigned; written on save", material,
-                                    zone::terrain_texture_path(z.folder)));
+        kast::log::info(std::format("Map: terrain material {} and {} assigned; written on save", material,
+                                    mapedit::terrain_texture_path(z.folder)));
     }
     if (z.state.manifest.value("material", std::string()) == material)
         ImGui::TextWrapped("Uses %s and %s, written on every save", material.c_str(),
-                           zone::terrain_texture_path(z.folder).c_str());
+                           mapedit::terrain_texture_path(z.folder).c_str());
     else
         ImGui::TextDisabled("Bakes these colors into a texture spanning the map");
 }
 
-void ZonePanel::setHeightRange(zone::ZoneDoc& z, float min, float max)
+void MapPanel::setHeightRange(mapedit::MapDoc& z, float min, float max)
 {
     std::string err;
     const auto info = z.info(err);
     if (!info || !(min <= max)) {
-        kast::log::error("Zone: height range: min must be <= max");
+        kast::log::error("Map: height range: min must be <= max");
         return;
     }
     size_t clipped = 0;
-    z.edit([&](zone::ZoneState& s) { clipped = zone::set_height_range(*info, s, min, max); });
-    kast::log::info(std::format("Zone: height range now {} .. {} m{}", min, max,
+    z.edit([&](mapedit::MapState& s) { clipped = mapedit::set_height_range(*info, s, min, max); });
+    kast::log::info(std::format("Map: height range now {} .. {} m{}", min, max,
                                 clipped ? std::format(" ({} samples clipped)", clipped) : ""));
 }
 
-void ZonePanel::drawHeightRangePrompt(ZoneSession& zone)
+void MapPanel::drawHeightRangePrompt(MapSession& session)
 {
     if (askRange_ && !ImGui::IsPopupOpen(kClipPopup))
         ImGui::OpenPopup(kClipPopup);
@@ -234,7 +234,7 @@ void ZonePanel::drawHeightRangePrompt(ZoneSession& zone)
         return;
     ImGui::Text("%zu samples are outside %.2f .. %.2f m and will be clipped to it.", rangeClips_, rangeMin_, rangeMax_);
     if (ImGui::Button("Apply")) {
-        if (zone::ZoneDoc* z = zone.zone())
+        if (mapedit::MapDoc* z = session.doc())
             setHeightRange(*z, rangeMin_, rangeMax_);
         askRange_ = rangeEdited_ = false;
         ImGui::CloseCurrentPopup();
@@ -247,9 +247,9 @@ void ZonePanel::drawHeightRangePrompt(ZoneSession& zone)
     ImGui::EndPopup();
 }
 
-void ZonePanel::onPngChosen(void* userdata, const char* const* files, int /*filter*/)
+void MapPanel::onPngChosen(void* userdata, const char* const* files, int /*filter*/)
 {
-    auto* self = static_cast<ZonePanel*>(userdata);
+    auto* self = static_cast<MapPanel*>(userdata);
     std::lock_guard lock(self->pngMutex_);
     self->pngChosen_ = true;
     self->pngPath_ = files && files[0] ? files[0] : "";
@@ -257,7 +257,7 @@ void ZonePanel::onPngChosen(void* userdata, const char* const* files, int /*filt
         kast::log::error(std::format("File dialog failed: {}", SDL_GetError()));
 }
 
-void ZonePanel::pollPngDialog(ZoneSession& zone)
+void MapPanel::pollPngDialog(MapSession& session)
 {
     std::string path;
     {
@@ -267,24 +267,24 @@ void ZonePanel::pollPngDialog(ZoneSession& zone)
         path = std::move(pngPath_);
     }
     pngDialogOpen_ = false;
-    zone::ZoneDoc* z = zone.zone();
+    mapedit::MapDoc* z = session.doc();
     std::string err;
     const auto info = z ? z->info(err) : std::nullopt;
-    if (path.empty() || !info) // cancelled, or the zone went away (Play, another scene) while the dialog was open
+    if (path.empty() || !info) // cancelled, or the map went away (Play, another scene) while the dialog was open
         return;
     fs::path file(std::u8string(reinterpret_cast<const char8_t*>(path.data()), path.size()));
-    const std::string tile = zone::tile_name(tile_);
+    const std::string tile = mapedit::tile_name(tile_);
     if (!info->has_tile(tile_)) {
-        kast::log::error(std::format("Zone: heightmap PNG: tile {} is not on the map", tile));
+        kast::log::error(std::format("Map: heightmap PNG: tile {} is not on the map", tile));
         return;
     }
     if (pngExport_) {
         if (file.extension() != ".png")
             file += ".png";
-        if (kast::writeFileAtomic(file, zone::encode_png16(zone::tile_heights(z->state, tile_))))
-            kast::log::info(std::format("Zone: exported tile {} to {}", tile, utf8(file)));
+        if (kast::writeFileAtomic(file, mapedit::encode_png16(mapedit::tile_heights(z->state, tile_))))
+            kast::log::info(std::format("Map: exported tile {} to {}", tile, utf8(file)));
         else
-            kast::log::error("Zone: export PNG: cannot write " + utf8(file));
+            kast::log::error("Map: export PNG: cannot write " + utf8(file));
         return;
     }
     std::string bytes;
@@ -292,19 +292,19 @@ void ZonePanel::pollPngDialog(ZoneSession& zone)
     if (!ok)
         err = "cannot read the file";
     else
-        z->edit([&](zone::ZoneState& s) { ok = zone::import_png16(*info, s, tile_, bytes, err); });
+        z->edit([&](mapedit::MapState& s) { ok = mapedit::import_png16(*info, s, tile_, bytes, err); });
     if (ok)
-        kast::log::info(std::format("Zone: imported {} into tile {}", utf8(file), tile));
+        kast::log::info(std::format("Map: imported {} into tile {}", utf8(file), tile));
     else
-        kast::log::error(std::format("Zone: import PNG {}: {}", utf8(file), err));
+        kast::log::error(std::format("Map: import PNG {}: {}", utf8(file), err));
 }
 
-void ZonePanel::sculptInput(zone::ZoneDoc& z, const km::MapInfo& info, bool click)
+void MapPanel::sculptInput(mapedit::MapDoc& z, const km::MapInfo& info, bool click)
 {
     const ImGuiIO& io = ImGui::GetIO();
-    brush_.mode = tool_ == Tool::Raise   ? zone::BrushMode::Raise
-                  : tool_ == Tool::Lower ? zone::BrushMode::Lower
-                                         : zone::BrushMode::Flatten;
+    brush_.mode = tool_ == Tool::Raise   ? mapedit::BrushMode::Raise
+                  : tool_ == Tool::Lower ? mapedit::BrushMode::Lower
+                                         : mapedit::BrushMode::Flatten;
     if (click && hover_ && io.KeyShift && tool_ == Tool::Flatten) {
         brush_.target = (*hover_)[1];
         return;
@@ -314,18 +314,18 @@ void ZonePanel::sculptInput(zone::ZoneDoc& z, const km::MapInfo& info, bool clic
         stroking_ = true;
     }
     if (stroking_ && hover_ && ImGui::IsMouseDown(ImGuiMouseButton_Left))
-        zone::apply_brush(info, z.state, (*hover_)[0], (*hover_)[2], brush_, strength_ * io.DeltaTime);
+        mapedit::apply_brush(info, z.state, (*hover_)[0], (*hover_)[2], brush_, strength_ * io.DeltaTime);
 }
 
-void ZonePanel::endStroke(ZoneSession& zone)
+void MapPanel::endStroke(MapSession& session)
 {
-    const bool down = zone.zone() && ImGui::IsMouseDown(ImGuiMouseButton_Left);
-    zone::ZoneDoc* z = zone.zone();
+    const bool down = session.doc() && ImGui::IsMouseDown(ImGuiMouseButton_Left);
+    mapedit::MapDoc* z = session.doc();
     if (drag_.kind != Drag::Kind::None && !(down && tool_ == Tool::None)) {
         drag_ = {};
         if (z && z->editing()) {
             z->commit();
-            kast::log::info("Zone: moved " + dragLog_);
+            kast::log::info("Map: moved " + dragLog_);
         }
     }
     const bool brush = scattering_ ? tool_ == Tool::Scatter
@@ -336,10 +336,10 @@ void ZonePanel::endStroke(ZoneSession& zone)
     if (z && z->editing()) {
         z->commit();
         if (scattering_)
-            kast::log::info(std::format("Zone: {} stroke ({} visual(s))", scatterErase_ ? "Erase" : "Scatter",
+            kast::log::info(std::format("Map: {} stroke ({} visual(s))", scatterErase_ ? "Erase" : "Scatter",
                                         strokeCount_));
         else
-            kast::log::info(std::format("Zone: {} stroke", brushName(brush_.mode)));
+            kast::log::info(std::format("Map: {} stroke", brushName(brush_.mode)));
     }
     scattering_ = false;
 }

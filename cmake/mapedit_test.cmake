@@ -1,9 +1,9 @@
-# kast_editor's zone edit flags (editor/zone_cli.h) end to end on a copy of a project's project.kast, maps and materials
-# (the whole project with SCENE; the source project is never written). Windowed runs show the map as the zone of the
+# kast_editor's map edit flags (editor/map_cli.h) end to end on a copy of a project's project.kast, maps and materials
+# (the whole project with SCENE; the source project is never written). Windowed runs show the map as the one of the
 # editor's scene (the scene's Terrain entity points at it).
 # Usage: cmake -DEDITOR=<kast_editor> -DPROJECT=<dir> -DOUT_DIR=<dir> -DNAME=<test> -DMODE=<mode> [-DMAP=<folder>]
 #              [-DMAPBAKE=<kast_mapbake>] [-DWORLD=<kast_world>] [-DARGS=<|-separated extra edits>] [-DSCENE=<file>]
-#              -P zone_test.cmake
+#              -P mapedit_test.cmake
 # MODE roundtrip: open MAP, save with no edits, take a screenshot; every file of the map must be byte-identical.
 # MODE blocked:   open MAP, run ARGS (edits that make it invalid), save: it must refuse, and every file stays
 #                 byte-identical with none added.
@@ -17,8 +17,8 @@
 # MODE bake:      open MAP and Bake Navmesh in the window (MAPBAKE); it must exit 0, write .server/nav/*.navtile and
 #                 have drawn frames while kast_mapbake ran. HEADLESS: with --headless instead (no window, no screenshot).
 #                 Skipped (passes) without kast_mapbake.
-# MODE file_save: open SCENE (project-relative) and MAP, run ARGS (edits that make the zone invalid and the scene dirty),
-#                 then File > Save (--file-save, as Ctrl+S): the zone's files stay byte-identical with the problems in
+# MODE file_save: open SCENE (project-relative) and MAP, run ARGS (edits that make the map invalid and the scene dirty),
+#                 then File > Save (--file-save, as Ctrl+S): the map's files stay byte-identical with the problems in
 #                 the Console, and the scene is still written (it must then contain EXPECT_SCENE).
 string(REPLACE "|" ";" ARGS "${ARGS}") # | in the test command: no ; escaping through add_test
 string(REPLACE "|" ";" EXPECT_FILES "${EXPECT_FILES}")
@@ -86,8 +86,8 @@ function(terrain_gen_checks)
     endif()
   endforeach()
   # The same seed on another map with the same tiles: the same bytes; another seed: different.
-  run(--new-map "${MAP}_same,2,2" --generate-heights 7 --save-zone --headless)
-  run(--new-map "${MAP}_other,2,2" --generate-heights 8 --save-zone --headless)
+  run(--new-map "${MAP}_same,2,2" --generate-heights 7 --save-map --headless)
+  run(--new-map "${MAP}_other,2,2" --generate-heights 8 --save-map --headless)
   foreach(t 0_0 1_0 0_1 1_1)
     execute_process(COMMAND "${CMAKE_COMMAND}" -E compare_files "${dir}/heights/${t}.r16" "${copy}/maps/${MAP}_same/heights/${t}.r16"
                     RESULT_VARIABLE differ)
@@ -103,13 +103,13 @@ function(terrain_gen_checks)
   # Generate then undo: nothing to save, the heights stay byte-identical.
   file(SHA256 "${dir}/heights/0_0.r16" before)
   file(SHA256 "${png}" pngBefore)
-  run(--map "${MAP}" --generate-heights 99 --undo --save-zone --headless)
+  run(--map "${MAP}" --generate-heights 99 --undo --save-map --headless)
   file(SHA256 "${dir}/heights/0_0.r16" after)
   if(NOT before STREQUAL after)
     message(FATAL_ERROR "--generate-heights then --undo changed heights/0_0.r16")
   endif()
   # A sculpt re-bakes the texture on save.
-  run(--map "${MAP}" --sculpt 300,200,40,20 --save-zone --headless)
+  run(--map "${MAP}" --sculpt 300,200,40,20 --save-map --headless)
   file(SHA256 "${png}" pngAfter)
   if(pngBefore STREQUAL pngAfter)
     message(FATAL_ERROR "sculpt + save did not re-bake ${png}")
@@ -122,17 +122,17 @@ if(MODE STREQUAL "roundtrip" OR MODE STREQUAL "blocked" OR MODE STREQUAL "file_s
     run(--map "${MAP}" ${ARGS} --expect-save-fail --frames 20 --screenshot "${shot}")
   elseif(MODE STREQUAL "file_save")
     file(READ "${copy}/${SCENE}" sceneBefore)
-    run(--scene "${copy}/${SCENE}" --map "${MAP}" ${ARGS} --file-save --focus-panel Zone --zone-section Problems --frames 30
+    run(--scene "${copy}/${SCENE}" --map "${MAP}" ${ARGS} --file-save --focus-panel Map --map-section Problems --frames 30
         --screenshot "${shot}")
-    if(NOT out MATCHES "Zone: save of maps/${MAP} blocked: [1-9][0-9]* problem")
-      message(FATAL_ERROR "the blocked zone save is not in the Console:\n${out}")
+    if(NOT out MATCHES "Map: save of maps/${MAP} blocked: [1-9][0-9]* problem")
+      message(FATAL_ERROR "the blocked map save is not in the Console:\n${out}")
     endif()
     file(READ "${copy}/${SCENE}" sceneAfter)
     if(sceneAfter STREQUAL sceneBefore OR NOT sceneAfter MATCHES "${EXPECT_SCENE}")
       message(FATAL_ERROR "${SCENE} was not saved with ${EXPECT_SCENE}:\n${sceneAfter}")
     endif()
   else()
-    run(--map "${MAP}" ${ARGS} --save-zone --frames 20 --screenshot "${shot}")
+    run(--map "${MAP}" ${ARGS} --save-map --frames 20 --screenshot "${shot}")
   endif()
   file(GLOB_RECURSE files RELATIVE "${PROJECT}/maps/${MAP}" "${PROJECT}/maps/${MAP}/*")
   file(GLOB_RECURSE after RELATIVE "${copy}/maps/${MAP}" "${copy}/maps/${MAP}/*")
@@ -148,9 +148,9 @@ if(MODE STREQUAL "roundtrip" OR MODE STREQUAL "blocked" OR MODE STREQUAL "file_s
   endforeach()
   message(STATUS "OK: maps/${MAP}: ${files} unchanged")
 elseif(MODE STREQUAL "new_map" OR MODE STREQUAL "edit")
-  run(--new-map "${MAP},2,2" ${ARGS} --save-zone --frames 20 --screenshot "${shot}")
+  run(--new-map "${MAP},2,2" ${ARGS} --save-map --frames 20 --screenshot "${shot}")
   if(ARGS2)
-    run(--map "${MAP}" ${ARGS2} --save-zone --frames 20 --screenshot "${shot}")
+    run(--map "${MAP}" ${ARGS2} --save-map --frames 20 --screenshot "${shot}")
   endif()
   run(--map "${MAP}" --validate --headless)
   foreach(f ${EXPECT_GONE})
@@ -200,11 +200,11 @@ elseif(MODE STREQUAL "bake")
   if(HEADLESS)
     run(--map "${MAP}" --mapbake "${MAPBAKE}" --bake --headless)
   else()
-    run(--map "${MAP}" --mapbake "${MAPBAKE}" --bake --focus-panel Zone --zone-section Bake --frames 20 --screenshot "${shot}")
+    run(--map "${MAP}" --mapbake "${MAPBAKE}" --bake --focus-panel Map --map-section Bake --frames 20 --screenshot "${shot}")
   endif()
   file(GLOB navtiles "${copy}/maps/${MAP}/.server/nav/*.navtile")
   if(HEADLESS)
-    if(NOT navtiles OR NOT out MATCHES "Zone: Bake finished: exit code 0")
+    if(NOT navtiles OR NOT out MATCHES "Map: Bake finished: exit code 0")
       message(FATAL_ERROR "--headless --bake: no navtiles written or no exit code logged:\n${out}")
     endif()
     message(STATUS "OK: ${NAME}: ${navtiles}")

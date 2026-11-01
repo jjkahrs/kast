@@ -48,10 +48,10 @@ struct PrefabCache {
     std::shared_ptr<const PrefabAsset> get(const std::string& path, std::string& error, bool* fresh = nullptr);
 };
 
-// A zone object under parent, whose world position is origin (a tile's corner): an entity at the object's pos and
+// A map object under parent, whose world position is origin (a tile's corner): an entity at the object's pos and
 // yaw with, for an obstacle or interactable, a static Collider from its shape (standing on pos, not scaled), and the
 // prefab instance as its child, scaled by the object's scale. entt::null + error if the prefab doesn't load.
-entt::entity spawnZoneObject(Scene& scene, entt::entity parent, const bx::Vec3& origin, const map::ZoneObject& object,
+entt::entity spawnMapObject(Scene& scene, entt::entity parent, const bx::Vec3& origin, const map::ZoneObject& object,
                              PrefabCache& prefabs, std::string& error);
 
 // The interactable nearest to (x, z) by the horizontal distance to its shape's edge (map::footprint_distance), among the
@@ -69,7 +69,7 @@ public:
     void start(const std::optional<std::filesystem::path>& projectRoot);
     // Makes the scene's TerrainTile entities (children of the first Terrain entity) the declared tiles of
     // Terrain.map within Terrain.radius of the centre: the NetworkLocalPlayer, else the active camera, else the
-    // origin. Heights and objects load on the frame a tile appears (its objects as its children, spawnZoneObject; a bad
+    // origin. Heights and objects load on the frame a tile appears (its objects as its children, spawnMapObject; a bad
     // entry or prefab is logged with the file and skipped), and go with it. Then publishes area.left / area.entered
     // {map, id, name} on bus when the centre's area (map::area_at) changed.
     void update(Scene& scene, EventBus& bus);
@@ -101,7 +101,7 @@ private:
     void setArea(EventBus& bus, uint16_t map, int16_t area);
 
     std::map<uint16_t, LoadedMap> maps_;
-    PrefabCache prefabs_; // the zone objects' prefabs, for the session
+    PrefabCache prefabs_; // the map objects' prefabs, for the session
     uint16_t areaMap_ = 0;
     int16_t area_ = -1; // index into maps_[areaMap_].info->areas.list
     int warnedMap_ = -1; // the unknown Terrain.map last warned about

@@ -1,8 +1,8 @@
-// The Zone tab's Areas, Spawns, Objects and Bake sections and their Scene view tools:
-// drawing rect and polygon areas, placing spawns, adding path points, placing zone objects and scattering
-// visuals, dragging area vertices, spawns, path points and objects with no tool, their overlays (zone objects' shapes as
-// ground outlines), and Bake Navmesh (kast_mapbake). The edits are zone/zone_edit.h.
-#include "zone_panel.h"
+// The Map tab's Areas, Spawns, Objects and Bake sections and their Scene view tools:
+// drawing rect and polygon areas, placing spawns, adding path points, placing map objects and scattering
+// visuals, dragging area vertices, spawns, path points and objects with no tool, their overlays (map objects' shapes as
+// ground outlines), and Bake Navmesh (kast_mapbake). The edits are mapedit/map_edit.h.
+#include "map_panel.h"
 
 #include "editor_settings.h"
 #include "ui_common.h"
@@ -25,9 +25,9 @@ namespace {
 
 namespace km = kast::map;
 namespace fs = std::filesystem;
-using zone::Json;
-using zone::Point;
-using zone::Vec3;
+using mapedit::Json;
+using mapedit::Point;
+using mapedit::Vec3;
 
 constexpr ImU32 kAreaColor = withAlpha(kAccent, 200);
 constexpr ImU32 kAreaSelected = kHighlight;
@@ -91,7 +91,7 @@ bool inside(const std::vector<Point>& poly, float x, float z)
 }
 
 // One above the highest priority, so a new area never overlaps another at equal priority.
-int nextPriority(const zone::ZoneState& state)
+int nextPriority(const mapedit::MapState& state)
 {
     int top = -1;
     if (state.areas.is_object())
@@ -100,7 +100,7 @@ int nextPriority(const zone::ZoneState& state)
     return top + 1;
 }
 
-size_t areaCount(const zone::ZoneState& state)
+size_t areaCount(const mapedit::MapState& state)
 {
     return state.areas.is_object() ? state.areas.value("areas", Json::array()).size() : 0;
 }
@@ -113,7 +113,7 @@ std::string lower(std::string s)
 }
 
 // One undo step per edit of the last item: from its activation to its deactivation.
-void undoScope(zone::ZoneDoc& z)
+void undoScope(mapedit::MapDoc& z)
 {
     if (ImGui::IsItemActivated())
         z.begin();
@@ -147,10 +147,10 @@ ImU32 typeColor(km::ObjectType type)
                                                                                              : kInteractableColor;
 }
 
-bool idUsed(const zone::ZoneState& state, uint32_t id, zone::ObjectRef except)
+bool idUsed(const mapedit::MapState& state, uint32_t id, mapedit::ObjectRef except)
 {
-    for (const zone::ObjectRef& ref : zone::all_objects(state))
-        if (!(ref == except) && zone::object_json(state, ref).value("id", Json()) == id)
+    for (const mapedit::ObjectRef& ref : mapedit::all_objects(state))
+        if (!(ref == except) && mapedit::object_json(state, ref).value("id", Json()) == id)
             return true;
     return false;
 }
@@ -161,15 +161,15 @@ std::string utf8(const fs::path& p)
     return std::string(s.begin(), s.end());
 }
 
-std::string objectName(const zone::ZoneState& state, zone::ObjectRef ref)
+std::string objectName(const mapedit::MapState& state, mapedit::ObjectRef ref)
 {
-    return std::format("{} (tile {}, #{})", stem(str(zone::object_json(state, ref), "prefab")), zone::tile_name(ref.tile),
+    return std::format("{} (tile {}, #{})", stem(str(mapedit::object_json(state, ref), "prefab")), mapedit::tile_name(ref.tile),
                        ref.index);
 }
 
 } // namespace
 
-void ZonePanel::checkSelection(const zone::ZoneDoc* z)
+void MapPanel::checkSelection(const mapedit::MapDoc* z)
 {
     if (!z || z->folder != selectionFolder_) { // another map (or none): nothing of the old one is selected
         selectionFolder_ = z ? z->folder : std::string();
@@ -184,32 +184,32 @@ void ZonePanel::checkSelection(const zone::ZoneDoc* z)
     if (area_ && *area_ >= areaCount(z->state))
         area_.reset();
     if (object_) { // undone or deleted
-        const std::vector<zone::ObjectRef> refs = zone::all_objects(z->state);
+        const std::vector<mapedit::ObjectRef> refs = mapedit::all_objects(z->state);
         if (std::ranges::find(refs, *object_) == refs.end())
             object_.reset();
     }
 }
 
-void ZonePanel::defaultPrefabs(const ZoneSession& zone)
+void MapPanel::defaultPrefabs(const MapSession& session)
 {
-    if (zone.prefabs().empty())
+    if (session.prefabs().empty())
         return;
     if (placePrefab_.empty())
-        placePrefab_ = zone.prefabs().front();
+        placePrefab_ = session.prefabs().front();
     // The first prefab ticked once, so the Scatter brush works out of the box (untick it for others).
     if (!std::exchange(scatterSeeded_, true) && scatter_.prefabs.empty())
-        scatter_.prefabs.push_back(zone.prefabs().front());
+        scatter_.prefabs.push_back(session.prefabs().front());
 }
 
-void ZonePanel::select(const ZoneSession& zone, const std::string& id)
+void MapPanel::select(const MapSession& session, const std::string& id)
 {
-    const zone::ZoneDoc* z = zone.zone();
+    const mapedit::MapDoc* z = session.doc();
     if (!z)
         return;
     checkSelection(z);
-    if (const auto area = zone::find_area(z->state, id))
+    if (const auto area = mapedit::find_area(z->state, id))
         area_ = area;
-    if (zone::find_spawn(z->state, id))
+    if (mapedit::find_spawn(z->state, id))
         spawn_ = id;
     if (!id.starts_with("object:"))
         return;
@@ -222,15 +222,15 @@ void ZonePanel::select(const ZoneSession& zone, const std::string& id)
             return;
         p = next + 1;
     }
-    const zone::ObjectRef ref{{v[0], v[1]}, size_t(std::max(v[2], 0))};
-    const std::vector<zone::ObjectRef> refs = zone::all_objects(z->state);
+    const mapedit::ObjectRef ref{{v[0], v[1]}, size_t(std::max(v[2], 0))};
+    const std::vector<mapedit::ObjectRef> refs = mapedit::all_objects(z->state);
     if (std::ranges::find(refs, ref) != refs.end())
         object_ = ref;
 }
 
 // --- Scene view ---
 
-bool ZonePanel::objectsInput(const ZoneSession& zone, zone::ZoneDoc& z, const km::MapInfo& info, const GroundDraw& g,
+bool MapPanel::objectsInput(const MapSession& session, mapedit::MapDoc& z, const km::MapInfo& info, const GroundDraw& g,
                              bool click)
 {
     const ImGuiIO& io = ImGui::GetIO();
@@ -245,11 +245,11 @@ bool ZonePanel::objectsInput(const ZoneSession& zone, zone::ZoneDoc& z, const km
             const auto [a, b] = *rect_;
             rect_.reset();
             if (std::fabs(a[0] - b[0]) >= 1 && std::fabs(a[1] - b[1]) >= 1) {
-                z.edit([&](zone::ZoneState& s) {
-                    area_ = zone::add_rect_area(s, zone::unique_area_id(s, "area"), a, b, nextPriority(s));
+                z.edit([&](mapedit::MapState& s) {
+                    area_ = mapedit::add_rect_area(s, mapedit::unique_area_id(s, "area"), a, b, nextPriority(s));
                 });
-                kast::log::info(std::format("Zone: area {} added ({:.0f} x {:.0f} m)",
-                                            str(zone::areas_list(z.state)[*area_], "id"), std::fabs(a[0] - b[0]),
+                kast::log::info(std::format("Map: area {} added ({:.0f} x {:.0f} m)",
+                                            str(mapedit::areas_list(z.state)[*area_], "id"), std::fabs(a[0] - b[0]),
                                             std::fabs(a[1] - b[1])));
             }
         }
@@ -266,10 +266,10 @@ bool ZonePanel::objectsInput(const ZoneSession& zone, zone::ZoneDoc& z, const km
                 polygon_.push_back(at);
         }
         if (finish) {
-            z.edit([&](zone::ZoneState& s) {
-                area_ = zone::add_polygon_area(s, zone::unique_area_id(s, "area"), polygon_, nextPriority(s));
+            z.edit([&](mapedit::MapState& s) {
+                area_ = mapedit::add_polygon_area(s, mapedit::unique_area_id(s, "area"), polygon_, nextPriority(s));
             });
-            kast::log::info(std::format("Zone: area {} added ({} points)", str(zone::areas_list(z.state)[*area_], "id"),
+            kast::log::info(std::format("Map: area {} added ({} points)", str(mapedit::areas_list(z.state)[*area_], "id"),
                                         polygon_.size()));
             polygon_.clear();
         }
@@ -277,25 +277,25 @@ bool ZonePanel::objectsInput(const ZoneSession& zone, zone::ZoneDoc& z, const km
     }
     case Tool::PlaceSpawn:
         if (click && hover_) {
-            const std::string npc = zone.npcs().empty() ? std::string("npc") : zone.npcs().front();
-            z.edit([&](zone::ZoneState& s) {
-                spawn_ = zone::unique_spawn_id(s, lower(npc) + "_1");
-                zone::add_spawn(s, spawn_, npc, *hover_, 0, 60);
+            const std::string npc = session.npcs().empty() ? std::string("npc") : session.npcs().front();
+            z.edit([&](mapedit::MapState& s) {
+                spawn_ = mapedit::unique_spawn_id(s, lower(npc) + "_1");
+                mapedit::add_spawn(s, spawn_, npc, *hover_, 0, 60);
             });
-            kast::log::info(std::format("Zone: spawn {} ({}) placed at {:.1f}, {:.1f}, {:.1f}", spawn_, npc,
+            kast::log::info(std::format("Map: spawn {} ({}) placed at {:.1f}, {:.1f}, {:.1f}", spawn_, npc,
                                         (*hover_)[0], (*hover_)[1], (*hover_)[2]));
         }
         break;
     case Tool::PathPoints:
-        if (const auto ref = zone::find_spawn(z.state, spawn_); ref && click && hover_) {
-            z.edit([&](zone::ZoneState& s) { zone::add_path_point(s, *ref, *hover_); });
-            kast::log::info(std::format("Zone: path point added to {} at {:.1f}, {:.1f}", spawn_, at[0], at[1]));
+        if (const auto ref = mapedit::find_spawn(z.state, spawn_); ref && click && hover_) {
+            z.edit([&](mapedit::MapState& s) { mapedit::add_path_point(s, *ref, *hover_); });
+            kast::log::info(std::format("Map: path point added to {} at {:.1f}, {:.1f}", spawn_, at[0], at[1]));
         }
         break;
     case Tool::PlaceObject:
         if (click && hover_ && !placePrefab_.empty()) {
-            z.edit([&](zone::ZoneState& s) { object_ = zone::add_object(s, placeType_, placePrefab_, *hover_, 0, 1); });
-            kast::log::info(std::format("Zone: {} {} placed at {:.1f}, {:.1f}", kTypeNames[int(placeType_)],
+            z.edit([&](mapedit::MapState& s) { object_ = mapedit::add_object(s, placeType_, placePrefab_, *hover_, 0, 1); });
+            kast::log::info(std::format("Map: {} {} placed at {:.1f}, {:.1f}", kTypeNames[int(placeType_)],
                                         objectName(z.state, *object_), at[0], at[1]));
         }
         break;
@@ -306,23 +306,23 @@ bool ZonePanel::objectsInput(const ZoneSession& zone, zone::ZoneDoc& z, const km
         if (click && !pickHandle(z, g))
             return false; // not on a handle: the Scene view picks an entity
         if (drag_.kind != Drag::Kind::None && hover_ && ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
-            const auto now = zone::find_spawn(z.state, spawn_);
+            const auto now = mapedit::find_spawn(z.state, spawn_);
             switch (drag_.kind) {
             case Drag::Kind::AreaVertex:
                 if (area_ && *area_ < areaCount(z.state))
-                    zone::move_area_vertex(zone::areas_list(z.state)[*area_], drag_.index, at);
+                    mapedit::move_area_vertex(mapedit::areas_list(z.state)[*area_], drag_.index, at);
                 break;
             case Drag::Kind::Spawn:
                 if (now)
-                    zone::move_spawn(z.state, *now, *hover_);
+                    mapedit::move_spawn(z.state, *now, *hover_);
                 break;
             case Drag::Kind::PathPoint:
-                if (Json* route = now ? zone::spawn_path(z.state, *now) : nullptr)
-                    (*route)["points"][drag_.index] = zone::vec3_json(*hover_);
+                if (Json* route = now ? mapedit::spawn_path(z.state, *now) : nullptr)
+                    (*route)["points"][drag_.index] = mapedit::vec3_json(*hover_);
                 break;
             case Drag::Kind::Object:
                 if (object_)
-                    object_ = zone::move_object(z.state, *object_, *hover_);
+                    object_ = mapedit::move_object(z.state, *object_, *hover_);
                 break;
             case Drag::Kind::None: break;
             }
@@ -333,23 +333,23 @@ bool ZonePanel::objectsInput(const ZoneSession& zone, zone::ZoneDoc& z, const km
     return true;
 }
 
-bool ZonePanel::pickHandle(zone::ZoneDoc& z, const GroundDraw& g)
+bool MapPanel::pickHandle(mapedit::MapDoc& z, const GroundDraw& g)
 {
-    if (!tabFront_) // the zone's handles are live only while the Zone tab shows
+    if (!tabFront_) // the map's handles are live only while the Map tab shows
         return false;
     const ImVec2 mouse = ImGui::GetIO().MousePos;
     drag_ = {};
-    // Handles first (the selection's vertices and path points, then any spawn), then zone objects.
+    // Handles first (the selection's vertices and path points, then any spawn), then map objects.
     if (area_ && *area_ < areaCount(z.state)) {
-        const auto points = zone::area_points(z.state.areas["areas"][*area_]);
+        const auto points = mapedit::area_points(z.state.areas["areas"][*area_]);
         for (size_t i = 0; i < points.size() && drag_.kind == Drag::Kind::None; ++i)
             if (const auto p = screen(g, points[i][0], points[i][1]); p && near(*p, mouse)) {
                 drag_ = {Drag::Kind::AreaVertex, i};
                 dragLog_ = std::format("area {} vertex {}", str(z.state.areas["areas"][*area_], "id"), i);
             }
     }
-    if (const auto ref = zone::find_spawn(z.state, spawn_); ref && drag_.kind == Drag::Kind::None)
-        if (const Json* route = zone::spawn_path(z.state, *ref)) {
+    if (const auto ref = mapedit::find_spawn(z.state, spawn_); ref && drag_.kind == Drag::Kind::None)
+        if (const Json* route = mapedit::spawn_path(z.state, *ref)) {
             const Json& points = route->value("points", Json::array());
             for (size_t i = 0; i < points.size() && drag_.kind == Drag::Kind::None; ++i) {
                 const Vec3 p = vec3(points[i]);
@@ -359,10 +359,10 @@ bool ZonePanel::pickHandle(zone::ZoneDoc& z, const GroundDraw& g)
                 }
             }
         }
-    for (const zone::SpawnRef& r : zone::all_spawns(z.state)) {
+    for (const mapedit::SpawnRef& r : mapedit::all_spawns(z.state)) {
         if (drag_.kind != Drag::Kind::None)
             break;
-        const Json& s = zone::spawn_json(z.state, r);
+        const Json& s = mapedit::spawn_json(z.state, r);
         const Vec3 p = vec3(s.value("pos", Json()));
         if (const auto sp = screen(g, p[0], p[2]); sp && near(*sp, mouse)) {
             spawn_ = str(s, "id");
@@ -370,10 +370,10 @@ bool ZonePanel::pickHandle(zone::ZoneDoc& z, const GroundDraw& g)
             dragLog_ = "spawn " + spawn_;
         }
     }
-    float nearest = kHandlePx * kHandlePx; // zone objects: the marker nearest the mouse
+    float nearest = kHandlePx * kHandlePx; // map objects: the marker nearest the mouse
     if (drag_.kind == Drag::Kind::None)
-        for (const zone::ObjectRef& r : zone::all_objects(z.state)) {
-            const Vec3 p = vec3(zone::object_json(z.state, r).value("pos", Json()));
+        for (const mapedit::ObjectRef& r : mapedit::all_objects(z.state)) {
+            const Vec3 p = vec3(mapedit::object_json(z.state, r).value("pos", Json()));
             const auto sp = screen(g, p[0], p[2]);
             if (!sp)
                 continue;
@@ -395,7 +395,7 @@ bool ZonePanel::pickHandle(zone::ZoneDoc& z, const GroundDraw& g)
         int best = 0;
         for (size_t i = 0; i < areaCount(z.state); ++i) {
             const Json& a = z.state.areas["areas"][i];
-            if (inside(zone::area_points(a), (*hover_)[0], (*hover_)[2]) && (!area_ || a.value("priority", 0) > best)) {
+            if (inside(mapedit::area_points(a), (*hover_)[0], (*hover_)[2]) && (!area_ || a.value("priority", 0) > best)) {
                 area_ = i;
                 best = a.value("priority", 0);
             }
@@ -404,7 +404,7 @@ bool ZonePanel::pickHandle(zone::ZoneDoc& z, const GroundDraw& g)
     return false;
 }
 
-void ZonePanel::scatterInput(zone::ZoneDoc& z, const km::MapInfo& info, bool click)
+void MapPanel::scatterInput(mapedit::MapDoc& z, const km::MapInfo& info, bool click)
 {
     if (click && hover_ && !stroking_ && (scatterErase_ || !scatter_.prefabs.empty())) {
         z.begin(); // the whole stroke is one undo step (endStroke commits it)
@@ -418,17 +418,17 @@ void ZonePanel::scatterInput(zone::ZoneDoc& z, const km::MapInfo& info, bool cli
     if (lastDab_ && std::hypot(at[0] - (*lastDab_)[0], at[1] - (*lastDab_)[1]) < scatter_.radius)
         return;
     lastDab_ = at;
-    strokeCount_ += scatterErase_ ? zone::erase_visuals(z.state, at[0], at[1], scatter_.radius)
-                                  : zone::scatter(info, z.state, scatter_, scatterRng_, at[0], at[1]);
+    strokeCount_ += scatterErase_ ? mapedit::erase_visuals(z.state, at[0], at[1], scatter_.radius)
+                                  : mapedit::scatter(info, z.state, scatter_, scatterRng_, at[0], at[1]);
 }
 
-void ZonePanel::drawObjectOverlays(const GroundDraw& g) const
+void MapPanel::drawObjectOverlays(const GroundDraw& g) const
 {
-    const zone::ZoneState& state = g.state;
+    const mapedit::MapState& state = g.state;
     ImDrawList* draw = g.draw;
     const Json& list = state.areas.is_object() ? state.areas.value("areas", Json::array()) : Json::array();
     for (size_t i = 0; i < list.size(); ++i) {
-        const auto points = zone::area_points(list[i]);
+        const auto points = mapedit::area_points(list[i]);
         if (points.size() < 3)
             continue;
         const bool selected = area_ == i;
@@ -448,9 +448,9 @@ void ZonePanel::drawObjectOverlays(const GroundDraw& g) const
                 if (const auto s = screen(g, p[0], p[1]))
                     draw->AddRectFilled({s->x - 4, s->y - 4}, {s->x + 4, s->y + 4}, kAreaSelected);
     }
-    for (const zone::ObjectRef& ref : zone::all_objects(state)) {
-        const Json& o = zone::object_json(state, ref);
-        const km::ObjectType type = zone::object_type(o);
+    for (const mapedit::ObjectRef& ref : mapedit::all_objects(state)) {
+        const Json& o = mapedit::object_json(state, ref);
+        const km::ObjectType type = mapedit::object_type(o);
         const Vec3 p = vec3(o.value("pos", Json()));
         const bool selected = object_ == ref;
         const ImU32 color = selected ? kAreaSelected : typeColor(type);
@@ -513,15 +513,15 @@ void ZonePanel::drawObjectOverlays(const GroundDraw& g) const
         g.circle((*at)[0], (*at)[1], scatter_.radius, scatterErase_ ? kEraseColor : kScatterColor);
 }
 
-// --- Zone tab sections ---
+// --- Map tab sections ---
 
-void ZonePanel::drawAreas(ZoneSession& zone)
+void MapPanel::drawAreas(MapSession& session)
 {
     if (!header("Areas", "Areas"))
         return;
-    zone::ZoneDoc* z = zone.zone();
+    mapedit::MapDoc* z = session.doc();
     if (!z) {
-        ImGui::TextDisabled("No zone open");
+        ImGui::TextDisabled("No map open");
         return;
     }
     if (tool_ == Tool::AreaRect)
@@ -547,37 +547,37 @@ void ZonePanel::drawAreas(ZoneSession& zone)
         return;
 
     const size_t index = *area_;
-    Json& a = zone::areas_list(z->state)[index];
+    Json& a = mapedit::areas_list(z->state)[index];
     std::string id = str(a, "id");
     if (ImGui::InputText("Id##area", &id))
-        zone::rename_area(z->state, index, id);
+        mapedit::rename_area(z->state, index, id);
     undoScope(*z);
-    std::string name = str(zone::areas_list(z->state)[index], "name");
+    std::string name = str(mapedit::areas_list(z->state)[index], "name");
     if (ImGui::InputText("Name##area", &name))
-        zone::areas_list(z->state)[index]["name"] = name;
+        mapedit::areas_list(z->state)[index]["name"] = name;
     undoScope(*z);
-    int priority = zone::areas_list(z->state)[index].value("priority", 0);
+    int priority = mapedit::areas_list(z->state)[index].value("priority", 0);
     if (ImGui::InputInt("Priority", &priority))
-        zone::areas_list(z->state)[index]["priority"] = priority;
+        mapedit::areas_list(z->state)[index]["priority"] = priority;
     undoScope(*z);
 
-    const std::string parent = str(zone::areas_list(z->state)[index], "parent");
+    const std::string parent = str(mapedit::areas_list(z->state)[index], "parent");
     if (ImGui::BeginCombo("Parent", parent.empty() ? "(none)" : parent.c_str())) {
         if (ImGui::Selectable("(none)", parent.empty()))
-            z->edit([&](zone::ZoneState& s) { zone::areas_list(s)[index].erase("parent"); });
+            z->edit([&](mapedit::MapState& s) { mapedit::areas_list(s)[index].erase("parent"); });
         for (size_t i = 0; i < count; ++i) {
             const std::string other = str(z->state.areas["areas"][i], "id");
             if (i != index && ImGui::Selectable(other.c_str(), other == parent))
-                z->edit([&](zone::ZoneState& s) { zone::areas_list(s)[index]["parent"] = other; });
+                z->edit([&](mapedit::MapState& s) { mapedit::areas_list(s)[index]["parent"] = other; });
         }
         ImGui::EndCombo();
     }
 
-    const std::vector<zone::ProjectMap>& maps = zone.project().maps;
-    bool portal = zone::areas_list(z->state)[index].contains("portal");
+    const std::vector<mapedit::ProjectMap>& maps = session.project().maps;
+    bool portal = mapedit::areas_list(z->state)[index].contains("portal");
     if (ImGui::Checkbox("Portal", &portal))
-        z->edit([&](zone::ZoneState& s) {
-            Json& area = zone::areas_list(s)[index];
+        z->edit([&](mapedit::MapState& s) {
+            Json& area = mapedit::areas_list(s)[index];
             if (!portal)
                 area.erase("portal");
             else
@@ -586,49 +586,49 @@ void ZonePanel::drawAreas(ZoneSession& zone)
                                   {"heading", 0}};
         });
     if (portal) {
-        const Json& p = zone::areas_list(z->state)[index]["portal"];
+        const Json& p = mapedit::areas_list(z->state)[index]["portal"];
         const unsigned target = p.value("map", 0u);
         std::string current = std::format("{} (unknown map)", target);
-        for (const zone::ProjectMap& m : maps)
+        for (const mapedit::ProjectMap& m : maps)
             if (m.info.id == target)
                 current = std::format("{}  maps/{}", target, m.folder);
         if (ImGui::BeginCombo("Target map", current.c_str())) {
-            for (const zone::ProjectMap& m : maps)
+            for (const mapedit::ProjectMap& m : maps)
                 if (ImGui::Selectable(std::format("{}  maps/{}", m.info.id, m.folder).c_str(), m.info.id == target)) {
                     const unsigned mapId = m.info.id; // unsigned: the parser wants an unsigned number
-                    z->edit([&](zone::ZoneState& s) { zone::areas_list(s)[index]["portal"]["map"] = mapId; });
+                    z->edit([&](mapedit::MapState& s) { mapedit::areas_list(s)[index]["portal"]["map"] = mapId; });
                 }
             ImGui::EndCombo();
         }
-        Vec3 pos = vec3(zone::areas_list(z->state)[index]["portal"].value("pos", Json()));
+        Vec3 pos = vec3(mapedit::areas_list(z->state)[index]["portal"].value("pos", Json()));
         if (ImGui::InputFloat3("Arrive at", pos.data(), "%.1f"))
-            zone::areas_list(z->state)[index]["portal"]["pos"] = zone::vec3_json(pos);
+            mapedit::areas_list(z->state)[index]["portal"]["pos"] = mapedit::vec3_json(pos);
         undoScope(*z);
-        float heading = number(zone::areas_list(z->state)[index]["portal"], "heading", 0) * 180.0f / bx::kPi;
+        float heading = number(mapedit::areas_list(z->state)[index]["portal"], "heading", 0) * 180.0f / bx::kPi;
         if (ImGui::SliderFloat("Arrive heading", &heading, -180.0f, 180.0f, "%.0f deg"))
-            zone::areas_list(z->state)[index]["portal"]["heading"] = kast::jsonNumber(heading * bx::kPi / 180.0f);
+            mapedit::areas_list(z->state)[index]["portal"]["heading"] = kast::jsonNumber(heading * bx::kPi / 180.0f);
         undoScope(*z);
     }
     // Kept as they are; the tab does not edit them.
-    const Json& kept = zone::areas_list(z->state)[index];
+    const Json& kept = mapedit::areas_list(z->state)[index];
     for (const char* key : {"y", "music", "flags"})
         if (kept.contains(key))
             ImGui::TextDisabled("%s: %s (kept)", key, kept[key].dump().c_str());
     if (ImGui::Button("Delete area")) {
-        z->edit([&](zone::ZoneState& s) { zone::delete_area(s, index); });
+        z->edit([&](mapedit::MapState& s) { mapedit::delete_area(s, index); });
         area_.reset();
     }
 }
 
-void ZonePanel::drawSpawns(ZoneSession& zone)
+void MapPanel::drawSpawns(MapSession& session)
 {
     if (!header("Spawns", "Spawns"))
         return;
-    zone::ZoneDoc* z = zone.zone();
+    mapedit::MapDoc* z = session.doc();
     std::string err;
     const auto info = z ? z->info(err) : std::nullopt;
     if (!info) {
-        ImGui::TextDisabled(z ? "map.json is invalid (see Map)" : "No zone open");
+        ImGui::TextDisabled(z ? "map.json is invalid (see Map)" : "No map open");
         return;
     }
     if (tool_ == Tool::PlaceSpawn)
@@ -639,49 +639,49 @@ void ZonePanel::drawSpawns(ZoneSession& zone)
         ImGui::TextDisabled("Place Spawn / Path Points at the top. No tool: drag spawns and path points to move them");
 
     if (ImGui::BeginChild("##spawnList", ImVec2(0, ImGui::GetTextLineHeightWithSpacing() * 6), ImGuiChildFlags_Borders)) {
-        for (const zone::SpawnRef& ref : zone::all_spawns(z->state)) {
-            const Json& s = zone::spawn_json(z->state, ref);
+        for (const mapedit::SpawnRef& ref : mapedit::all_spawns(z->state)) {
+            const Json& s = mapedit::spawn_json(z->state, ref);
             const std::string label = std::format("{}  {}  (tile {})##{}_{}", str(s, "id"), str(s, "npc"),
-                                                  zone::tile_name(ref.tile), zone::tile_name(ref.tile), ref.index);
+                                                  mapedit::tile_name(ref.tile), mapedit::tile_name(ref.tile), ref.index);
             if (ImGui::Selectable(label.c_str(), str(s, "id") == spawn_))
                 spawn_ = str(s, "id");
         }
     }
     ImGui::EndChild();
 
-    const auto ref = zone::find_spawn(z->state, spawn_);
+    const auto ref = mapedit::find_spawn(z->state, spawn_);
     if (!ref)
         return;
-    std::string id = str(zone::spawn_json(z->state, *ref), "id");
+    std::string id = str(mapedit::spawn_json(z->state, *ref), "id");
     if (ImGui::InputText("Id##spawn", &id)) {
-        zone::spawn_json(z->state, *ref)["id"] = id;
+        mapedit::spawn_json(z->state, *ref)["id"] = id;
         spawn_ = id;
     }
     undoScope(*z);
-    const std::string npc = str(zone::spawn_json(z->state, *ref), "npc");
+    const std::string npc = str(mapedit::spawn_json(z->state, *ref), "npc");
     if (ImGui::BeginCombo("NPC", npc.c_str())) {
-        for (const std::string& name : zone.npcs())
+        for (const std::string& name : session.npcs())
             if (ImGui::Selectable(name.c_str(), name == npc))
-                z->edit([&](zone::ZoneState& st) { zone::spawn_json(st, *ref)["npc"] = name; });
+                z->edit([&](mapedit::MapState& st) { mapedit::spawn_json(st, *ref)["npc"] = name; });
         ImGui::EndCombo();
     }
     std::string typed = npc;
     if (ImGui::InputText("NPC (any name)", &typed))
-        zone::spawn_json(z->state, *ref)["npc"] = typed;
+        mapedit::spawn_json(z->state, *ref)["npc"] = typed;
     undoScope(*z);
 
-    const Vec3 pos = vec3(zone::spawn_json(z->state, *ref).value("pos", Json()));
+    const Vec3 pos = vec3(mapedit::spawn_json(z->state, *ref).value("pos", Json()));
     float xz[2] = {pos[0], pos[2]};
     if (ImGui::InputFloat2("Position x, z##spawn", xz, "%.1f")) {
-        const float y = zone::ground_y(*info, z->state, xz[0], xz[1]).value_or(pos[1]);
-        zone::move_spawn(z->state, *ref, {xz[0], y, xz[1]});
+        const float y = mapedit::ground_y(*info, z->state, xz[0], xz[1]).value_or(pos[1]);
+        mapedit::move_spawn(z->state, *ref, {xz[0], y, xz[1]});
     }
     undoScope(*z);
-    const auto now = zone::find_spawn(z->state, spawn_); // the move may have changed its file
+    const auto now = mapedit::find_spawn(z->state, spawn_); // the move may have changed its file
     if (!now)
         return;
-    Json& sp = zone::spawn_json(z->state, *now);
-    ImGui::Text("Tile %s, y %.2f (on the ground)", zone::tile_name(now->tile).c_str(), vec3(sp.value("pos", Json()))[1]);
+    Json& sp = mapedit::spawn_json(z->state, *now);
+    ImGui::Text("Tile %s, y %.2f (on the ground)", mapedit::tile_name(now->tile).c_str(), vec3(sp.value("pos", Json()))[1]);
     float heading = number(sp, "heading", 0) * 180.0f / bx::kPi;
     if (ImGui::SliderFloat("Heading##spawn", &heading, -180.0f, 180.0f, "%.0f deg"))
         sp["heading"] = kast::jsonNumber(heading * bx::kPi / 180.0f);
@@ -689,57 +689,57 @@ void ZonePanel::drawSpawns(ZoneSession& zone)
     bool never = number(sp, "respawnSec", -1) < 0;
     float respawn = never ? 60.0f : number(sp, "respawnSec", 60);
     if (ImGui::Checkbox("Never respawns", &never))
-        z->edit([&](zone::ZoneState& st) { zone::spawn_json(st, *now)["respawnSec"] = never ? -1.0 : 60.0; });
+        z->edit([&](mapedit::MapState& st) { mapedit::spawn_json(st, *now)["respawnSec"] = never ? -1.0 : 60.0; });
     if (!never) {
         if (ImGui::InputFloat("Respawn (s)", &respawn, 1.0f, 10.0f, "%.0f"))
-            zone::spawn_json(z->state, *now)["respawnSec"] = kast::jsonNumber(std::max(0.0f, respawn));
+            mapedit::spawn_json(z->state, *now)["respawnSec"] = kast::jsonNumber(std::max(0.0f, respawn));
         undoScope(*z);
     }
 
     ImGui::SeparatorText("Patrol path");
-    const std::string path = str(zone::spawn_json(z->state, *now), "path");
+    const std::string path = str(mapedit::spawn_json(z->state, *now), "path");
     if (ImGui::BeginCombo("Path", path.empty() ? "(none)" : path.c_str())) {
         if (ImGui::Selectable("(none)", path.empty()))
-            z->edit([&](zone::ZoneState& st) { zone::spawn_json(st, *now).erase("path"); });
+            z->edit([&](mapedit::MapState& st) { mapedit::spawn_json(st, *now).erase("path"); });
         const Json paths = z->state.spawns.at(now->tile).value("paths", Json::object()); // items() must outlive the walk
         for (const auto& [name, route] : paths.items())
             if (ImGui::Selectable(name.c_str(), name == path))
-                z->edit([&](zone::ZoneState& st) { zone::spawn_json(st, *now)["path"] = name; });
+                z->edit([&](mapedit::MapState& st) { mapedit::spawn_json(st, *now)["path"] = name; });
         ImGui::EndCombo();
     }
-    if (Json* route = zone::spawn_path(z->state, *now)) {
+    if (Json* route = mapedit::spawn_path(z->state, *now)) {
         float wait = number(*route, "wait", 0);
         if (ImGui::InputFloat("Wait at points (s)", &wait, 0.5f, 1.0f, "%.1f"))
-            (*zone::spawn_path(z->state, *now))["wait"] = kast::jsonNumber(std::max(0.0f, wait));
+            (*mapedit::spawn_path(z->state, *now))["wait"] = kast::jsonNumber(std::max(0.0f, wait));
         undoScope(*z);
-        bool loop = zone::spawn_path(z->state, *now)->value("loop", true);
+        bool loop = mapedit::spawn_path(z->state, *now)->value("loop", true);
         if (ImGui::Checkbox("Loop (off: walk back along it)", &loop))
-            z->edit([&](zone::ZoneState& st) { (*zone::spawn_path(st, *now))["loop"] = loop; });
-        const size_t points = zone::spawn_path(z->state, *now)->value("points", Json::array()).size();
+            z->edit([&](mapedit::MapState& st) { (*mapedit::spawn_path(st, *now))["loop"] = loop; });
+        const size_t points = mapedit::spawn_path(z->state, *now)->value("points", Json::array()).size();
         ImGui::Text("%zu point(s)", points);
         ImGui::SameLine();
         ImGui::BeginDisabled(points <= 1); // a path needs at least one point
         if (ImGui::SmallButton("Remove last point"))
-            z->edit([&](zone::ZoneState& st) { (*zone::spawn_path(st, *now))["points"].erase(points - 1); });
+            z->edit([&](mapedit::MapState& st) { (*mapedit::spawn_path(st, *now))["points"].erase(points - 1); });
         ImGui::EndDisabled();
         if (ImGui::Button("Delete path"))
-            z->edit([&](zone::ZoneState& st) { zone::delete_path(st, now->tile, path); });
+            z->edit([&](mapedit::MapState& st) { mapedit::delete_path(st, now->tile, path); });
     } else if (ImGui::Button("New path from here")) {
         tool_ = Tool::PathPoints;
     }
     if (ImGui::Button("Delete spawn")) {
-        z->edit([&](zone::ZoneState& st) { zone::delete_spawn(st, *now); });
+        z->edit([&](mapedit::MapState& st) { mapedit::delete_spawn(st, *now); });
         spawn_.clear();
     }
 }
 
-void ZonePanel::drawObjects(ZoneSession& zone)
+void MapPanel::drawObjects(MapSession& session)
 {
     if (!header("Objects", "Objects"))
         return;
-    zone::ZoneDoc* z = zone.zone();
+    mapedit::MapDoc* z = session.doc();
     if (!z) {
-        ImGui::TextDisabled("No zone open");
+        ImGui::TextDisabled("No map open");
         return;
     }
     if (tool_ == Tool::PlaceObject)
@@ -748,7 +748,7 @@ void ZonePanel::drawObjects(ZoneSession& zone)
         ImGui::TextDisabled("Place Object / Scatter at the top. No tool: click an object's marker in the Scene view to "
                             "select it; drag it to move it");
     if (ImGui::BeginCombo("Prefab", placePrefab_.empty() ? "(no .prefab in the project)" : placePrefab_.c_str())) {
-        for (const std::string& prefab : zone.prefabs())
+        for (const std::string& prefab : session.prefabs())
             if (ImGui::Selectable(prefab.c_str(), prefab == placePrefab_))
                 placePrefab_ = prefab;
         ImGui::EndCombo();
@@ -756,30 +756,30 @@ void ZonePanel::drawObjects(ZoneSession& zone)
     int type = int(placeType_);
     if (ImGui::Combo("Type", &type, kTypeNames, IM_ARRAYSIZE(kTypeNames)))
         placeType_ = km::ObjectType(type);
-    drawScatter(zone);
+    drawScatter(session);
 
-    const std::vector<zone::ObjectRef> refs = zone::all_objects(z->state);
+    const std::vector<mapedit::ObjectRef> refs = mapedit::all_objects(z->state);
     ImGui::Text("%zu object(s)", refs.size());
     if (ImGui::BeginChild("##objectList", ImVec2(0, ImGui::GetTextLineHeightWithSpacing() * 6), ImGuiChildFlags_Borders)) {
         ImGuiListClipper clipper; // scattered tiles hold thousands
         clipper.Begin(int(refs.size()));
         while (clipper.Step())
             for (int i = clipper.DisplayStart; i < clipper.DisplayEnd; ++i) {
-                const Json& o = zone::object_json(z->state, refs[i]);
+                const Json& o = mapedit::object_json(z->state, refs[i]);
                 const std::string id = o.contains("id") ? std::format(" #{}", o.value("id", 0u)) : "";
                 const std::string label =
                     std::format("{} {}{}  (tile {})##{}_{}", str(o, "type"), stem(str(o, "prefab")), id,
-                                zone::tile_name(refs[i].tile), zone::tile_name(refs[i].tile), refs[i].index);
+                                mapedit::tile_name(refs[i].tile), mapedit::tile_name(refs[i].tile), refs[i].index);
                 if (ImGui::Selectable(label.c_str(), object_ == refs[i]))
                     object_ = refs[i];
             }
     }
     ImGui::EndChild();
     if (object_)
-        drawObjectFields(zone);
+        drawObjectFields(session);
 }
 
-void ZonePanel::drawScatter(const ZoneSession& zone)
+void MapPanel::drawScatter(const MapSession& session)
 {
     if (tool_ != Tool::Scatter)
         return;
@@ -795,14 +795,14 @@ void ZonePanel::drawScatter(const ZoneSession& zone)
     ImGui::DragFloatRange2("Scale##scatter", &scatter_.scaleMin, &scatter_.scaleMax, 0.01f, 0.05f, 10.0f, "min %.2f",
                            "max %.2f");
     if (ImGui::InputInt("Seed", &scatterSeed_))
-        scatterRng_ = zone::ScatterRng(uint32_t(scatterSeed_));
+        scatterRng_ = mapedit::ScatterRng(uint32_t(scatterSeed_));
     ImGui::SameLine();
     if (ImGui::SmallButton("Restart"))
-        scatterRng_ = zone::ScatterRng(uint32_t(scatterSeed_)); // replay from the seed
+        scatterRng_ = mapedit::ScatterRng(uint32_t(scatterSeed_)); // replay from the seed
     ImGui::TextUnformatted("Prefabs (one picked at random per object):");
     if (ImGui::BeginChild("##scatterPrefabs", ImVec2(0, ImGui::GetTextLineHeightWithSpacing() * 5),
                           ImGuiChildFlags_Borders)) {
-        for (const std::string& prefab : zone.prefabs()) {
+        for (const std::string& prefab : session.prefabs()) {
             const auto it = std::ranges::find(scatter_.prefabs, prefab);
             bool on = it != scatter_.prefabs.end();
             if (ImGui::Checkbox(prefab.c_str(), &on)) {
@@ -818,74 +818,74 @@ void ZonePanel::drawScatter(const ZoneSession& zone)
         ImGui::TextColored(kErrorColor, "Tick at least one prefab");
 }
 
-void ZonePanel::drawObjectFields(ZoneSession& zone)
+void MapPanel::drawObjectFields(MapSession& session)
 {
-    zone::ZoneDoc& z = *zone.zone();
+    mapedit::MapDoc& z = *session.doc();
     std::string err;
     const auto info = z.info(err);
     if (!info)
         return;
-    const zone::ObjectRef ref = *object_;
+    const mapedit::ObjectRef ref = *object_;
     ImGui::SeparatorText("Selected object");
-    int t = int(zone::object_type(zone::object_json(z.state, ref)));
+    int t = int(mapedit::object_type(mapedit::object_json(z.state, ref)));
     if (ImGui::Combo("Object type", &t, kTypeNames, IM_ARRAYSIZE(kTypeNames)))
-        z.edit([&](zone::ZoneState& s) { zone::set_object_type(s, ref, km::ObjectType(t)); });
-    const km::ObjectType type = zone::object_type(zone::object_json(z.state, ref)); // after a change of it
-    const std::string prefab = str(zone::object_json(z.state, ref), "prefab");
+        z.edit([&](mapedit::MapState& s) { mapedit::set_object_type(s, ref, km::ObjectType(t)); });
+    const km::ObjectType type = mapedit::object_type(mapedit::object_json(z.state, ref)); // after a change of it
+    const std::string prefab = str(mapedit::object_json(z.state, ref), "prefab");
     if (ImGui::BeginCombo("Object prefab", prefab.c_str())) {
-        for (const std::string& p : zone.prefabs())
+        for (const std::string& p : session.prefabs())
             if (ImGui::Selectable(p.c_str(), p == prefab))
-                z.edit([&](zone::ZoneState& s) { zone::object_json(s, ref)["prefab"] = p; });
+                z.edit([&](mapedit::MapState& s) { mapedit::object_json(s, ref)["prefab"] = p; });
         ImGui::EndCombo();
     }
     const auto changed = [&] { // after a field edit: the server entry follows
         if (type == km::ObjectType::Interactable)
-            zone::sync_interactable(z.state, *object_);
+            mapedit::sync_interactable(z.state, *object_);
     };
-    const Vec3 pos = vec3(zone::object_json(z.state, ref).value("pos", Json()));
+    const Vec3 pos = vec3(mapedit::object_json(z.state, ref).value("pos", Json()));
     float xz[2] = {pos[0], pos[2]};
     if (ImGui::InputFloat2("Position x, z##object", xz, "%.2f")) {
-        const float y = zone::ground_y(*info, z.state, xz[0], xz[1]).value_or(pos[1]);
-        object_ = zone::move_object(z.state, ref, {xz[0], y, xz[1]});
+        const float y = mapedit::ground_y(*info, z.state, xz[0], xz[1]).value_or(pos[1]);
+        object_ = mapedit::move_object(z.state, ref, {xz[0], y, xz[1]});
     }
     undoScope(z);
-    const zone::ObjectRef now = *object_; // the move may have changed its file
-    Json& o = zone::object_json(z.state, now);
-    ImGui::Text("Tile %s, y %.2f (on the ground)", zone::tile_name(now.tile).c_str(), vec3(o.value("pos", Json()))[1]);
+    const mapedit::ObjectRef now = *object_; // the move may have changed its file
+    Json& o = mapedit::object_json(z.state, now);
+    ImGui::Text("Tile %s, y %.2f (on the ground)", mapedit::tile_name(now.tile).c_str(), vec3(o.value("pos", Json()))[1]);
     float yaw = number(o, "yaw", 0) * 180.0f / bx::kPi;
     if (ImGui::SliderFloat("Yaw", &yaw, -180.0f, 180.0f, "%.0f deg")) {
-        zone::object_json(z.state, now)["yaw"] = kast::jsonNumber(yaw * bx::kPi / 180.0f);
+        mapedit::object_json(z.state, now)["yaw"] = kast::jsonNumber(yaw * bx::kPi / 180.0f);
         changed();
     }
     undoScope(z);
-    float scale = number(zone::object_json(z.state, now), "scale", 1);
+    float scale = number(mapedit::object_json(z.state, now), "scale", 1);
     if (ImGui::InputFloat("Scale", &scale, 0.1f, 0.5f, "%.2f"))
-        zone::object_json(z.state, now)["scale"] = kast::jsonNumber(std::max(0.01f, scale));
+        mapedit::object_json(z.state, now)["scale"] = kast::jsonNumber(std::max(0.01f, scale));
     undoScope(z);
 
     if (type != km::ObjectType::Visual) {
-        const auto shape = shapeOf(zone::object_json(z.state, now));
+        const auto shape = shapeOf(mapedit::object_json(z.state, now));
         int kind = shape && shape->kind == km::Shape::Kind::Cylinder ? 1 : 0;
         const char* kinds[] = {"Box", "Cylinder"};
         if (ImGui::Combo("Shape", &kind, kinds, 2))
-            z.edit([&](zone::ZoneState& s) {
-                zone::object_json(s, now)["shape"] =
-                    kind == 0 ? zone::default_shape() : Json{{"cylinder", {{"radius", 0.5}, {"height", 1}}}};
+            z.edit([&](mapedit::MapState& s) {
+                mapedit::object_json(s, now)["shape"] =
+                    kind == 0 ? mapedit::default_shape() : Json{{"cylinder", {{"radius", 0.5}, {"height", 1}}}};
                 if (type == km::ObjectType::Interactable)
-                    zone::sync_interactable(s, now);
+                    mapedit::sync_interactable(s, now);
             });
         if (shape && shape->kind == km::Shape::Kind::Box) {
             float h[3] = {shape->halfExtents[0], shape->halfExtents[1], shape->halfExtents[2]};
             if (ImGui::InputFloat3("Half extents", h, "%.2f")) {
-                zone::object_json(z.state, now)["shape"]["box"]["halfExtents"] =
-                    zone::vec3_json({std::max(0.01f, h[0]), std::max(0.01f, h[1]), std::max(0.01f, h[2])});
+                mapedit::object_json(z.state, now)["shape"]["box"]["halfExtents"] =
+                    mapedit::vec3_json({std::max(0.01f, h[0]), std::max(0.01f, h[1]), std::max(0.01f, h[2])});
                 changed();
             }
             undoScope(z);
         } else if (shape) {
             float rh[2] = {shape->radius, shape->height};
             if (ImGui::InputFloat2("Radius, height", rh, "%.2f")) {
-                Json& c = zone::object_json(z.state, now)["shape"]["cylinder"];
+                Json& c = mapedit::object_json(z.state, now)["shape"]["cylinder"];
                 c["radius"] = kast::jsonNumber(std::max(0.01f, rh[0]));
                 c["height"] = kast::jsonNumber(std::max(0.01f, rh[1]));
                 changed();
@@ -896,43 +896,43 @@ void ZonePanel::drawObjectFields(ZoneSession& zone)
 
     if (type == km::ObjectType::Interactable) {
         ImGui::SeparatorText("Interactable");
-        const uint32_t id = zone::object_json(z.state, now).value("id", 0u);
+        const uint32_t id = mapedit::object_json(z.state, now).value("id", 0u);
         int typed = int(id);
         if (ImGui::InputInt("Id##interactable", &typed) && typed >= 1 && !idUsed(z.state, uint32_t(typed), now))
-            zone::set_interactable_id(z.state, now, uint32_t(typed));
+            mapedit::set_interactable_id(z.state, now, uint32_t(typed));
         undoScope(z);
-        std::string name = str(zone::object_json(z.state, now), "name");
+        std::string name = str(mapedit::object_json(z.state, now), "name");
         if (ImGui::InputText("Name##interactable", &name)) {
             if (name.empty())
-                zone::object_json(z.state, now).erase("name");
+                mapedit::object_json(z.state, now).erase("name");
             else
-                zone::object_json(z.state, now)["name"] = name;
+                mapedit::object_json(z.state, now)["name"] = name;
             changed();
         }
         undoScope(z);
-        const uint32_t current = zone::object_json(z.state, now).value("id", 0u);
-        if (!zone::interactable_json(z.state, now.tile, current))
-            zone::sync_interactable(z.state, now); // a hand-edited file
-        ImGui::TextDisabled("Server only (.server/interactables/%s.json):", zone::tile_name(now.tile).c_str());
-        float range = number(*zone::interactable_json(z.state, now.tile, current), "range", 3);
+        const uint32_t current = mapedit::object_json(z.state, now).value("id", 0u);
+        if (!mapedit::interactable_json(z.state, now.tile, current))
+            mapedit::sync_interactable(z.state, now); // a hand-edited file
+        ImGui::TextDisabled("Server only (.server/interactables/%s.json):", mapedit::tile_name(now.tile).c_str());
+        float range = number(*mapedit::interactable_json(z.state, now.tile, current), "range", 3);
         if (ImGui::InputFloat("Range (m)", &range, 0.5f, 1.0f, "%.1f"))
-            (*zone::interactable_json(z.state, now.tile, current))["range"] = kast::jsonNumber(std::max(0.1f, range));
+            (*mapedit::interactable_json(z.state, now.tile, current))["range"] = kast::jsonNumber(std::max(0.1f, range));
         undoScope(z);
-        std::string event = str(*zone::interactable_json(z.state, now.tile, current), "event");
+        std::string event = str(*mapedit::interactable_json(z.state, now.tile, current), "event");
         if (ImGui::InputText("Event", &event))
-            (*zone::interactable_json(z.state, now.tile, current))["event"] = event;
+            (*mapedit::interactable_json(z.state, now.tile, current))["event"] = event;
         undoScope(z);
         if (event.empty())
             ImGui::TextColored(kErrorColor, "The event name must not be empty");
         if (dataFor_ != current) { // another selection: show its data
             dataFor_ = current;
-            const Json& data = zone::interactable_json(z.state, now.tile, current)->value("data", Json());
+            const Json& data = mapedit::interactable_json(z.state, now.tile, current)->value("data", Json());
             dataText_ = data.is_null() ? "" : data.dump(2);
             dataError_.clear();
         }
         if (ImGui::InputTextMultiline("Data (JSON object)", &dataText_, ImVec2(0, ImGui::GetTextLineHeight() * 5))) {
             const Json parsed = Json::parse(dataText_, nullptr, false);
-            Json& entry = *zone::interactable_json(z.state, now.tile, current);
+            Json& entry = *mapedit::interactable_json(z.state, now.tile, current);
             dataError_.clear();
             if (dataText_.find_first_not_of(" \t\r\n") == std::string::npos)
                 entry.erase("data");
@@ -946,14 +946,14 @@ void ZonePanel::drawObjectFields(ZoneSession& zone)
             ImGui::TextColored(kErrorColor, "Data: %s", dataError_.c_str());
     }
     if (ImGui::Button("Delete object")) {
-        z.edit([&](zone::ZoneState& s) { zone::delete_object(s, now); });
+        z.edit([&](mapedit::MapState& s) { mapedit::delete_object(s, now); });
         object_.reset();
     }
 }
 
 // --- Bake ---
 
-void ZonePanel::drawBake(ZoneSession& zone)
+void MapPanel::drawBake(MapSession& session)
 {
     if (!header("Bake", "Bake"))
         return;
@@ -964,20 +964,20 @@ void ZonePanel::drawBake(ZoneSession& zone)
         mapbakeEdited_ = false;
         std::string err;
         if (!settingsFile_.empty() && !saveEditorSetting(settingsFile_, "mapbake", mapbake_, err))
-            kast::log::error("Zone: Bake: " + err);
+            kast::log::error("Map: Bake: " + err);
     }
-    const fs::path exe = zone::find_mapbake(mapbake_);
+    const fs::path exe = mapedit::find_mapbake(mapbake_);
     if (exe.empty())
         ImGui::TextColored(kErrorColor, "kast_mapbake.exe not found: build services/world, or set its path");
     else
         ImGui::TextDisabled("Runs %s", utf8(exe).c_str());
-    const zone::ZoneDoc* z = zone.zone();
+    const mapedit::MapDoc* z = session.doc();
     ImGui::BeginDisabled(!z || z->dirty() || bake_.running() || exe.empty());
     if (ImGui::Button("Bake Navmesh"))
-        startBake(zone);
+        startBake(session);
     ImGui::EndDisabled();
     if (z && z->dirty())
-        disabledTooltip("Save the zone first");
+        disabledTooltip("Save the map first");
     if (bake_.running()) {
         ImGui::SameLine();
         ImGui::Text("Baking... %c", "|/-\\"[int(ImGui::GetTime() * 8.0) & 3]);
@@ -994,37 +994,37 @@ void ZonePanel::drawBake(ZoneSession& zone)
     ImGui::EndChild();
 }
 
-bool ZonePanel::startBake(ZoneSession& zone)
+bool MapPanel::startBake(MapSession& session)
 {
-    const zone::ZoneDoc* z = zone.zone();
+    const mapedit::MapDoc* z = session.doc();
     if (!z) {
-        kast::log::error("Zone: Bake: no zone open");
+        kast::log::error("Map: Bake: no map open");
         return false;
     }
     if (z->dirty()) {
-        kast::log::error("Zone: Bake: save the zone first");
+        kast::log::error("Map: Bake: save the map first");
         return false;
     }
-    if (!zone.check()) {
-        kast::log::error(std::format("Zone: Bake: {} problem(s), fix them first", zone.problems().size()));
+    if (!session.check()) {
+        kast::log::error(std::format("Map: Bake: {} problem(s), fix them first", session.problems().size()));
         return false;
     }
-    const fs::path exe = zone::find_mapbake(mapbake_);
+    const fs::path exe = mapedit::find_mapbake(mapbake_);
     std::string err;
     if (exe.empty())
         err = "kast_mapbake.exe not found; set its path in the Bake section";
-    const fs::path dir = zone.project().root / "maps" / fs::path(std::u8string(z->folder.begin(), z->folder.end()));
+    const fs::path dir = session.project().root / "maps" / fs::path(std::u8string(z->folder.begin(), z->folder.end()));
     if (exe.empty() || !bake_.start(exe, {dir}, err)) {
-        kast::log::error("Zone: Bake: " + err);
+        kast::log::error("Map: Bake: " + err);
         return false;
     }
     bakeLog_ = {"> " + utf8(exe) + " " + utf8(dir)};
     bakeExit_.reset();
-    kast::log::info(std::format("Zone: baking maps/{}: {}", z->folder, bakeLog_.front()));
+    kast::log::info(std::format("Map: baking maps/{}: {}", z->folder, bakeLog_.front()));
     return true;
 }
 
-void ZonePanel::pollBake()
+void MapPanel::pollBake()
 {
     for (std::string& line : bake_.takeLines()) {
         kast::log::info("Bake: " + line);
@@ -1033,7 +1033,7 @@ void ZonePanel::pollBake()
     if (const auto code = bake_.exitCode(); code && code != bakeExit_ && !bake_.running()) {
         bakeExit_ = code;
         bakeLog_.push_back(std::format("exit code {}", *code));
-        const std::string line = std::format("Zone: Bake finished: exit code {}", *code);
+        const std::string line = std::format("Map: Bake finished: exit code {}", *code);
         if (*code == 0)
             kast::log::info(line);
         else

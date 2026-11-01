@@ -1,6 +1,6 @@
 #include "terrain_edit.h"
 
-#include "zone_io.h" // kMaxMapTiles
+#include "map_io.h" // kMaxMapTiles
 
 #include <scene_io.h> // jsonNumber
 
@@ -18,7 +18,7 @@
 #include <random>
 #include <vector>
 
-namespace zone {
+namespace mapedit {
 namespace {
 
 namespace km = kast::map;
@@ -43,7 +43,7 @@ float hit_triangle(Vec3 o, Vec3 d, Vec3 a, Vec3 b, Vec3 c) {
 }
 
 // The ground triangles of 1 m cell (cx, cz) (map metres), as for_each_triangle splits it; t of the first hit or -1.
-float hit_cell(const km::MapInfo& info, const ZoneState& state, int cx, int cz, Vec3 o, Vec3 d) {
+float hit_cell(const km::MapInfo& info, const MapState& state, int cx, int cz, Vec3 o, Vec3 d) {
     const TileKey t{int32_t(std::floor(cx / km::kTileSize)), int32_t(std::floor(cz / km::kTileSize))};
     if (!info.has_tile(t)) return -1;
     const km::Heights& h = tile_heights(state, t);
@@ -122,19 +122,19 @@ void chunk(std::string& png, const char* type, const std::string& data) {
 
 } // namespace
 
-const km::Heights& tile_heights(const ZoneState& state, TileKey t) {
+const km::Heights& tile_heights(const MapState& state, TileKey t) {
     static const km::Heights flat = km::flat_heights();
     const auto it = state.heights.find(t);
     return it == state.heights.end() ? flat : *it->second;
 }
 
-std::optional<float> ground_y(const km::MapInfo& info, const ZoneState& state, float x, float z) {
+std::optional<float> ground_y(const km::MapInfo& info, const MapState& state, float x, float z) {
     const TileKey t = km::tile_of(x, z);
     if (!info.has_tile(t)) return std::nullopt;
     return km::ground(tile_heights(state, t), info, x - t.x * km::kTileSize, z - t.z * km::kTileSize);
 }
 
-std::optional<Vec3> raycast(const km::MapInfo& info, const ZoneState& state, Vec3 o, Vec3 d, float maxDist) {
+std::optional<Vec3> raycast(const km::MapInfo& info, const MapState& state, Vec3 o, Vec3 d, float maxDist) {
     if (info.tiles.empty()) return std::nullopt;
     // Clip to the box around every declared tile (x/z only; the ground can be anywhere in y).
     float lo[2] = {kInf, kInf}, hi[2] = {-kInf, -kInf};
@@ -190,7 +190,7 @@ float brush_weight(const Brush& brush, float d) {
     return t * t * (3 - 2 * t);
 }
 
-TileSet apply_brush(const km::MapInfo& info, ZoneState& state, float x, float z, const Brush& brush, float amount) {
+TileSet apply_brush(const km::MapInfo& info, MapState& state, float x, float z, const Brush& brush, float amount) {
     const auto [lo, hi] = km::height_range(info);
     const float span = hi - lo;
     if (span <= 0 || brush.radius <= 0) return {};
@@ -229,7 +229,7 @@ TileSet apply_brush(const km::MapInfo& info, ZoneState& state, float x, float z,
     return touched;
 }
 
-size_t count_clipped(const km::MapInfo& info, const ZoneState& state, float newMin, float newMax) {
+size_t count_clipped(const km::MapInfo& info, const MapState& state, float newMin, float newMax) {
     size_t clipped = 0;
     for_each_declared(info, [&](TileKey t) {
         for (uint16_t s : tile_heights(state, t)) {
@@ -240,7 +240,7 @@ size_t count_clipped(const km::MapInfo& info, const ZoneState& state, float newM
     return clipped;
 }
 
-size_t set_height_range(const km::MapInfo& info, ZoneState& state, float newMin, float newMax) {
+size_t set_height_range(const km::MapInfo& info, MapState& state, float newMin, float newMax) {
     const size_t clipped = count_clipped(info, state, newMin, newMax);
     for_each_declared(info, [&](TileKey t) {
         const km::Heights& old = tile_heights(state, t);
@@ -295,7 +295,7 @@ std::string encode_png16(const km::Heights& heights) {
     return png;
 }
 
-bool import_png16(const km::MapInfo& info, ZoneState& state, TileKey tile, std::string_view png, std::string& err) {
+bool import_png16(const km::MapInfo& info, MapState& state, TileKey tile, std::string_view png, std::string& err) {
     auto heights = km::decode_heights(png, ".png", err);
     if (!heights) return false;
     const auto imported = std::make_shared<const km::Heights>(std::move(*heights));
@@ -444,7 +444,7 @@ bool within_cap(const km::MapInfo& info, TileKey t) {
            std::max(b.z1, t.z) - std::min(b.z0, t.z) < kMaxMapTiles;
 }
 
-bool add_tile(const km::MapInfo& info, ZoneState& state, TileKey t) {
+bool add_tile(const km::MapInfo& info, MapState& state, TileKey t) {
     if (!within_cap(info, t)) return false;
     TileSet tiles = declared_tiles(info);
     if (!tiles.insert(t).second) return false;
@@ -471,7 +471,7 @@ bool add_tile(const km::MapInfo& info, ZoneState& state, TileKey t) {
     return true;
 }
 
-bool remove_tile(const km::MapInfo& info, ZoneState& state, TileKey t) {
+bool remove_tile(const km::MapInfo& info, MapState& state, TileKey t) {
     TileSet tiles = declared_tiles(info);
     if (tiles.size() <= 1 || !tiles.erase(t)) return false;
     state.manifest["tiles"] = tile_rects(tiles);
@@ -482,7 +482,7 @@ bool remove_tile(const km::MapInfo& info, ZoneState& state, TileKey t) {
     return true;
 }
 
-void generate_heights(const km::MapInfo& info, ZoneState& state, const NoiseParams& p) {
+void generate_heights(const km::MapInfo& info, MapState& state, const NoiseParams& p) {
     // The seed picks where in the noise the map sits (stb_perlin repeats every 256 units on each axis; y off the
     // integer lattice, where Perlin noise is 0). mt19937's raw output is the same on every platform.
     std::mt19937 rng(p.seed);
@@ -560,7 +560,7 @@ std::array<float, 3> gradient_color(const Gradient& gradient, float t) {
 std::string terrain_material_path(const std::string& folder) { return "materials/" + folder + "_terrain.mat"; }
 std::string terrain_texture_path(const std::string& folder) { return "textures/" + folder + "_terrain.png"; }
 
-TerrainImage tile_thumbnail(const ZoneState& state, TileKey t, const std::optional<Gradient>& gradient, int size) {
+TerrainImage tile_thumbnail(const MapState& state, TileKey t, const std::optional<Gradient>& gradient, int size) {
     TerrainImage image{size, size, std::vector<uint8_t>(size_t(size) * size * 3)};
     const km::Heights& heights = tile_heights(state, t);
     const int last = km::kTileSamples - 1;
@@ -577,7 +577,7 @@ TerrainImage tile_thumbnail(const ZoneState& state, TileKey t, const std::option
 }
 
 // ponytail: ground_y per pixel (a rect scan each); ~16 M lookups at the 4096 cap take seconds, fine for a save.
-TerrainImage bake_terrain(const km::MapInfo& info, const ZoneState& state, const Gradient& gradient) {
+TerrainImage bake_terrain(const km::MapInfo& info, const MapState& state, const Gradient& gradient) {
     TerrainImage image;
     if (info.tiles.empty()) return image;
     int x0 = INT32_MAX, z0 = INT32_MAX, x1 = INT32_MIN, z1 = INT32_MIN;
@@ -621,4 +621,4 @@ kast::Material terrain_material(const std::string& texturePath) {
     return m;
 }
 
-} // namespace zone
+} // namespace mapedit

@@ -1,4 +1,4 @@
-#include "zone_session.h"
+#include "map_session.h"
 
 #include "asset_ids.h"
 
@@ -9,9 +9,9 @@
 #include <algorithm>
 #include <format>
 
-void ZoneSession::scan(const std::filesystem::path& root)
+void MapSession::scan(const std::filesystem::path& root)
 {
-    project_ = root.empty() ? zone::Project{} : zone::scan_project(root);
+    project_ = root.empty() ? mapedit::Project{} : mapedit::scan_project(root);
     materials_.clear();
     prefabs_.clear();
     npcs_.clear();
@@ -24,10 +24,10 @@ void ZoneSession::scan(const std::filesystem::path& root)
         if (file.extension() == kast::kPrefabExtension)
             prefabs_.emplace_back(rel.begin(), rel.end());
     }
-    npcs_ = zone::npc_names(root);
+    npcs_ = mapedit::npc_names(root);
 }
 
-void ZoneSession::update(const Document& doc)
+void MapSession::update(const Document& doc)
 {
     if (doc.play != PlayState::Stopped || doc.prefabEdit)
         return;
@@ -35,10 +35,10 @@ void ZoneSession::update(const Document& doc)
     terrain_ = terrains.empty() ? entt::null : terrains.front();
     const std::filesystem::path root = doc.project ? doc.project->root : std::filesystem::path();
     if (root != project_.root)
-        scan(root); // the Zone tab's map picker lists them even without a Terrain entity
+        scan(root); // the Map tab's map picker lists them even without a Terrain entity
     if (root.empty() || terrain_ == entt::null) {
         loaded_.reset();
-        zone_.reset();
+        doc_.reset();
         error_.clear();
         problems_.clear();
         return;
@@ -47,93 +47,93 @@ void ZoneSession::update(const Document& doc)
     if (loaded_ == key)
         return;
     loaded_ = key;
-    zone_.reset();
+    doc_.reset();
     error_.clear();
     problems_.clear();
     scan(root); // maps made on disk since
-    const auto map = std::ranges::find_if(project_.maps, [&](const zone::ProjectMap& m) { return m.info.id == key.map; });
+    const auto map = std::ranges::find_if(project_.maps, [&](const mapedit::ProjectMap& m) { return m.info.id == key.map; });
     if (map == project_.maps.end())
         error_ = std::format("no map with id {} under maps/", key.map);
-    else if (std::string err; !(zone_ = zone::load_map(project_, map->folder, err)))
+    else if (std::string err; !(doc_ = mapedit::load_map(project_, map->folder, err)))
         error_ = std::format("maps/{}: {}", map->folder, err);
     if (!error_.empty()) {
-        kast::log::error("Zone: the Terrain map did not load: " + error_);
+        kast::log::error("Map: the Terrain map did not load: " + error_);
         return;
     }
-    problems_ = zone::validate(project_, *zone_);
-    kast::log::info(std::format("Zone: loaded maps/{} (map {}){}", zone_->folder, key.map,
+    problems_ = mapedit::validate(project_, *doc_);
+    kast::log::info(std::format("Map: loaded maps/{} (map {}){}", doc_->folder, key.map,
                                 problems_.empty() ? "" : std::format(" with {} problem(s)", problems_.size())));
-    for (const zone::ZoneError& e : problems_)
-        kast::log::warn(std::format("Zone: {}: {}", e.file, e.message));
+    for (const mapedit::MapError& e : problems_)
+        kast::log::warn(std::format("Map: {}: {}", e.file, e.message));
 }
 
-void ZoneSession::remap(const std::string& from, const std::string& to)
+void MapSession::remap(const std::string& from, const std::string& to)
 {
-    if (!zone_)
+    if (!doc_)
         return;
-    for (zone::ZoneState* state : {&zone_->state, &zone_->saved}) {
+    for (mapedit::MapState* state : {&doc_->state, &doc_->saved}) {
         remapAssetPaths(state->manifest, from, to);
         for (auto& [tile, objects] : state->objects)
             remapAssetPaths(objects, from, to);
     }
 }
 
-bool ZoneSession::save()
+bool MapSession::save()
 {
-    if (!zone_)
+    if (!doc_)
         return false;
-    problems_ = zone::save_map(project_, *zone_, recycle_);
+    problems_ = mapedit::save_map(project_, *doc_, recycle_);
     if (!problems_.empty()) {
-        kast::log::error(std::format("Zone: save of maps/{} blocked: {} problem(s), nothing written (Zone tab > Problems)",
-                                     zone_->folder, problems_.size()));
-        for (const zone::ZoneError& e : problems_)
-            kast::log::error(std::format("Zone: {}: {}", e.file, e.message));
+        kast::log::error(std::format("Map: save of maps/{} blocked: {} problem(s), nothing written (Map tab > Problems)",
+                                     doc_->folder, problems_.size()));
+        for (const mapedit::MapError& e : problems_)
+            kast::log::error(std::format("Map: {}: {}", e.file, e.message));
         return false;
     }
-    kast::log::info("Zone: saved maps/" + zone_->folder);
+    kast::log::info("Map: saved maps/" + doc_->folder);
     scan(project_.root); // a new map, or a generated terrain material, is on disk now
     return true;
 }
 
-bool ZoneSession::check()
+bool MapSession::check()
 {
-    if (!zone_)
+    if (!doc_)
         return false;
-    problems_ = zone::validate(project_, *zone_);
-    for (const zone::ZoneError& e : problems_)
-        kast::log::warn(std::format("Zone: {}: {}", e.file, e.message));
+    problems_ = mapedit::validate(project_, *doc_);
+    for (const mapedit::MapError& e : problems_)
+        kast::log::warn(std::format("Map: {}: {}", e.file, e.message));
     return problems_.empty();
 }
 
-bool ZoneSession::open(const std::string& folder, std::string& error)
+bool MapSession::open(const std::string& folder, std::string& error)
 {
-    const auto map = std::ranges::find_if(project_.maps, [&](const zone::ProjectMap& m) { return m.folder == folder; });
-    std::optional<zone::ZoneDoc> loaded;
+    const auto map = std::ranges::find_if(project_.maps, [&](const mapedit::ProjectMap& m) { return m.folder == folder; });
+    std::optional<mapedit::MapDoc> loaded;
     if (map == project_.maps.end())
         error = std::format("no map maps/{}", folder);
     else
-        loaded = zone::load_map(project_, folder, error);
+        loaded = mapedit::load_map(project_, folder, error);
     if (!loaded)
         return false;
-    zone_ = std::move(loaded);
+    doc_ = std::move(loaded);
     loaded_ = Key{project_.root, map->info.id};
     error_.clear();
-    problems_ = zone::validate(project_, *zone_);
-    kast::log::info(std::format("Zone: opened maps/{} (map {}){}", folder, map->info.id,
+    problems_ = mapedit::validate(project_, *doc_);
+    kast::log::info(std::format("Map: opened maps/{} (map {}){}", folder, map->info.id,
                                 problems_.empty() ? "" : std::format(" with {} problem(s)", problems_.size())));
     return true;
 }
 
-bool ZoneSession::newMap(const std::string& folder, const std::string& name, uint16_t id, int width, int depth,
+bool MapSession::newMap(const std::string& folder, const std::string& name, uint16_t id, int width, int depth,
                          std::string& error)
 {
-    std::optional<zone::ZoneDoc> made = zone::new_map(project_, folder, name, id, width, depth, error);
+    std::optional<mapedit::MapDoc> made = mapedit::new_map(project_, folder, name, id, width, depth, error);
     if (!made)
         return false;
-    zone_ = std::move(made);
+    doc_ = std::move(made);
     loaded_ = Key{project_.root, id};
     error_.clear();
     problems_.clear();
-    kast::log::info(std::format("Zone: new map maps/{} (id {}, {}x{} tiles); Save writes it", folder, id, width, depth));
+    kast::log::info(std::format("Map: new map maps/{} (id {}, {}x{} tiles); Save writes it", folder, id, width, depth));
     return true;
 }

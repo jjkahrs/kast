@@ -4,7 +4,7 @@
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 
-namespace zone {
+namespace mapedit {
 namespace {
 
 namespace fs = std::filesystem;
@@ -126,4 +126,4 @@ fs::path find_mapbake(const std::string& setting) {
     return {};
 }
 
-} // namespace zone
+} // namespace mapedit

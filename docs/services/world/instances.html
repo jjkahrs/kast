@@ -56,7 +56,7 @@ only, and there are no binds, resets, difficulties, groups or lockouts.</p>
 </tbody>
 </table>
 <p>The fields are parsed by <code>kast_map</code> (<code>map::parse_manifest</code>), so the server, <code>kast_mapbake</code> and the editor's
-<a href="../../editor/zone-builder.html#instance">Zone Builder</a> refuse the same things with the same messages, each naming the file and the field:
+<a href="../../editor/map-builder.html#instance">Map Builder</a> refuse the same things with the same messages, each naming the file and the field:
 <code>maps/crypt/map.json: "maxPlayers" must be an integer &gt;= 1 (leave it out for no limit)</code>,
 <code>maps/cave/map.json: "emptyTimeoutSec" is only for instance maps ("type": "instance")</code>. The exit is checked against the other maps
 once all are loaded (<code>map::exit_error</code>, like a <a href="areas.html#areas">portal</a> destination):

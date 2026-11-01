@@ -1,8 +1,8 @@
-#include "zone_render.h"
+#include "map_render.h"
 
 #include "ui_common.h"
 
-#include <zone/terrain_edit.h>
+#include <mapedit/terrain_edit.h>
 
 #include <log.h>
 #include <math3d.h>
@@ -22,7 +22,7 @@ constexpr float kLift = 0.2f;       // overlay lines float this far over the gro
 
 } // namespace
 
-void ZoneRender::clear(kast::Renderer& renderer)
+void MapRender::clear(kast::Renderer& renderer)
 {
     scene_ = {};
     tiles_.clear();
@@ -36,37 +36,37 @@ void ZoneRender::clear(kast::Renderer& renderer)
         renderer.setPreview({}, {}, {}, {});
 }
 
-void ZoneRender::sync(const zone::ZoneDoc* zone, std::array<float, 2> centre, const std::filesystem::path& projectRoot,
+void MapRender::sync(const mapedit::MapDoc* doc, std::array<float, 2> centre, const std::filesystem::path& projectRoot,
                       kast::Renderer& renderer)
 {
-    if (zone != zone_ && zone_) // another (or no) document: start over, so nothing built from the old one stays
+    if (doc != doc_ && doc_) // another (or no) document: start over, so nothing built from the old one stays
         clear(renderer);
-    zone_ = zone;
-    if (!zone)
+    doc_ = doc;
+    if (!doc)
         return;
     centre_ = centre;
-    syncTiles(*zone, centre);
-    syncPreview(*zone, renderer);
-    syncObjects(*zone, projectRoot);
+    syncTiles(*doc, centre);
+    syncPreview(*doc, renderer);
+    syncObjects(*doc, projectRoot);
 }
 
 // A tile's data changes (and the renderer rebuilds only that tile's mesh) only when its heights or what the manifest
 // gives its mesh do. Tiles come and go with the camera.
 // ponytail: unthrottled, as Play's streaming: crossing a tile edge builds a row of 2 * kEditRadius + 1 meshes in one
 // frame (a hitch); cap the builds per frame, nearest first, if it shows.
-void ZoneRender::syncTiles(const zone::ZoneDoc& zone, std::array<float, 2> centre)
+void MapRender::syncTiles(const mapedit::MapDoc& doc, std::array<float, 2> centre)
 {
-    if (zone.state.manifest != manifest_) {
-        manifest_ = zone.state.manifest;
+    if (doc.state.manifest != manifest_) {
+        manifest_ = doc.state.manifest;
         std::string err;
-        auto info = zone.info(err); // validate() reports err
-        const bool same = info && info_ && zone::same_terrain_mesh(*info_, *info);
+        auto info = doc.info(err); // validate() reports err
+        const bool same = info && info_ && mapedit::same_terrain_mesh(*info_, *info);
         info_ = info ? std::make_shared<const km::MapInfo>(std::move(*info)) : nullptr;
         if (!same)
             for (auto& [key, tile] : tiles_)
                 tile.built = false;
     }
-    const std::vector<km::TileKey> wanted = info_ ? kast::tiles_around(*info_, centre, zone::kEditRadius)
+    const std::vector<km::TileKey> wanted = info_ ? kast::tiles_around(*info_, centre, mapedit::kEditRadius)
                                                   : std::vector<km::TileKey>();
     for (auto it = tiles_.begin(); it != tiles_.end();) {
         if (std::ranges::find(wanted, it->first) != wanted.end()) {
@@ -76,9 +76,9 @@ void ZoneRender::syncTiles(const zone::ZoneDoc& zone, std::array<float, 2> centr
         scene_.registry().destroy(it->second.entity);
         it = tiles_.erase(it);
     }
-    for (const zone::TileKey key : wanted) {
-        const auto found = zone.state.heights.find(key);
-        const zone::HeightsPtr heights = found == zone.state.heights.end() ? nullptr : found->second;
+    for (const mapedit::TileKey key : wanted) {
+        const auto found = doc.state.heights.find(key);
+        const mapedit::HeightsPtr heights = found == doc.state.heights.end() ? nullptr : found->second;
         Tile& tile = tiles_[key];
         if (tile.built && tile.heights == heights)
             continue;
@@ -95,15 +95,15 @@ void ZoneRender::syncTiles(const zone::ZoneDoc& zone, std::array<float, 2> centr
         tile.built = true;
     }
     if (std::exchange(loggedTiles_, tiles_.size()) != tiles_.size())
-        kast::log::info(std::format("Zone view: {} terrain meshes (tiles within {} of the camera)", tiles_.size(),
-                                    zone::kEditRadius));
+        kast::log::info(std::format("Map view: {} terrain meshes (tiles within {} of the camera)", tiles_.size(),
+                                    mapedit::kEditRadius));
 }
 
 // When the map uses its generated terrain material: re-bakes its texture into the renderer's preview after the heights
 // or the manifest change (not mid-stroke), so the view shows it before it is saved.
-void ZoneRender::syncPreview(const zone::ZoneDoc& zone, kast::Renderer& renderer)
+void MapRender::syncPreview(const mapedit::MapDoc& doc, kast::Renderer& renderer)
 {
-    const std::string material = zone::terrain_material_path(zone.folder);
+    const std::string material = mapedit::terrain_material_path(doc.folder);
     if (!info_ || info_->material != material) { // first, so another material skips comparing every tile's heights
         previewManifest_ = nullptr;
         previewHeights_.clear();
@@ -111,35 +111,35 @@ void ZoneRender::syncPreview(const zone::ZoneDoc& zone, kast::Renderer& renderer
             renderer.setPreview({}, {}, {}, {});
         return;
     }
-    // ponytail: compares the whole heights map (one entry per edited tile) a frame; a ZoneState edit counter if a
+    // ponytail: compares the whole heights map (one entry per edited tile) a frame; a MapState edit counter if a
     // big generated-material map shows it.
-    if (zone.editing() || (zone.state.manifest == previewManifest_ && zone.state.heights == previewHeights_))
+    if (doc.editing() || (doc.state.manifest == previewManifest_ && doc.state.heights == previewHeights_))
         return;
-    previewManifest_ = zone.state.manifest;
-    previewHeights_ = zone.state.heights;
+    previewManifest_ = doc.state.manifest;
+    previewHeights_ = doc.state.heights;
     std::string err;
-    const std::string texture = zone::terrain_texture_path(zone.folder);
-    const auto gradient = zone::parse_gradient(zone.state.manifest, err);
+    const std::string texture = mapedit::terrain_texture_path(doc.folder);
+    const auto gradient = mapedit::parse_gradient(doc.state.manifest, err);
     if (!gradient) {
         if (std::exchange(previewSet_, false))
             renderer.setPreview({}, {}, {}, {});
         return;
     }
-    const zone::TerrainImage baked = zone::bake_terrain(*info_, zone.state, *gradient);
+    const mapedit::TerrainImage baked = mapedit::bake_terrain(*info_, doc.state, *gradient);
     kast::MipImage image{uint16_t(baked.width), uint16_t(baked.height), 1, {}};
     image.rgba.reserve(baked.rgb.size() / 3 * 4);
     for (size_t i = 0; i < baked.rgb.size(); i += 3)
         image.rgba.insert(image.rgba.end(), {baked.rgb[i], baked.rgb[i + 1], baked.rgb[i + 2], 255});
     kast::buildMips(image, true);
-    renderer.setPreview(material, zone::terrain_material(texture), texture, std::move(image));
+    renderer.setPreview(material, mapedit::terrain_material(texture), texture, std::move(image));
     previewSet_ = true;
 }
 
-// Each tile's objects file as entities (kast::spawnZoneObject: the prefab, and the blocking shapes' Colliders, unused
+// Each tile's objects file as entities (kast::spawnMapObject: the prefab, and the blocking shapes' Colliders, unused
 // here); a tile's are rebuilt only when its file's JSON changes.
 // ponytail: a changed tile rebuilds all its objects (a drag or a scatter dab: every frame); per-object diffs if dense
 // tiles make editing hitch.
-void ZoneRender::syncObjects(const zone::ZoneDoc& zone, const std::filesystem::path& projectRoot)
+void MapRender::syncObjects(const mapedit::MapDoc& doc, const std::filesystem::path& projectRoot)
 {
     if (projectRoot != prefabs_.projectRoot) { // another project: its prefabs
         prefabs_ = {projectRoot, {}};
@@ -147,8 +147,8 @@ void ZoneRender::syncObjects(const zone::ZoneDoc& zone, const std::filesystem::p
             tile.built = nullptr;
     }
     for (auto it = objects_.begin(); it != objects_.end();) {
-        const auto file = zone.state.objects.find(it->first);
-        if (file != zone.state.objects.end() && file->second == it->second.built) {
+        const auto file = doc.state.objects.find(it->first);
+        if (file != doc.state.objects.end() && file->second == it->second.built) {
             ++it;
             continue;
         }
@@ -156,34 +156,34 @@ void ZoneRender::syncObjects(const zone::ZoneDoc& zone, const std::filesystem::p
             scene_.destroy(e);
         it = objects_.erase(it);
     }
-    for (const auto& [key, json] : zone.state.objects) {
+    for (const auto& [key, json] : doc.state.objects) {
         if (objects_.contains(key))
             continue;
         ObjectTile& tile = objects_[key];
         tile.built = json;
         std::string error; // a prefab that does not load: validate() reports it
         for (const km::ZoneObject& object : km::parse_objects(nlohmann::json(json), key).objects)
-            if (const entt::entity e = kast::spawnZoneObject(scene_, entt::null, {0.0f, 0.0f, 0.0f}, object, prefabs_, error);
+            if (const entt::entity e = kast::spawnMapObject(scene_, entt::null, {0.0f, 0.0f, 0.0f}, object, prefabs_, error);
                 e != entt::null)
                 tile.entities.push_back(e);
     }
 }
 
-std::optional<ImVec2> GroundDraw::project(zone::Vec3 p) const
+std::optional<ImVec2> GroundDraw::project(mapedit::Vec3 p) const
 {
     float clip[4];
     const float v[4] = {p[0], p[1], p[2], 1.0f};
     bx::vec4MulMtx(clip, v, viewProj);
-    if (clip[3] <= 1e-4f || !zone::in_edit_view(centre, p[0], p[2])) // behind the camera, or off the meshed tiles
+    if (clip[3] <= 1e-4f || !mapedit::in_edit_view(centre, p[0], p[2])) // behind the camera, or off the meshed tiles
         return std::nullopt;
     return ImVec2(x + (clip[0] / clip[3] * 0.5f + 0.5f) * width, y + (0.5f - clip[1] / clip[3] * 0.5f) * height);
 }
 
-zone::Vec3 GroundDraw::ground(float gx, float gz) const
+mapedit::Vec3 GroundDraw::ground(float gx, float gz) const
 {
     // A point on the map's far edge belongs to the tile beyond it: the nearest point on the map.
     const auto c = info.clamp(gx, gz);
-    return zone::Vec3{gx, zone::ground_y(info, state, c[0], c[1]).value_or(0.0f) + kLift, gz};
+    return mapedit::Vec3{gx, mapedit::ground_y(info, state, c[0], c[1]).value_or(0.0f) + kLift, gz};
 }
 
 void GroundDraw::line(std::array<float, 2> a, std::array<float, 2> b, ImU32 color, float thickness) const
@@ -209,11 +209,11 @@ void GroundDraw::circle(float cx, float cz, float radius, ImU32 color, float thi
     }
 }
 
-void ZoneRender::drawOverlays(ImDrawList* draw, const float* viewProj, float x, float y, float width, float height) const
+void MapRender::drawOverlays(ImDrawList* draw, const float* viewProj, float x, float y, float width, float height) const
 {
-    if (!zone_ || !info_)
+    if (!doc_ || !info_)
         return;
-    const GroundDraw g{draw, viewProj, x, y, width, height, *info_, zone_->state, centre_};
+    const GroundDraw g{draw, viewProj, x, y, width, height, *info_, doc_->state, centre_};
     draw->PushClipRect(ImVec2(x, y), ImVec2(x + width, y + height), true);
     for (const auto& [key, tile] : tiles_) {
         const float x0 = key.x * km::kTileSize, z0 = key.z * km::kTileSize, x1 = x0 + km::kTileSize, z1 = z0 + km::kTileSize;
@@ -224,7 +224,7 @@ void ZoneRender::drawOverlays(ImDrawList* draw, const float* viewProj, float x, 
         if (!tiles_.contains({key.x + 1, key.z}))
             g.line({x1, z0}, {x1, z1}, kTileLine, 1.5f);
     }
-    const zone::Vec3 spawn = g.ground(info_->spawn[0], info_->spawn[2]);
+    const mapedit::Vec3 spawn = g.ground(info_->spawn[0], info_->spawn[2]);
     if (const auto p = g.project(spawn)) {
         draw->AddCircleFilled(*p, 6.0f, kSpawnColor);
         const float h = info_->spawnHeading;
