@@ -54,7 +54,11 @@ the files on disk untouched) or <strong>Cancel</strong> (stays open). <code>--gu
   yellow outline, drawn by the editor, never saved. A document with <code>data-model</code> previews as authored, with no live
   data: its models are created empty (no RmlUi warning), so <code>data-for</code> rows don't show and <code>{{...}}</code> is empty;
   select a row template in the GUI Hierarchy. A Virtual List is the exception: it shows 20 placeholder rows made from its
-  template (see <a href="#lists">Lists</a>).</li>
+  template (see <a href="#lists">Lists</a>). The mouse over the preview hovers its elements (<code>:hover</code> styles), and
+  <a href="../engine/game-gui.html#tooltips">tooltips</a> show as in Play: rest it 0.5 s over an element with a
+  <code>data-tooltip</code>; a click (which selects) hides it. <code>data-tooltip</code> is an ordinary attribute: the Inspector lists it
+  under <em>Other attributes</em>; write it in the <code>.rml</code> (the builder reloads it) or with <code>--gui-set-attr
+  data-tooltip=...</code>.</li>
 </ul>
 <h2 id="rich-text">Rich Text</h2>
 <p><strong>Add Rich Text</strong> adds <code>&lt;p class="rich"&gt;[b]Rich[/b] text&lt;/p&gt;</code>: a paragraph whose text is

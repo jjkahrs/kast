@@ -1,0 +1,15 @@
+<rml>
+    <head>
+        <title>Tooltips</title>
+        <link type="text/rcss" href="tooltip_basic.rcss" data-kast-id="9ee58c0a-f08e-430c-ac3e-2985f17de010"/>
+    </head>
+    <body>
+        <!-- Built-in tooltips (gui_tooltip.h; ctest gui_tooltip_*, kast_self_check --guitooltips): #bag's shows over its
+             #bag_icon child too, #rich's is BBCode with escaped markup and a malformed tag, #blank's is only spaces (no
+             tooltip), #corner sits in the bottom-right corner so its tooltip flips left and up. -->
+        <div id="bag" class="slot" data-tooltip="Open bag"><div id="bag_icon"></div></div>
+        <div id="rich" class="slot" data-tooltip="[b]Iron Sword[/b] [color=#ffcc00]+5 attack[/color] &lt;b&gt;not bold&lt;/b&gt; [blink]x[/blink]"></div>
+        <div id="blank" class="slot" data-tooltip="   "></div>
+        <div id="corner" class="slot" data-tooltip="Corner tooltip: flips left and up"></div>
+    </body>
+</rml>

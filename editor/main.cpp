@@ -87,7 +87,7 @@ constexpr const char* kUsage =
     "[--new-component-prompt Name] [--new-component Name] [--new-state-machine-prompt Name] [--build dir] "
     "[--open-menu Name] [--open-build-settings] [--open-online-settings] [--open-gui-settings] [--gui-settings-set json] [--game-resolution WxH] [--game-display-scale S] [--gui-preview-scale PERCENT] [--assets-menu path|/] [--assets-create system|fsm|gui|material|shader|shadergraph:folder] [--assets-rename path=name] [--assets-select path] [--assets-edit path] [--material-set field=json] [--material-undo N] [--material-redo N] "
     "[--focus-panel Window] [--map-click tx,tz]... [--grid-view tx,tz,zoom] [--zone-section Map[,Problems...]] [--zone-tool Raise|Lower|Flatten|SetSpawn|...] [--zone-select id|object:tx,tz,index] [--bake] [--mapbake exe] [--open-gui file.rml|file.guiprefab] [--gui-select id] [--gui-preview-size WxH] [--gui-pick X,Y] "
-    "[--gui-add Panel|Text|RichText|Button|Toggle|Slider|Dropdown|Spinbox|Progress|ListBox|VirtualList] [--gui-set-attr name=value] [--gui-set-prop name=value] [--gui-rich-wrap tag[=value],start,end] [--gui-undo N] [--gui-redo N] [--gui-save] [--gui-close] [--gui-create-prefab folder|/] [--gui-place-prefab path]... [--gui-revert name|*] [--gui-apply name|*] [--gui-unpack] [--gui-delete] [--gui-move up|down] [--gui-reparent id|/] [--gui-hierarchy-collapse] [--gui-click id] "
+    "[--gui-add Panel|Text|RichText|Button|Toggle|Slider|Dropdown|Spinbox|Progress|ListBox|VirtualList] [--gui-set-attr name=value] [--gui-set-prop name=value] [--gui-rich-wrap tag[=value],start,end] [--gui-undo N] [--gui-redo N] [--gui-save] [--gui-close] [--gui-create-prefab folder|/] [--gui-place-prefab path]... [--gui-revert name|*] [--gui-apply name|*] [--gui-unpack] [--gui-delete] [--gui-move up|down] [--gui-reparent id|/] [--gui-hierarchy-collapse] [--gui-click id] [--gui-hover id] "
     "[--open-graph file.kshadergraph] [--graph-add type[,x,y]] [--graph-link N.pin,M.pin] [--graph-unlink N.pin] [--graph-select N[,M...]] "
     "[--graph-delete N[,M...]] [--graph-set N.setting=json] [--graph-comment title,x,y,w,h] [--graph-paste x,y] [--graph-undo N] [--graph-redo N] "
     "[--graph-save] [--graph-close] [--graph-add-menu N.pin|/] [--graph-preview sphere|cube|plane] [--graph-preview-collapse] [--graph-view-code] [--preview-model path] [--preview-clip name] [--preview-lod N] "
@@ -221,6 +221,7 @@ struct Options {
     std::optional<std::string> guiReparent; // the new parent's id ("" = <body>)
     bool guiHierarchyCollapse = false; // the GUI Preview's GUI Hierarchy inset starts collapsed to its header
     std::string guiClick;           // with --play: click the game GUI element with this id (frame kAddComponentPopupFrame)
+    std::string guiHover;           // with --play or --open-gui: put the mouse over the element with this id (its tooltip)
     std::string openGraph;          // open this .kshadergraph in the Shader Graph panels (relative: to the project, else the cwd)
     // --graph-* edits of it (and later --open-graph), flag and value in command-line order, run as the panels do them
     // (runGraphStep) once the canvas is laid out.
@@ -625,8 +626,8 @@ std::optional<Options> parseArgs(int argc, char** argv)
             options.graphSteps.emplace_back(arg, argv[++i]);
         } else if (arg == "--gui-select" && hasValue) {
             options.guiSelect = argv[++i];
-        } else if (arg == "--gui-click" && hasValue) {
-            options.guiClick = argv[++i];
+        } else if ((arg == "--gui-click" || arg == "--gui-hover") && hasValue) { // one branch: MSVC's nesting limit
+            (arg == "--gui-click" ? options.guiClick : options.guiHover) = argv[++i];
         } else if (arg == "--sim-on-log" && hasValue) {
             options.simOnLog = argv[++i];
         } else if (arg == "--sim-key" && hasValue) {
@@ -928,7 +929,7 @@ std::optional<Options> parseArgs(int argc, char** argv)
                              !options.materialSets.empty() || options.materialUndo || options.materialRedo ||
                              !options.openGui.empty() ||
                              !options.guiSelect.empty() || options.guiPreviewSize || options.guiPick ||
-                             options.guiAdd || options.guiSetAttr || options.guiSetProp || options.guiRichWrap || options.guiSave || options.guiClose || !options.guiClick.empty() || options.openPreferences ||
+                             options.guiAdd || options.guiSetAttr || options.guiSetProp || options.guiRichWrap || options.guiSave || options.guiClose || !options.guiClick.empty() || !options.guiHover.empty() || options.openPreferences ||
                              !options.openGraph.empty() || !options.previewModel.empty() ||
                              !options.openExternal.empty() || !options.dropModel.empty() || options.logFps ||
                              !options.prefabSteps.empty() || !options.assetsDelete.empty() || !options.inspectorApplyMenu.empty() ||
@@ -949,7 +950,7 @@ std::optional<Options> parseArgs(int argc, char** argv)
                          "--gui-settings-set, --game-resolution, --game-display-scale, --gui-preview-scale, --focus-panel, --map-click, --grid-view, --zone-section, --zone-tool, --zone-select, --bake, --mapbake, "
                          "--assets-menu, "
                          "--assets-create, --assets-rename, --assets-select, --assets-edit, --open-gui, --gui-select, --gui-preview-size, --gui-pick, --gui-add, --gui-save, --gui-close, "
-                         "--gui-click, --open-graph, --preview-model, --open-preferences, --open-external, --world-address, --online-login-env, --online-compose, the prefab "
+                         "--gui-click, --gui-hover, --open-graph, --preview-model, --open-preferences, --open-external, --world-address, --online-login-env, --online-compose, the prefab "
                          "steps, --open-additive, --active-scene, --move-to-scene, --scene-menu, --remove-scene, --scene-undo, --scene-redo, --assets-delete, --inspector-apply-menu, --file-save, --bake-probes, --bake-lightmaps[-async], --cancel-lightmaps, --bake-voxelgi and the zone flags require "
                          "--project <dir> or --scene <file>");
         return std::nullopt;
@@ -977,6 +978,10 @@ std::optional<Options> parseArgs(int argc, char** argv)
     }
     if (!options.guiClick.empty() && !options.play) {
         kast::log::error("--gui-click requires --play");
+        return std::nullopt;
+    }
+    if (!options.guiHover.empty() && !options.play && options.openGui.empty()) {
+        kast::log::error("--gui-hover requires --play or --open-gui");
         return std::nullopt;
     }
     if (!options.simKeys.empty() && !options.play && options.openGraph.empty() && options.openGui.empty() &&
@@ -2109,6 +2114,13 @@ int main(int argc, char** argv)
             guiBuilder.requestClose();
         if (!options->guiClick.empty() && frames.frame() == kAddComponentPopupFrame && !game.gui().click(options->guiClick))
             kast::log::error(std::format("--gui-click {}: no such element in a visible game GUI", options->guiClick));
+        // The hover is a synthetic mouse in that GUI (never the real cursor); the preview is laid out from frame +6.
+        if (!options->guiHover.empty() && frames.frame() == kAddComponentPopupFrame + (options->play ? 0 : 6)) {
+            if (options->play ? game.gui().hover(options->guiHover) : guiBuilder.hover(options->guiHover))
+                kast::log::info(std::format("--gui-hover {}", options->guiHover));
+            else
+                kast::log::error(std::format("--gui-hover {}: no such element in a visible GUI", options->guiHover));
+        }
         if (options->assetsMenu && frames.frame() == kAddComponentPopupFrame + 2) // after --focus-panel, which closes popups
             panels.openAssetMenu(*options->assetsMenu);
         // After --focus-panel (two frames later with --open-graph), which closes popups.

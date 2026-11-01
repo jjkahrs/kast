@@ -361,6 +361,7 @@ void GuiContext::release()
     if (context_ && gui::ready())
         Rml::RemoveContext(name_);
     context_ = nullptr;
+    tooltip_.reset();
 }
 
 void GuiContext::resize(int width, int height, float dpRatio, GuiScaling scaling)
@@ -389,6 +390,8 @@ void GuiContext::render(bgfx::ViewId view, bgfx::FrameBufferHandle frameBuffer, 
     gui::g_updating = true;
     rml->Update();
     gui::g_updating = false;
+    if (tooltips_)
+        tooltip_.update(*rml); // after the update: an element it hid or removed this frame hides its tooltip now
     rml->Render();
     baseMaskIdle_ = renderer->end() ? 0 : std::min(baseMaskIdle_ + 1, kBaseMaskRenders);
 }
@@ -404,16 +407,21 @@ void GuiContext::onEvent(const SDL_Event& event, float originX, float originY, f
     const auto y = [&](float value) { return static_cast<int>((value - originY) * units); };
     switch (event.type) {
     case SDL_EVENT_MOUSE_MOTION:
+        tooltip_.mouseMove(static_cast<float>(x(event.motion.x)), static_cast<float>(y(event.motion.y)));
         rml->ProcessMouseMove(x(event.motion.x), y(event.motion.y), mods);
         break;
     case SDL_EVENT_MOUSE_BUTTON_DOWN:
     case SDL_EVENT_MOUSE_BUTTON_UP:
         if (const int button = toRmlButton(event.button.button); button >= 0) {
+            tooltip_.mouseMove(static_cast<float>(x(event.button.x)), static_cast<float>(y(event.button.y)));
             rml->ProcessMouseMove(x(event.button.x), y(event.button.y), mods);
-            if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN)
+            if (event.type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
+                tooltip_.press();
                 rml->ProcessMouseButtonDown(button, mods);
-            else
+            } else {
+                tooltip_.release();
                 rml->ProcessMouseButtonUp(button, mods);
+            }
         }
         break;
     case SDL_EVENT_MOUSE_WHEEL:
