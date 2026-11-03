@@ -407,8 +407,9 @@ them already exists before the map has been saved using it (someone else's file)
 on that file. Picking another material in the Map section keeps it; the generated files are then no longer written.</p>
 
 <h2 id="saving">Saving, undo and Play</h2>
-<p><strong>Save Map</strong> (the tab), and <strong>File &gt; Save</strong> / <strong>Ctrl+S</strong> (the scene, then the map if it has unsaved edits),
-first check the map as the world server would load it: <code>kast_map</code>'s <code>parse_manifest</code>, <code>parse_areas</code> and
+<p><strong>File &gt; Save</strong> / <strong>Ctrl+S</strong> saves everything in one go, from any panel: every open scene with unsaved
+changes (the edited scene and any open zone or tile scenes), then the map if it has unsaved edits. <strong>Save Map</strong> (the
+tab) saves only the map. Both first check the map as the world server would load it: <code>kast_map</code>'s <code>parse_manifest</code>, <code>parse_areas</code> and
 <code>parse_spawns</code> for every tile's file, spawn ids unique on the map, spawn files on declared tiles, the map id unused by
 the project's other maps, portals to an existing map, onto its tiles and not into a portal there, valid
 <code>terrainColors</code>, no foreign file at the generated terrain texture or material path, every objects file
@@ -417,9 +418,11 @@ unique on the map, and each interactable object with a server entry of the same 
 an object). Any problem: nothing of the map is written, the tab comes to the front with <strong>Problems</strong> listing them all
 (file and message, as the server reports them), and the Console repeats them; the scene itself still saves. Only files
 that changed are written; a map opened and saved unchanged keeps every byte.</p>
-<p><strong>Undo</strong> / <strong>Redo</strong> (the tab's buttons, and <strong>Edit &gt; Undo / Redo</strong>, Ctrl+Z, Ctrl+Y and Ctrl+Shift+Z while
-the Map tab has focus) cover every map edit, and a brush or scatter stroke, a drag or one field edit is one step. The
-map has its own history, apart from the scene's: see <a href="undo-redo.html#map">Undo and redo</a>.</p>
+<p><strong>Edit &gt; Undo / Redo</strong>, Ctrl+Z, Ctrl+Y and Ctrl+Shift+Z act on the most recent edit, map or scene, whichever
+panel has focus: sculpt, then move an entity, and Ctrl+Z undoes the move, a second Ctrl+Z the sculpt. The tab's own
+<strong>Undo</strong> / <strong>Redo</strong> buttons act on the map only. Every map edit is covered, and a brush or scatter stroke, a drag or
+one field edit is one step. The map keeps its own history beside the scene's, the two ordered by when each step was made:
+see <a href="undo-redo.html#documents">Undo and redo</a>.</p>
 <p><strong>Unsaved changes.</strong> The editor's Save / Don't Save / Cancel prompt (New, Open, Open Recent, switching project,
 quitting) counts unsaved map edits too, and so does changing the map in the Map tab or the Inspector (<strong>Don't Save</strong>
 reloads the map from disk).</p>

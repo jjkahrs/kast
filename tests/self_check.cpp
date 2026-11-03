@@ -16066,11 +16066,45 @@ void checkUndoStack()
     stack.clear(false);
     check(!stack.atSavePoint() && stack.size() == 0, "undo stack: clear(false) leaves no save point");
 
-    UndoTarget target{.history = &stack, .undo = [] {}, .redo = [] {}};
+    UndoTarget target{.history = &stack, .redoHistory = &stack, .undo = [] {}, .redo = [] {}};
     step(3);
     check(target.canUndo() && !target.canRedo(), "undo target: follows its history");
     target.blocked = true;
     check(!target.canUndo() && !target.canRedo(), "undo target: blocked (Play) can't undo or redo");
+
+    // The scene and its map as one history (latestUndo / nextRedo): edits scene, map, scene undo newest first and redo
+    // oldest first, whichever stack holds them.
+    UndoStack scene, map;
+    std::string log;
+    const auto edit = [&](UndoStack& to, const std::string& name) {
+        to.push({name, [&log, name] { log += "-" + name; }, [&log, name] { log += "+" + name; }});
+    };
+    const auto undoLatest = [&] {
+        if (UndoStack* s = const_cast<UndoStack*>(latestUndo(scene, map)))
+            s->undo();
+    };
+    const auto redoNext = [&] {
+        if (UndoStack* s = const_cast<UndoStack*>(nextRedo(scene, map)))
+            s->redo();
+    };
+    check(!latestUndo(scene, map) && !nextRedo(scene, map), "undo order: two empty stacks, nothing to undo or redo");
+    edit(scene, "S1");
+    edit(map, "M1");
+    edit(scene, "S2");
+    for (int i = 0; i < 4; ++i) // the fourth does nothing
+        undoLatest();
+    for (int i = 0; i < 4; ++i)
+        redoNext();
+    check(log == "-S2-M1-S1+S1+M1+S2", ("undo order: newest edit undone first and oldest redone first across stacks, got " + log).c_str());
+    log.clear();
+    undoLatest(); // S2
+    undoLatest(); // M1
+    edit(scene, "S3"); // a shared history would drop M1's redo: the map's redo is now stale
+    check(nextRedo(scene, map) == nullptr && map.canRedo(), "undo order: a newer edit in the other stack drops a redo");
+    undoLatest(); // S3
+    check(nextRedo(scene, map) == &scene, "undo order: the redo is S3's again once it is undone");
+    redoNext();
+    check(log == "-S2-M1-S3+S3" && latestUndo(scene, map) == &scene, ("undo order: stale redo skipped, got " + log).c_str());
 }
 
 kast::EntityId selectedId(const Document& doc)

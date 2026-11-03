@@ -178,6 +178,29 @@ add_test(NAME editor_map_play_zones
           "-DEXPECT_OUTPUT=${map_zones_start}.*${map_zones_east}.*map zones: scene unloaded map 7 zone west.*${map_zones_back}.*Stop"
           "-DEXPECT_ONCE=map zones: entered map 7 zone east;map zones: left map 7 zone east;map zones: off the map"
           "-DFORBID_OUTPUT=\\[error\\]|Switched to scene" -P "${map_smoke}")
+# Unified undo (docs/editor/undo-redo.html#documents): a scene edit (--set-field), a map edit (--paint-zone) and a
+# Scene view Ctrl+D, then real Ctrl+Z x3 / Ctrl+Y x3 with the Scene view (or the Map tab) focused: the latest edit is undone
+# first, map or scene, and redone in the order made. Nothing is saved.
+set(map_undo_args "--scene ${KAST_TILEGRID} --size 1600x1000 --set-field 1,DirectionalLight.intensity,2 --map tilegrid --paint-zone east,1,0,1,2 --select 3 --sim-key 20,ctrl+D --sim-key 30,ctrl+Z --sim-key 40,ctrl+Z --sim-key 50,ctrl+Z --sim-key 60,ctrl+Y --sim-key 70,ctrl+Y --sim-key 80,ctrl+Y")
+set(map_undo_order "Undo Duplicate Main Camera.*Undo Edit Zones.*Undo Set DirectionalLight.intensity.*Redo Set DirectionalLight.intensity.*Redo Edit Zones.*Redo Duplicate Main Camera")
+add_test(NAME editor_map_undo_order_scene_focus
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/map_undo_order_scene_focus.png"
+          "-DEXTRA_ARGS=${map_undo_args}" -DFOCUS_PANEL=Scene -DFRAMES=100 "-DEXPECT_OUTPUT=${map_undo_order}"
+          "-DFORBID_OUTPUT=\\[error\\]|Saved" -P "${map_smoke}")
+# The Map tab focused: Ctrl+D is the Scene view's, so the scene edits are --set-field (startup) and nothing after the map's.
+add_test(NAME editor_map_undo_order_map_focus
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/map_undo_order_map_focus.png"
+          "-DEXTRA_ARGS=--scene ${KAST_TILEGRID} --size 1600x1000 --set-field 1,DirectionalLight.intensity,2 --map tilegrid --paint-zone east,1,0,1,2 --sim-key 30,ctrl+Z --sim-key 40,ctrl+Z --sim-key 50,ctrl+Y --sim-key 60,ctrl+Y"
+          -DFOCUS_PANEL=Map -DFRAMES=80
+          "-DEXPECT_OUTPUT=Undo Edit Zones.*Undo Set DirectionalLight.intensity.*Redo Set DirectionalLight.intensity.*Redo Edit Zones"
+          "-DFORBID_OUTPUT=\\[error\\]|Saved" -P "${map_smoke}")
+# Only map edits pending (the scene itself clean): opening another scene asks first, naming the map; a --frames run quits
+# at the prompt, so nothing is opened or saved.
+add_test(NAME editor_map_unsaved_prompt
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/map_unsaved_prompt.png"
+          "-DEXTRA_ARGS=--scene ${KAST_TILEGRID} --size 1600x1000 --map tilegrid --paint-zone east,1,0,1,2 --open-scene ${KAST_TEST_PROJECT}/additive_a.scene"
+          -DFOCUS_PANEL=Scene -DFRAMES=40 "-DEXPECT_OUTPUT=Unsaved changes: tilegrid and maps/tilegrid"
+          "-DFORBID_OUTPUT=\\[error\\]|Opened scene '[^']*additive_a|Saved" -P "${map_smoke}")
 set_tests_properties(editor_map_tab editor_map_tab_old_layout editor_map_tab_pre_mapedit_layout editor_map_tab_zone_own_dock
                      editor_map_no_terrain
                      editor_map_no_project editor_map_click_open
@@ -186,7 +209,8 @@ set_tests_properties(editor_map_tab editor_map_tab_old_layout editor_map_tab_pre
                      editor_map_warnings editor_map_orphan_after_remove editor_map_play_stream editor_map_zones
                      editor_map_zone_scene_open_close editor_map_zone_scene_create editor_map_zone_scene_create_save
                      editor_map_zone_rename_save editor_map_zone_orphan editor_map_zone_root_outside editor_map_zone_play_locked
-                     editor_map_play_zones
+                     editor_map_play_zones editor_map_undo_order_scene_focus editor_map_undo_order_map_focus
+                     editor_map_unsaved_prompt
                      PROPERTIES LABELS smoke)
 
 # The built player (game "tilegrid" in KAST_GAMES, its copy's 2_0.scene broken): the same streaming path; the broken

@@ -1777,8 +1777,11 @@ void FileActions::update()
 
 void FileActions::drawModals()
 {
-    if (std::exchange(confirmRequested_, false))
+    if (std::exchange(confirmRequested_, false)) {
+        const std::string what = extraUnsaved();
+        kast::log::info(std::format("Unsaved changes: {}{}{}", displayName(doc_), what.empty() ? "" : " and ", what));
         ImGui::OpenPopup("Unsaved changes");
+    }
     if (ImGui::BeginPopupModal("Unsaved changes", nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
         const std::string what = extraUnsaved();
         ImGui::Text("Save changes to %s%s%s before continuing?", displayName(doc_).c_str(), what.empty() ? "" : " and ",

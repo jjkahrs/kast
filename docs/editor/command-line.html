@@ -201,7 +201,11 @@ volume of the scene is voxelized into <code>&lt;scene-name&gt;_voxelgi/&lt;entit
 </tr>
 <tr>
 <td><code>--file-save</code></td>
-<td>File &gt; Save (as Ctrl+S: the scene, then a map with unsaved edits) after the first 10 frames, for tests.</td>
+<td>File &gt; Save (as Ctrl+S: every open scene with unsaved changes, zone and tile scenes included, then a map with unsaved edits) after the first 10 frames, for tests.</td>
+</tr>
+<tr>
+<td><code>--open-scene &lt;file&gt;</code></td>
+<td>File &gt; Open of <code>file</code> after the first 10 frames, for tests: with unsaved scene or map edits the unsaved-changes prompt opens first (logged as <code>Unsaved changes: &lt;scene&gt;[ and maps/&lt;folder&gt;]</code>).</td>
 </tr>
 <tr>
 <td><code>--no-scene-post</code></td>
@@ -474,7 +478,7 @@ unsaved-changes prompt if that scene has unsaved changes), for screenshots.</td>
 </tr>
 <tr>
 <td><code>--sim-key &lt;frame,[ctrl+]key&gt;</code></td>
-<td>With <code>--play</code>, <code>--open-graph</code>, <code>--open-gui</code> or <code>--focus-panel Scene</code>, repeatable: on frame <code>frame</code> press <code>key</code> (an SDL key name: <code>B</code>, <code>Escape</code>, <code>Tab</code>, <code>Delete</code>, <code>Keypad 5</code>) on the Game panel (with <code>--open-graph</code>, <code>--open-gui</code> or <code>--focus-panel Scene</code>: the focused panel, e.g. the canvas, the GUI Hierarchy inset or the Scene view); <code>ctrl+</code> holds Ctrl with it (<code>ctrl+C</code>, <code>ctrl+V</code>; it types nothing), with the character it types (a letter or digit, lower case) for a focused game GUI text field, and release it two frames later. Synthetic SDL events, like <code>--sim-mouse</code>. Example: <code>--sim-key 600,B</code>.</td>
+<td>With <code>--play</code>, <code>--open-graph</code>, <code>--open-gui</code> or <code>--focus-panel Scene</code> / <code>Map</code>, repeatable: on frame <code>frame</code> press <code>key</code> (an SDL key name: <code>B</code>, <code>Escape</code>, <code>Tab</code>, <code>Delete</code>, <code>Keypad 5</code>) on the Game panel (with <code>--open-graph</code>, <code>--open-gui</code> or <code>--focus-panel Scene</code> / <code>Map</code>: the focused panel, e.g. the canvas, the GUI Hierarchy inset, the Scene view or the Map tab); <code>ctrl+</code> holds Ctrl with it (<code>ctrl+C</code>, <code>ctrl+V</code>; it types nothing), with the character it types (a letter or digit, lower case) for a focused game GUI text field, and release it two frames later. Synthetic SDL events, like <code>--sim-mouse</code>. Example: <code>--sim-key 600,B</code>.</td>
 </tr>
 <tr>
 <td><code>--sim-on-log &lt;text&gt;</code></td>
@@ -497,7 +501,7 @@ unsaved-changes prompt if that scene has unsaved changes), for screenshots.</td>
 <p>Without <code>--project</code>, <code>--scene</code>, <code>--save-scene</code> or <code>--build</code>, <code>kast_editor</code> runs the Project Manager instead of the
 editor. Editor-only flags (<code>--select</code>, <code>--play</code>, <code>--select-network-entity</code>, <code>--add-component-popup</code>, <code>--new-component[-prompt]</code>,
 <code>--new-state-machine-prompt</code>, <code>--open-menu</code>, <code>--open-build-settings</code>, <code>--open-online-settings</code>, <code>--focus-panel</code>, <code>--map-click</code>, <code>--zone-scene-click</code>, <code>--grid-view</code>, <code>--grid-mode</code>, <code>--map-section</code>, <code>--map-tool</code>, <code>--assets-*</code>, <code>--open-gui</code>,
-<code>--gui-*</code>, <code>--open-graph</code>, <code>--graph-*</code>, <code>--map-select</code>, <code>--bake</code>, <code>--mapbake</code>, <code>--file-save</code>, <code>--bake-probes</code>, the <a href="#map">map edits</a>) then are invalid arguments, as are Project Manager flags (<code>--launcher</code>, <code>--new-project</code>,
+<code>--gui-*</code>, <code>--open-graph</code>, <code>--graph-*</code>, <code>--map-select</code>, <code>--bake</code>, <code>--mapbake</code>, <code>--file-save</code>, <code>--open-scene</code>, <code>--bake-probes</code>, the <a href="#map">map edits</a>) then are invalid arguments, as are Project Manager flags (<code>--launcher</code>, <code>--new-project</code>,
 <code>--launcher-open</code>, <code>--</code>) together with the editor's.</p>
 <h2 id="shader-graph-flags">Shader Graph</h2>
 <p>The <a href="shader-graph.html#shader-graph">Shader Graph</a> panels' edits, for tests and screenshots. They need a project
