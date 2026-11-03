@@ -192,7 +192,7 @@ then next to <code>kast_editor.exe</code></td>
 <p><strong>Create</strong> is disabled, with the reason in red, while the name is empty, <code>maps/&lt;folder&gt;</code> already exists, the id is
 used or Max is not above Min (a folder that is not a plain name is refused on Create, the reason shown). On Create: the map is made with
 one zone of every tile (<code>zones.json</code>), the height range and the start terrain (its first state, not an undo step), the scene's
-first Terrain entity is pointed at it (added if there is none; one scene undo step), and File &gt; Save writes the scene (asking where if
+first Terrain entity is pointed at it (added if there is none; one scene undo step), the Scene view camera frames the map (as Focus), and File &gt; Save writes the scene (asking where if
 it is untitled) and then the map. If the scene's Terrain already names a map, Create first asks <strong>Replace map link?</strong>:
 <strong>Replace</strong> goes on, <strong>Cancel</strong> goes back to the wizard. The old map's files are never touched.</p>
 <p>Everything the tab does is also logged to the <strong>Console</strong> (<code>Map: ...</code> lines: loads, strokes, placements, saves,

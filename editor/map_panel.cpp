@@ -2,6 +2,7 @@
 
 #include "assets.h" // fromUtf8
 #include "editor_settings.h"
+#include "map_cli.h" // frameMap
 #include "ui_common.h"
 
 #include <mapedit/terrain_edit.h>
@@ -861,6 +862,7 @@ bool MapPanel::createMap(Document& doc, MapSession& session, FileActions& files)
         mapedit::generate_heights(info, z.state, noise_);
     z.state.manifest["spawn"]["pos"][1] = kast::jsonNumber(*mapedit::ground_y(info, z.state, info.spawn[0], info.spawn[2]));
     setTerrainMap(doc, w.id);
+    map_cli::frameMap(doc.camera, z); // in view straight away, as Focus on the map
     kast::log::info(std::format("Map: New Map maps/{}: {} x {} tiles, heights {} .. {} m, {} terrain, one zone", w.folder,
                                 w.width, w.depth, w.min, w.max, w.generated ? "generated" : "flat"));
     files.save(); // the scene (asking where if untitled), then the map (FileActions::extra)

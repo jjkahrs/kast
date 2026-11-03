@@ -203,8 +203,8 @@ add_test(NAME editor_map_unsaved_prompt
           "-DFORBID_OUTPUT=\\[error\\]|Opened scene '[^']*additive_a|Saved" -P "${map_smoke}")
 # The New Map wizard (docs/editor/map-builder.html#new-map). On the copy's empty scene one Create adds the Terrain
 # entity, makes maps/highlands (folder from the name) with one zone of every tile and the height range, generated
-# heights, and saves the scene and the map.
-set(map_wizard_files [=[@PROJECT@/maps/highlands/map.json="name":"Highlands","tiles":\[\[0,0,2,1\]\],"heightRange":\[-10\.0,60\.0\];@PROJECT@/maps/highlands/zones.json="zones":\[{"id":"highlands","name":"Highlands","tiles":\[\[0,0,2,1\]\]}\];@PROJECT@/scenes/empty.scene="name":"Terrain".*"Terrain":{"map":0,]=])
+# heights, frames the map in the Scene view (the saved camera pivot is its centre), and saves the scene and the map.
+set(map_wizard_files [=[@PROJECT@/maps/highlands/map.json="name":"Highlands","tiles":\[\[0,0,2,1\]\],"heightRange":\[-10\.0,60\.0\];@PROJECT@/maps/highlands/zones.json="zones":\[{"id":"highlands","name":"Highlands","tiles":\[\[0,0,2,1\]\]}\];@PROJECT@/scenes/empty.scene="name":"Terrain".*"Terrain":{"map":0,;@PROJECT@/scenes/empty.scene="camera":{"pivot":\[384\.0,[0-9.]+,256\.0\]]=])
 add_test(NAME editor_map_wizard_create
   COMMAND "${CMAKE_COMMAND}" "-DSOURCE=${KAST_TEST_PROJECT}" "-DEDITOR=$<TARGET_FILE:kast_editor>"
           "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/map_wizard_create.png"

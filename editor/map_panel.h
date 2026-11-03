@@ -155,7 +155,7 @@ private:
     std::string newMapBlocker(const MapSession& session) const;
     void drawNewMapDialog(Document& doc, MapSession& session, FileActions& files);
     // The wizard's Create: the new map (one zone of every tile, the height range, flat or generated heights), the
-    // Terrain entity (added if missing) pointed at it, then File > Save (the scene, then the map). False: new_map refused.
+    // Terrain entity (added if missing) pointed at it, the Scene view camera framing it, then File > Save (the scene, then the map). False: new_map refused.
     bool createMap(Document& doc, MapSession& session, FileActions& files);
     void drawRemoveTilePrompt(MapSession& session);
     void toolButton(const char* label, Tool tool);
