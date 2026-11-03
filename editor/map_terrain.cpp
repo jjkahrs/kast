@@ -1,5 +1,5 @@
-// The Map tab's Terrain section and the sculpt brushes' Scene view input:
-// Raise/Lower/Flatten settings, the height range (with the clip prompt), heightmap PNG import/export, Generate
+// The Map tab's Terrain sub-tab and the sculpt brushes' Scene view input and hotkeys:
+// the Raise/Lower/Flatten tools with their settings, the height range (applied as edited; the clip prompt), heightmap PNG import/export, Generate
 // (fBm), Height colors and Create texture & material. The math is mapedit/terrain_edit.h.
 #include "map_panel.h"
 
@@ -15,6 +15,7 @@
 #include <imgui_internal.h> // GetTopMostPopupModal
 
 #include <algorithm>
+#include <charconv>
 #include <format>
 #include <random>
 
@@ -30,6 +31,31 @@ std::string utf8(const fs::path& p)
 {
     const std::u8string s = p.u8string();
     return std::string(s.begin(), s.end());
+}
+
+constexpr float kMinRadius = 1.0f, kMaxRadius = 128.0f;     // metres
+constexpr float kMinStrength = 0.1f, kMaxStrength = 50.0f;
+constexpr float kBrushStep = 1.25f; // a [ ] or - = press scales radius or strength by this
+struct SculptKey {
+    ImGuiKey key;
+    MapPanel::Tool tool;
+    const char* name;
+};
+constexpr SculptKey kSculptKeys[] = {{ImGuiKey_1, MapPanel::Tool::Raise, "Raise"},
+                                     {ImGuiKey_2, MapPanel::Tool::Lower, "Lower"},
+                                     {ImGuiKey_3, MapPanel::Tool::Flatten, "Flatten"}};
+
+// Why no brush can change the heights (apply_brush does nothing), or null.
+const char* sculptBlocker(const km::MapInfo& info)
+{
+    const auto range = km::height_range(info);
+    return range[1] > range[0] ? nullptr : "the height range is empty: set Max above Min below";
+}
+
+// down / up pressed (repeating while held): 1 / kBrushStep or kBrushStep; else 1.
+float brushStep(ImGuiKey down, ImGuiKey up)
+{
+    return ImGui::IsKeyPressed(up) ? kBrushStep : ImGui::IsKeyPressed(down) ? 1.0f / kBrushStep : 1.0f;
 }
 
 const char* brushName(mapedit::BrushMode mode)
@@ -50,40 +76,39 @@ void MapPanel::drawTerrain(MapSession& session)
     }
 
     ImGui::SeparatorText("Brush");
-    ImGui::TextDisabled("Raise / Lower / Flatten at the top; left drag paints in the Scene view");
-    ImGui::SliderFloat("Radius", &brush_.radius, 1.0f, 128.0f, "%.0f m", ImGuiSliderFlags_Logarithmic);
-    ImGui::SliderFloat("Strength", &strength_, 0.1f, 50.0f, tool_ == Tool::Flatten ? "%.1f /s" : "%.1f m/s",
+    toolButton("Raise", Tool::Raise);
+    toolButton("Lower", Tool::Lower);
+    toolButton("Flatten", Tool::Flatten);
+    ImGui::NewLine();
+    const char* why = sculptBlocker(*info);
+    ImGui::PushStyleColor(ImGuiCol_Text, why ? kErrorColor : ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+    if (why)
+        ImGui::TextWrapped("Can't sculpt: %s", why);
+    else
+        ImGui::TextWrapped("Left drag in the Scene view sculpts. Keys there: 1 2 3 tool, [ ] radius, - = strength");
+    ImGui::PopStyleColor();
+    ImGui::SliderFloat("Radius", &brush_.radius, kMinRadius, kMaxRadius, "%.0f m", ImGuiSliderFlags_Logarithmic);
+    ImGui::SliderFloat("Strength", &strength_, kMinStrength, kMaxStrength, tool_ == Tool::Flatten ? "%.1f /s" : "%.1f m/s",
                        ImGuiSliderFlags_Logarithmic);
     ImGui::SliderFloat("Falloff", &brush_.falloff, 0.0f, 1.0f, "%.2f");
     ImGui::InputFloat("Flatten to", &brush_.target, 0.0f, 0.0f, "%.2f m");
     ImGui::TextDisabled("Flatten: Shift+click the terrain to pick the height");
 
+    // Applied as each field is left (Enter, Tab, a click elsewhere); a range that would clip heights asks first.
     ImGui::SeparatorText("Height range");
     const auto range = km::height_range(*info);
     if (!ImGui::IsAnyItemActive() && !askRange_ && !rangeEdited_) {
         rangeMin_ = range[0];
         rangeMax_ = range[1];
     }
-    if (ImGui::InputFloat("Min", &rangeMin_, 0.0f, 0.0f, "%.2f m"))
-        rangeEdited_ = true;
-    if (ImGui::InputFloat("Max", &rangeMax_, 0.0f, 0.0f, "%.2f m"))
-        rangeEdited_ = true;
-    ImGui::BeginDisabled((rangeMin_ == range[0] && rangeMax_ == range[1]) || rangeMin_ > rangeMax_);
-    if (ImGui::Button("Apply range")) {
-        rangeClips_ = mapedit::count_clipped(*info, z->state, rangeMin_, rangeMax_);
-        if (rangeClips_ == 0) {
-            setHeightRange(*z, rangeMin_, rangeMax_);
-            rangeEdited_ = false;
-        } else {
-            askRange_ = true;
-        }
+    for (auto [label, value] : {std::pair{"Min", &rangeMin_}, std::pair{"Max", &rangeMax_}}) {
+        if (ImGui::InputFloat(label, value, 0.0f, 0.0f, "%.2f m"))
+            rangeEdited_ = true;
+        if (ImGui::IsItemDeactivatedAfterEdit())
+            editRange(*z, rangeMin_, rangeMax_);
     }
-    ImGui::EndDisabled();
-    ImGui::SameLine();
-    if (ImGui::Button("Revert"))
-        rangeEdited_ = false;
-    if (range[1] <= range[0])
-        ImGui::TextColored(kErrorColor, "Set a range (max > min) to sculpt");
+    if (rangeEdited_ && !(rangeMin_ < rangeMax_))
+        ImGui::TextColored(kErrorColor, "Max must be above Min");
 
     ImGui::SeparatorText("Heightmap");
     if (!info->has_tile(tile_))
@@ -224,6 +249,68 @@ void MapPanel::setHeightRange(mapedit::MapDoc& z, float min, float max)
                                 clipped ? std::format(" ({} samples clipped)", clipped) : ""));
 }
 
+void MapPanel::editRange(mapedit::MapDoc& z, float min, float max)
+{
+    std::string err;
+    const auto info = z.info(err);
+    rangeMin_ = min;
+    rangeMax_ = max;
+    rangeEdited_ = true;
+    if (!info || !(min < max)) // the tab says why
+        return;
+    const auto range = km::height_range(*info);
+    if (min == range[0] && max == range[1]) {
+        rangeEdited_ = false;
+        return;
+    }
+    rangeClips_ = mapedit::count_clipped(*info, z.state, min, max);
+    if (rangeClips_ > 0) {
+        askRange_ = true;
+        kast::log::info(std::format("Map: height range {} .. {} m would clip {} samples: asking first", min, max,
+                                    rangeClips_));
+        return;
+    }
+    setHeightRange(z, min, max);
+    rangeEdited_ = false;
+}
+
+bool MapPanel::editRange(MapSession& session, std::string_view spec)
+{
+    const size_t comma = spec.find(',');
+    float min = 0, max = 0;
+    const auto number = [](std::string_view text, float& out) {
+        const auto [end, ec] = std::from_chars(text.data(), text.data() + text.size(), out);
+        return ec == std::errc() && end == text.data() + text.size();
+    };
+    if (comma == std::string_view::npos || !number(spec.substr(0, comma), min) || !number(spec.substr(comma + 1), max))
+        return false;
+    if (mapedit::MapDoc* z = session.doc())
+        editRange(*z, min, max);
+    return true;
+}
+
+void MapPanel::sculptHotkeys(bool sceneActive)
+{
+    const ImGuiIO& io = ImGui::GetIO();
+    const bool sculpting = tool_ == Tool::Raise || tool_ == Tool::Lower || tool_ == Tool::Flatten;
+    if (!sceneActive || !(sculpting || (tab_ == Tab::Terrain && tabFront_)) || io.WantTextInput || io.KeyCtrl ||
+        io.KeyAlt || ImGui::GetTopMostPopupModal())
+        return;
+    for (const SculptKey& k : kSculptKeys)
+        if (ImGui::IsKeyPressed(k.key, false) && tool_ != k.tool) {
+            tool_ = k.tool;
+            kast::log::info(std::format("Map: {} tool (key {})", k.name, ImGui::GetKeyName(k.key)));
+        }
+    if (const float f = brushStep(ImGuiKey_LeftBracket, ImGuiKey_RightBracket); f != 1.0f) {
+        brush_.radius = std::clamp(brush_.radius * f, kMinRadius, kMaxRadius);
+        kast::log::info(std::format("Map: brush radius {:.0f} m", brush_.radius));
+    }
+    if (const float f = brushStep(ImGuiKey_Minus, ImGuiKey_Equal); f != 1.0f) {
+        strength_ = std::clamp(strength_ * f, kMinStrength, kMaxStrength);
+        kast::log::info(std::format("Map: brush strength {:.1f}", strength_));
+    }
+}
+
 void MapPanel::drawHeightRangePrompt(MapSession& session)
 {
     if (askRange_ && !ImGui::IsPopupOpen(kClipPopup))
@@ -239,7 +326,7 @@ void MapPanel::drawHeightRangePrompt(MapSession& session)
     }
     ImGui::SameLine();
     if (ImGui::Button("Cancel") || ImGui::IsKeyPressed(ImGuiKey_Escape)) {
-        askRange_ = false;
+        askRange_ = rangeEdited_ = false; // the fields go back to the map's range
         ImGui::CloseCurrentPopup();
     }
     ImGui::EndPopup();
@@ -305,6 +392,10 @@ void MapPanel::sculptInput(mapedit::MapDoc& z, const km::MapInfo& info, bool cli
                                          : mapedit::BrushMode::Flatten;
     if (click && hover_ && io.KeyShift && tool_ == Tool::Flatten) {
         brush_.target = (*hover_)[1];
+        return;
+    }
+    if (const char* why = sculptBlocker(info); click && why) {
+        kast::log::warn(std::string("Map: can't sculpt: ") + why);
         return;
     }
     if (click && hover_ && !stroking_) {

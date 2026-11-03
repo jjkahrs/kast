@@ -19,6 +19,25 @@ top-down: it adds and removes tiles, and opens, closes and creates their <a href
 the <code>kast_mapedit</code> library (<code>engine/mapedit/</code>), the tile scene logic (paths, cell states, the streaming diff)
 <code>engine/tile_scenes.h</code>; the tab and the Scene view tools are editor code (<code>editor/map_*</code>).</p>
 
+<h2 id="quick-start">Quick start</h2>
+<p>From an empty (saved) scene to a saved map with terrain, two zones and a sculpted hill, in 10 actions:</p>
+<ol>
+<li>Click the <strong>Map</strong> tab.</li>
+<li><strong>New Map...</strong> (Setup sub-tab).</li>
+<li>Type a <strong>Name</strong> (2 x 2 tiles, 0 .. 100 m, flat by default).</li>
+<li><strong>Create</strong>: adds the Terrain entity, makes the map with one zone of every tile, frames it in the Scene view and saves.</li>
+<li>Click the <strong>Zones</strong> sub-tab.</li>
+<li><strong>Add Zone</strong> (selected, ready to paint).</li>
+<li>Drag over the terrain in the Scene view (or the tab's tile grid): those tiles go into the new zone.</li>
+<li>Click the <strong>Terrain</strong> sub-tab (<strong>Raise</strong> is active; the brush cursor follows the mouse).</li>
+<li>Drag on the terrain in the Scene view: a hill.</li>
+<li><strong>Ctrl+S</strong>: the scene, the map and its zones.</li>
+</ol>
+<p>Before this (commit <code>64261dd</code>) the same result took 11 or 12: Map tab, New Map..., type the folder, Create, expand the
+collapsed Zones section, Add Zone, scroll up to the Tiles grid, drag on the grid, Raise in the top bar, drag in the Scene view,
+Ctrl+S (the panel's separate <strong>Save Map</strong> suggested one more). A map whose height range was empty also needed the Terrain
+section expanded, Min / Max typed and <strong>Apply range</strong> before any stroke changed anything, with no message at the brush.</p>
+
 <h2 id="scene-link">A map is the scene's Terrain map</h2>
 <p>The map is the map whose id is in the open scene's <strong>first</strong> entity with a <code>Terrain</code> component (the same
 rule Play's terrain streaming follows). Picking another map or creating a New Map in the Map tab sets that
@@ -54,7 +73,8 @@ bounding box). <strong>Focus</strong> on a map wider than 9 tiles frames the 9 x
 the camera's near and far planes are 0.5 m and 8 km (the farthest dolly is 5 km), so the meshed tiles stay in view.
 Overlays (drawn on the meshed tiles only): tile borders, the player spawn (with its heading), areas (portals in blue, the selected one with corner
 handles), spawns (with heading), patrol paths, map objects (a dot each; obstacles' and interactables' shapes outlined
-on the ground) and the brush ring. They are drawn over the terrain, not hidden by hills.</p>
+on the ground) and, with a sculpt tool, the brush cursor: its radius as a highlight circle on the ground under the mouse and,
+inside it, an accent ring where the falloff starts (full strength inside it; none at falloff 0). They are drawn over the terrain, not hidden by hills.</p>
 <p><strong>Play</strong> does not use the in-memory map: as before, the terrain streams around the player by
 <code>Terrain.radius</code> from the saved map files. Starting Play with unsaved map edits logs a Console warning saying so.</p>
 <p id="input"><strong>Input.</strong> The editor camera keeps its controls (<a href="controls.html#editor-controls">Editor controls</a>:
@@ -73,8 +93,8 @@ right drag flies, Alt + left drag orbits, middle drag pans, the wheel zooms).</p
 <h2 id="map-tab">The Map tab</h2>
 <p>The tab sits beside <strong>Entities</strong> in the left dock (also added there on the first run with an older
 <code>imgui.ini</code>; a layout saved while the editor had a separate Zone tab gives Map that tab's place, or drops it). On top: the open map (<code>maps/&lt;folder&gt; (id N)</code>, with <code>* unsaved</code> while there are
-unsaved edits), <strong>Save Map</strong>, <strong>Undo</strong>, <strong>Redo</strong>, the selected sub-tab's tool buttons (the active one
-highlighted) and <strong>Problems</strong>, always shown (its count in red while there are any). Below them, the sub-tabs:</p>
+unsaved edits), <strong>Save Map</strong>, <strong>Undo</strong>, <strong>Redo</strong>, the Objects sub-tab's tool buttons while it is selected (the active one
+highlighted; the sculpt tools sit in the Terrain sub-tab, with their brush) and <strong>Problems</strong>, always shown (its count in red while there are any). Below them, the sub-tabs:</p>
 <table>
 <thead>
 <tr>
@@ -86,7 +106,7 @@ highlighted) and <strong>Problems</strong>, always shown (its count in red while
 <tbody>
 <tr><td><strong>Setup</strong></td><td>Map (with <a href="#new-map">New Map...</a>), Tiles</td><td>none (the Map section's <strong>Place on terrain</strong> is here)</td></tr>
 <tr><td><strong>Zones</strong></td><td>Zones, with the tile grid below the zone list</td><td>the grid's <strong>Paint zone</strong> mode: a drag on the grid paints the selected zone</td></tr>
-<tr><td><strong>Terrain</strong></td><td>Terrain</td><td><strong>Raise</strong> (the top bar has Raise, Lower, Flatten): a left drag in the Scene view sculpts</td></tr>
+<tr><td><strong>Terrain</strong></td><td>Terrain</td><td><strong>Raise</strong> (the sub-tab has Raise, Lower, Flatten): a left drag in the Scene view sculpts</td></tr>
 <tr><td><strong>Objects</strong></td><td>Areas, Spawns, Objects</td><td>none (the top bar has Area Rect, Area Polygon, Place Spawn, Path Points, Place Object, Scatter)</td></tr>
 <tr><td><strong>Bake</strong></td><td>Bake</td><td>none</td></tr>
 </tbody>
@@ -128,9 +148,17 @@ scene is written by File &gt; Save / Ctrl+S</td>
 </tr>
 <tr id="terrain">
 <td><strong>Terrain</strong></td>
-<td><strong>Raise</strong>, <strong>Lower</strong>, <strong>Flatten</strong> brushes (left drag in the Scene view; radius, strength, falloff;
-Shift+click picks Flatten's height), the <strong>height range</strong> (<strong>Apply range</strong> re-quantizes every tile so world
-heights stay put; a confirm shows how many samples clip; <strong>Revert</strong>), <strong>Heightmap</strong>: <strong>Import PNG...</strong> /
+<td>The <strong>Raise</strong>, <strong>Lower</strong>, <strong>Flatten</strong> tool buttons with their brush settings under them (left drag in
+the Scene view; radius, strength, falloff; Shift+click picks Flatten's height). <span id="sculpt-keys">Keys, while a sculpt tool is
+active or this sub-tab is in front, with the mouse over the Scene view or the Scene view focused, never while typing in a field:
+<strong>1</strong> / <strong>2</strong> / <strong>3</strong> Raise / Lower / Flatten, <strong>[</strong> / <strong>]</strong> radius smaller / bigger,
+<strong>-</strong> / <strong>=</strong> strength lower / higher (each press x 1.25, held repeats; logged as <code>Map: Lower tool (key 2)</code>,
+<code>Map: brush radius 20 m</code>, <code>Map: brush strength 5.0</code>).</span> When no stroke can change the heights (an empty height
+range) the tools say why in red (<code>Can't sculpt: ...</code>) and a click in the Scene view logs it as a warning: sculpting is never
+silently off. The <span id="height-range"><strong>height range</strong></span> (the New Map wizard's to start with): an edited Min or Max applies
+as the field is left (Enter, Tab or a click elsewhere), re-quantizing every tile so world heights stay put, one undo step; if samples
+would clip, <strong>Clip heights?</strong> says how many and asks first (<strong>Cancel</strong> puts the fields back); Max not above Min shows
+<code>Max must be above Min</code> and applies nothing. <strong>Heightmap</strong>: <strong>Import PNG...</strong> /
 <strong>Export PNG...</strong> of the last clicked tile (257 x 257 16-bit grayscale; anything else is refused with the reason; an
 import's edges are copied onto its neighbours); <strong>Generate</strong>, <strong>Height colors</strong> and <strong>Terrain texture</strong>, see
 <a href="#generated-terrain">Generated terrain</a></td>

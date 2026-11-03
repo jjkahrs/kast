@@ -1,8 +1,8 @@
 // The Map tab (docs/editor/map-builder.html): the open map (MapSession) in one window. A top bar (the map, Save Map,
-// Undo/Redo, the unsaved marker, the active sub-tab's Scene view tool buttons) and Problems (the last validation) always
+// Undo/Redo, the unsaved marker, the Objects sub-tab's Scene view tool buttons) and Problems (the last validation) always
 // show; below them the sub-tabs: Setup (pick the map or make one with the New Map wizard, its manifest, and Tiles:
 // map_tiles.h, the tile grid, adding and removing tiles and opening tile scenes), Zones (map_zones.cpp: the map's zones,
-// painted on the tile grid, their zone scenes), Terrain (map_terrain.cpp: brushes, height range, heightmap PNGs,
+// painted on the tile grid, their zone scenes), Terrain (map_terrain.cpp: the sculpt tools and brush, height range, heightmap PNGs,
 // Generate, Height colors, the terrain material), Objects (Areas, Spawns + patrol paths, Objects + the Scatter brush)
 // and Bake (map_objects.cpp). The tool follows the sub-tab: Zones paints zones on the grid, Terrain sculpts (Raise).
 // Read-only during Play and in prefab edit mode. Unsaved-changes prompt before the map
@@ -67,6 +67,9 @@ public:
     // next frame. A Create that is disabled logs why instead.
     void pressWizardCreate() { pressCreate_ = true; }
     void pressWizardReplace() { pressReplace_ = true; }
+    // --map-range "min,max": the Terrain sub-tab's height range typed and left, as a user does (applied, or the clip
+    // prompt). False if spec is malformed.
+    bool editRange(MapSession& session, std::string_view spec);
     // "Raise", "SetSpawn", ...: the Tool of that name; nullopt if none.
     static std::optional<Tool> toolNamed(std::string_view name);
     // --map-select: selects the area or spawn with this id, the map object "object:tx,tz,index" or the zone "zone:id".
@@ -100,7 +103,7 @@ public:
     // it too.
     bool sceneInput(MapSession& session, const SceneViewport::Input& input);
     // SceneViewport::overlay, after MapRender's: areas, spawns, paths and objects, and the active tool's overlay (the
-    // brush ring, the area being drawn), on the tiles the Scene view meshes around centre (the camera's pivot).
+    // brush's radius circle and falloff ring, the area being drawn), on the tiles the Scene view meshes around centre (the camera's pivot).
     void drawSceneOverlay(const MapSession& session, ImDrawList* draw, const float* viewProj, float x, float y, float width,
                           float height, std::array<float, 2> centre) const;
 
@@ -171,7 +174,14 @@ private:
     void drawTerrainColors(mapedit::MapDoc& z);
     void drawHeightRangePrompt(MapSession& session);
     void setHeightRange(mapedit::MapDoc& z, float min, float max);
-    // A sculpt brush's Scene view mouse: Shift+click (Flatten) picks the height; a left drag is one undo step.
+    // A Min/Max field left after an edit: the range applies now unless min >= max (the tab says why) or heights would
+    // be clipped (the clip prompt asks first).
+    void editRange(mapedit::MapDoc& z, float min, float max);
+    // With a sculpt tool active or the Terrain sub-tab in front, and the Scene view hovered or focused (sceneActive),
+    // not typing: 1 / 2 / 3 Raise / Lower / Flatten, [ / ] radius, - / = strength (each logged).
+    void sculptHotkeys(bool sceneActive);
+    // A sculpt brush's Scene view mouse: Shift+click (Flatten) picks the height; a left drag is one undo step. A click
+    // while no brush can apply (an empty height range) logs why.
     void sculptInput(mapedit::MapDoc& z, const kast::map::MapInfo& info, bool click);
     // Ends a sculpt or scatter stroke or a handle drag (its undo step) once the mouse is up, the tool changed or the
     // map went away.
@@ -207,6 +217,7 @@ private:
     std::set<std::string> sectionsShown_; // the sections showSections_ has been applied to
     Tab tab_ = Tab::Setup;
     Tool tool_ = Tool::None;
+    bool toolLost_ = false; // no map, or read-only: no tool until that ends
     Pending pending_;
     bool askUnsaved_ = false;
     bool openNewMap_ = false;
@@ -226,10 +237,10 @@ private:
     bool stroking_ = false;
     std::optional<mapedit::Vec3> hover_; // the ground under the mouse while a tool is active
     mapedit::TileKey tile_;              // heightmap import/export: the last tile clicked
-    float rangeMin_ = 0, rangeMax_ = 0;
+    float rangeMin_ = 0, rangeMax_ = 0; // the Min/Max fields
     size_t rangeClips_ = 0;
     bool askRange_ = false;
-    bool rangeEdited_ = false; // Min/Max typed but not applied: keep them
+    bool rangeEdited_ = false; // Min/Max typed but not applied (min >= max, or the clip prompt): keep them
     mapedit::NoiseParams noise_;
     mapedit::Gradient gradient_;    // the stops shown; the manifest's while no edit is in progress
     bool colorsEditing_ = false; // a stop edit's undo step is open

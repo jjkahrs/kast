@@ -87,7 +87,7 @@ constexpr const char* kUsage =
     "[--scene in.scene] [--project dir] [--save-scene out.scene] [--select ID] [--play] [--select-network-entity] [--no-scene-post] [--no-scene-world-ui] [--add-component-popup] "
     "[--new-component-prompt Name] [--new-component Name] [--new-state-machine-prompt Name] [--build dir] "
     "[--open-menu Name] [--open-build-settings] [--open-online-settings] [--open-gui-settings] [--gui-settings-set json] [--game-resolution WxH] [--game-display-scale S] [--gui-preview-scale PERCENT] [--assets-menu path|/] [--assets-create system|fsm|gui|material|shader|shadergraph:folder] [--assets-rename path=name] [--assets-select path] [--assets-edit path] [--material-set field=json] [--material-undo N] [--material-redo N] "
-    "[--focus-panel Window] [--map-click tx,tz]... [--zone-scene-click id]... [--grid-view tx,tz,zoom] [--grid-mode scenes|tiles|zones] [--map-section Map[,Tiles,Problems...]] [--map-wizard name[,tilesX,tilesZ,min,max,flat|generated]] [--map-wizard-create] [--map-wizard-confirm] [--map-tool Raise|Lower|Flatten|SetSpawn|...] [--map-select id|object:tx,tz,index] [--bake] [--mapbake exe] [--open-gui file.rml|file.guiprefab] [--gui-select id] [--gui-preview-size WxH] [--gui-pick X,Y] "
+    "[--focus-panel Window] [--map-click tx,tz]... [--zone-scene-click id]... [--grid-view tx,tz,zoom] [--grid-mode scenes|tiles|zones] [--map-section Map[,Tiles,Problems...]] [--map-wizard name[,tilesX,tilesZ,min,max,flat|generated]] [--map-wizard-create] [--map-wizard-confirm] [--map-range min,max] [--map-tool Raise|Lower|Flatten|SetSpawn|...] [--map-select id|object:tx,tz,index] [--bake] [--mapbake exe] [--open-gui file.rml|file.guiprefab] [--gui-select id] [--gui-preview-size WxH] [--gui-pick X,Y] "
     "[--gui-add Panel|Text|RichText|Button|Toggle|Slider|Dropdown|Spinbox|Progress|ListBox|VirtualList] [--gui-set-attr name=value] [--gui-set-prop name=value] [--gui-rich-wrap tag[=value],start,end] [--gui-undo N] [--gui-redo N] [--gui-save] [--gui-close] [--gui-create-prefab folder|/] [--gui-place-prefab path]... [--gui-revert name|*] [--gui-apply name|*] [--gui-unpack] [--gui-delete] [--gui-move up|down] [--gui-reparent id|/] [--gui-hierarchy-collapse] [--gui-click id] [--gui-hover id] "
     "[--open-graph file.kshadergraph] [--graph-add type[,x,y]] [--graph-link N.pin,M.pin] [--graph-unlink N.pin] [--graph-select N[,M...]] "
     "[--graph-delete N[,M...]] [--graph-set N.setting=json] [--graph-comment title,x,y,w,h] [--graph-paste x,y] [--graph-undo N] [--graph-redo N] "
@@ -162,6 +162,7 @@ struct Options {
     std::vector<std::string> mapSections; // --map-section: select the Map tab sub-tab of these sections, expand them, collapse the others (with --focus-panel Map), for screenshots
     std::string mapWizard; // --map-wizard: open the New Map wizard filled in with "name[,tilesX,tilesZ,min,max,flat|generated]"
     bool mapWizardCreate = false, mapWizardConfirm = false; // --map-wizard-create / -confirm: press Create, then Replace
+    std::string mapRange; // --map-range: the Terrain sub-tab's height range typed as "min,max" (applied or asked)
     std::optional<MapPanel::Tool> mapTool; // --map-tool: this Map tab tool is active (tests, with --sim-mouse)
     std::string mapSelect; // --map-select: select this map area or spawn id, or "object:tx,tz,index"
     bool bake = false;      // --bake: Bake Navmesh on the map (--frames counts once it ends; exit 1 if it fails)
@@ -382,7 +383,7 @@ void pushSimKey(const SimKey& sim, int frame, SDL_WindowID window)
     }
 }
 
-// "frame,key" with a positive frame and an SDL key name ("B", "Escape"), "ctrl+" before it for a Ctrl shortcut; logs
+// "frame,key" with a positive frame and an SDL key name ("B", "Escape"; LeftBracket / RightBracket for [ / ]), "ctrl+" before it for a Ctrl shortcut; logs
 // why not.
 bool parseSimKey(std::string_view text, std::vector<SimKey>& out)
 {
@@ -393,6 +394,8 @@ bool parseSimKey(std::string_view text, std::vector<SimKey>& out)
         sim.ctrl = name.starts_with("ctrl+");
         if (sim.ctrl)
             name.remove_prefix(5);
+        if (name == "LeftBracket" || name == "RightBracket") // CMake lists can't carry an unmatched [ or ]
+            name = name == "LeftBracket" ? "[" : "]";
         sim.scancode = SDL_GetScancodeFromName(std::string(name).c_str());
     }
     if (sim.scancode == SDL_SCANCODE_UNKNOWN) {
@@ -725,9 +728,11 @@ std::optional<Options> parseArgs(int argc, char** argv)
                 kast::log::error(std::format("Unknown {} '{}'", arg, argv[i]));
                 return std::nullopt;
             }
-        } else if ((arg == "--map-select" || arg == "--zone-scene-click" || arg == "--map-wizard") && hasValue) { // one branch: MSVC's nesting limit
+        } else if ((arg == "--map-select" || arg == "--zone-scene-click" || arg == "--map-wizard" || arg == "--map-range") && hasValue) { // one branch: MSVC's nesting limit
             if (arg == "--map-select")
                 options.mapSelect = argv[++i];
+            else if (arg == "--map-range")
+                options.mapRange = argv[++i];
             else if (arg == "--map-wizard")
                 options.mapWizard = argv[++i];
             else
@@ -936,7 +941,7 @@ std::optional<Options> parseArgs(int argc, char** argv)
                              options.newComponentPrompt || !options.newComponent.empty() || !options.openMenu.empty() ||
                              options.openBuildSettings || options.openOnlineSettings || options.openGuiSettings ||
                              options.guiSettingsSet || options.gameResolution || options.gameDisplayScale ||
-                             options.guiPreviewScale || !options.focusPanel.empty() || !options.scrollPostSection.empty() || !options.mapSections.empty() || options.mapTool || !options.mapSelect.empty() || options.bake || !options.mapbake.empty() || options.newStateMachinePrompt ||
+                             options.guiPreviewScale || !options.focusPanel.empty() || !options.scrollPostSection.empty() || !options.mapSections.empty() || options.mapTool || !options.mapRange.empty() || !options.mapSelect.empty() || options.bake || !options.mapbake.empty() || options.newStateMachinePrompt ||
                              options.assetsMenu || options.assetsCreate || options.assetsRename || !options.assetsSelect.empty() ||
                              !options.assetsEdit.empty() ||
                              !options.materialSets.empty() || options.materialUndo || options.materialRedo ||
@@ -2029,6 +2034,9 @@ int main(int argc, char** argv)
             !mapPanel.openWizard(doc, session, options->mapWizard))
             kast::log::error(std::format("Invalid --map-wizard '{}', expected name[,tilesX,tilesZ,min,max,flat|generated]",
                                          options->mapWizard));
+        if (!options->mapRange.empty() && frames.frame() == kAddComponentPopupFrame + 2 && // after --focus-panel
+            !mapPanel.editRange(session, options->mapRange))
+            kast::log::error(std::format("Invalid --map-range '{}', expected min,max", options->mapRange));
         if (options->mapWizardCreate && frames.frame() == kAddComponentPopupFrame + 4)
             mapPanel.pressWizardCreate();
         if (options->mapWizardConfirm && frames.frame() == kAddComponentPopupFrame + 6)

@@ -237,6 +237,16 @@ add_test(NAME editor_map_wizard_replace_confirm
           "-DEXPECT_OUTPUT=asking before replacing the link.*Map: New Map maps/highlands: 2 x 2 tiles, heights 0 .. 100 m, flat terrain, one zone.*Saved scene '[^']*scenes/tilegrid.scene'.*Map: saved maps/highlands"
           "-DFILE_MATCHES=@PROJECT@/scenes/tilegrid.scene=\"Terrain\":{\"map\":0,;@PROJECT@/maps/highlands/zones.json=\"tiles\":\\[\\[0,0,1,1\\]\\]"
           "-DKEEP_FILES=@PROJECT@/maps/tilegrid" "-DFORBID_OUTPUT=\\[error\\]" -P "${map_copy}")
+# Sculpting right after Create, with no height range step: the Terrain sub-tab in front, the wizard's flat 2 x 2 map
+# (0 .. 100 m) takes a Raise stroke near its centre; Ctrl+S writes the raised tiles' heights (a flat map has no files).
+add_test(NAME editor_map_wizard_sculpt
+  COMMAND "${CMAKE_COMMAND}" "-DSOURCE=${KAST_TEST_PROJECT}" "-DEDITOR=$<TARGET_FILE:kast_editor>"
+          "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/map_wizard_sculpt.png"
+          "-DEXTRA_ARGS=--scene @PROJECT@/scenes/empty.scene --size 1600x1000 --map-section Terrain --map-wizard Highlands --map-wizard-create --sim-mouse 40,left,40,0,0 --sim-key 60,ctrl+S"
+          -DFOCUS_PANEL=Map
+          "-DEXPECT_OUTPUT=Map: New Map maps/highlands: 2 x 2 tiles, heights 0 .. 100 m, flat terrain.*Map: Raise stroke.*Map: saved maps/highlands"
+          "-DMUST_EXIST=@PROJECT@/maps/highlands/heights/0_0.r16;@PROJECT@/maps/highlands/heights/1_0.r16"
+          "-DFORBID_OUTPUT=\\[error\\]|can't sculpt" -P "${map_copy}")
 # Sub-tabs: --map-section Zones selects the Zones sub-tab, whose tile grid paints zones (the Paint zone mode).
 add_test(NAME editor_map_subtab_zones
   COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/map_subtab_zones.png"
@@ -281,7 +291,7 @@ set_tests_properties(editor_map_tab editor_map_tab_old_layout editor_map_tab_pre
                      editor_map_zone_rename_save editor_map_zone_orphan editor_map_zone_root_outside editor_map_zone_play_locked
                      editor_map_play_zones editor_map_undo_order_scene_focus editor_map_undo_order_map_focus
                      editor_map_unsaved_prompt editor_map_wizard_create editor_map_wizard_folder_exists
-                     editor_map_wizard_replace_ask editor_map_wizard_replace_confirm editor_map_subtab_zones
+                     editor_map_wizard_replace_ask editor_map_wizard_replace_confirm editor_map_wizard_sculpt editor_map_subtab_zones
                      editor_map_viewport_zone_paint editor_map_viewport_zone_refused editor_map_zone_overlay_setup
                      PROPERTIES LABELS smoke)
 

@@ -41,7 +41,8 @@ constexpr std::pair<const char*, MapPanel::Tab> kSectionTabs[] = {
     {"Spawns", MapPanel::Tab::Objects}, {"Objects", MapPanel::Tab::Objects}};
 constexpr const char* kRemoveTilePopup = "Remove tile?";
 constexpr ImVec4 kDirtyColor = toVec4(kHighlight);
-constexpr ImU32 kBrushColor = kHighlight; // the brush ring
+constexpr ImU32 kBrushColor = kHighlight; // the brush's radius circle
+constexpr ImU32 kBrushFalloffColor = kAccent; // its falloff ring: full strength inside
 constexpr ImVec4 kToolIdle = toVec4(kField); // an idle tool button
 constexpr ImVec4 kToolActive = toVec4(kHighlight); // the active tool
 constexpr float kPickDistance = 10000.0f; // metres: past the far corner of any map in view
@@ -123,8 +124,12 @@ bool MapPanel::header(const char* label, const char* section, bool defaultOpen)
 void MapPanel::draw(Document& doc, MapSession& session, FileActions& files)
 {
     const bool locked = doc.play != PlayState::Stopped || doc.prefabEdit.has_value();
-    if (locked || !session.doc())
+    if (locked || !session.doc()) {
         tool_ = Tool::None;
+        toolLost_ = true;
+    } else if (std::exchange(toolLost_, false)) { // a map again (Create, Play stopped): the tool follows the sub-tab
+        tool_ = tab_ == Tab::Terrain ? Tool::Raise : Tool::None;
+    }
     if (tool_ != Tool::None && !ImGui::GetTopMostPopupModal() && !ImGui::GetIO().WantTextInput &&
         ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
         if (!polygon_.empty() || rect_) { // the area being drawn first
@@ -303,6 +308,7 @@ bool MapPanel::sceneInput(MapSession& session, const SceneViewport::Input& input
     const bool click = input.hovered && !input.cameraDrag && !io.KeyAlt && ImGui::IsMouseClicked(ImGuiMouseButton_Left);
     const bool dragging = drag_.kind != Drag::Kind::None;
     const bool zones = zonePainting();
+    sculptHotkeys(input.hovered || ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows));
     if (!z || (tool_ == Tool::None && !zones && !click && !dragging))
         return false;
     std::string err;
@@ -353,8 +359,11 @@ void MapPanel::drawSceneOverlay(const MapSession& session, ImDrawList* draw, con
     if (zoneOverlay_)
         drawZoneOverlay(g, *z, *info);
     drawObjectOverlays(g);
-    if (hover_ && (tool_ == Tool::Raise || tool_ == Tool::Lower || tool_ == Tool::Flatten))
+    if (hover_ && (tool_ == Tool::Raise || tool_ == Tool::Lower || tool_ == Tool::Flatten)) {
         g.circle((*hover_)[0], (*hover_)[2], brush_.radius, kBrushColor);
+        if (const float inner = brush_.radius * (1.0f - brush_.falloff); inner > 0.0f && brush_.falloff > 0.0f)
+            g.circle((*hover_)[0], (*hover_)[2], inner, kBrushFalloffColor);
+    }
     draw->PopClipRect();
 }
 
@@ -384,12 +393,8 @@ void MapPanel::drawTopBar(Document& doc, MapSession& session)
         z->redo();
     ImGui::EndDisabled();
     // The sub-tab's Scene view tools, wrapped to the tab's width.
-    if (tab_ == Tab::Terrain) {
-        toolButton("Raise", Tool::Raise);
-        toolButton("Lower", Tool::Lower);
-        toolButton("Flatten", Tool::Flatten);
-        ImGui::NewLine();
-    } else if (tab_ == Tab::Objects) {
+    // (The Terrain sub-tab's sculpt tools sit with their brush settings, in the tab.)
+    if (tab_ == Tab::Objects) {
         toolButton("Area Rect", Tool::AreaRect);
         toolButton("Area Polygon", Tool::AreaPolygon);
         toolButton("Place Spawn", Tool::PlaceSpawn);
@@ -680,7 +685,7 @@ void MapPanel::request(Document& doc, MapSession& session, Pending pending)
 
 void MapPanel::run(Document& doc, MapSession& session, const Pending& pending)
 {
-    tool_ = Tool::None;
+    tool_ = tab_ == Tab::Terrain ? Tool::Raise : Tool::None; // as the sub-tab sets it: sculpt the new map straight away
     switch (pending.kind) {
     case Pending::Kind::PickMap:
         setTerrainMap(doc, pending.map); // the session loads it next frame

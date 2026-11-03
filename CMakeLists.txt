@@ -1010,6 +1010,29 @@ kast_mapedit_tool_test(none "--sim-mouse 40,left,0,0,0" "-DFORBID_OUTPUT=Map: (.
 # The tool follows the Map tab's sub-tab (no --map-tool): the Terrain sub-tab is Raise, so the click is a stroke.
 kast_mapedit_tool_test(terrain_tab "--map-section Terrain --sim-mouse 40,left,40,0,0"
                     "-DEXPECT_OUTPUT=Map: Terrain tab: Raise tool.*Map: Raise stroke" "-DFORBID_OUTPUT=\\\\[error\\\\]")
+# Terrain tools UX (docs/editor/map-builder.html#terrain): the brush cursor (radius circle + falloff ring) on the terrain
+# under the mouse while a sculpt tool is active; the same shot with the mouse off the Scene view has none.
+kast_mapedit_tool_test(brush_cursor "--map-section Terrain --sim-mouse 40,none,0,0,0" "-DFORBID_OUTPUT=stroke|\\\\[error\\\\]")
+kast_mapedit_tool_test(brush_no_cursor "--map-section Terrain" "-DFORBID_OUTPUT=stroke|\\\\[error\\\\]")
+add_test(NAME editor_mapedit_brush_cursor_differs
+  COMMAND "${CMAKE_COMMAND}" "-DA=${CMAKE_CURRENT_BINARY_DIR}/map_tool_brush_cursor.png"
+          "-DB=${CMAKE_CURRENT_BINARY_DIR}/map_tool_brush_no_cursor.png" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/differs_test.cmake")
+set_tests_properties(editor_mapedit_tool_brush_cursor editor_mapedit_tool_brush_no_cursor PROPERTIES FIXTURES_SETUP map_brush_cursor_shots)
+set_tests_properties(editor_mapedit_brush_cursor_differs PROPERTIES FIXTURES_REQUIRED map_brush_cursor_shots)
+# Sculpt hotkeys with the Scene view hovered (the Map tab focused) or focused: 1 / 2 / 3 tool, [ / ] radius, - / = strength.
+kast_mapedit_tool_test(hotkeys "--map-section Terrain --sim-mouse 40,none,0,0,0 --sim-key 50,2 --sim-key 56,RightBracket --sim-key 62,="
+                    "-DEXPECT_OUTPUT=Map: Lower tool [(]key 2[)].*Map: brush radius 20 m.*Map: brush strength 5[.]0"
+                    "-DFORBID_OUTPUT=stroke|\\\\[error\\\\]")
+kast_mapedit_tool_test(hotkeys_scene_focus "--map-section Terrain --sim-key 30,3 --sim-key 36,LeftBracket --sim-key 42,-"
+                    -DFOCUS_PANEL=Scene "-DEXPECT_OUTPUT=Map: Flatten tool [(]key 3[)].*Map: brush radius 13 m.*Map: brush strength 3[.]2"
+                    "-DFORBID_OUTPUT=stroke|\\\\[error\\\\]")
+# The height range applies as typed (no Apply button); one that would clip the hills' heights asks first.
+kast_mapedit_tool_test(range_apply "--map-section Terrain --map-range -10,120"
+                    "-DEXPECT_OUTPUT=Map: height range now -10 [.][.] 120 m" -DEXPECT_COUNT=1
+                    "-DFORBID_OUTPUT=asking|\\\\[error\\\\]")
+kast_mapedit_tool_test(range_clip_ask "--map-section Terrain --map-range 0,10"
+                    "-DEXPECT_OUTPUT=Map: height range 0 [.][.] 10 m would clip [1-9][0-9]* samples: asking first"
+                    "-DFORBID_OUTPUT=height range now|\\\\[error\\\\]")
 # Areas, spawns, paths, objects (map_objects.cpp): each tool's click or drag is one logged edit at the pivot.
 kast_mapedit_tool_test(area_rect "--map-tool AreaRect --sim-mouse 40,left,80,-40,0"
                     "-DEXPECT_OUTPUT=Map: area area added [(][0-9]+ x [0-9]+ m[)]" -DEXPECT_COUNT=1
