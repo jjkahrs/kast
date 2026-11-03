@@ -127,7 +127,7 @@ private:
     };
 
     bool header(const char* label, const char* section, bool defaultOpen = false);
-    // The sub-tab bar and the selected sub-tab's sections.
+    // The sub-tab row (wrapping) and the selected sub-tab's sections.
     void drawTabs(Document& doc, MapSession& session, FileActions& files, bool locked);
     // A sub-tab became the selected one (a click, selectTab): the tool and the grid's mode follow it.
     void followTab(Tab tab);
@@ -200,7 +200,6 @@ private:
     std::optional<std::set<std::string>> showSections_;
     std::set<std::string> sectionsShown_; // the sections showSections_ has been applied to
     Tab tab_ = Tab::Setup;
-    std::optional<Tab> requestTab_; // selectTab: selected on the tab bar's next draw
     Tool tool_ = Tool::None;
     Pending pending_;
     bool askUnsaved_ = false;

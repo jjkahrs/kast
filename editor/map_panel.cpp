@@ -213,7 +213,6 @@ void MapPanel::showSections(const std::vector<std::string>& names)
 
 void MapPanel::selectTab(Tab tab)
 {
-    requestTab_ = tab;
     followTab(tab);
 }
 
@@ -240,42 +239,41 @@ void MapPanel::setTool(Tool tool)
 
 void MapPanel::drawTabs(Document& doc, MapSession& session, FileActions& files, bool locked)
 {
-    // Tight tabs that shrink rather than scroll: all five stay in view in the narrow default dock.
-    const ImVec2 tight(ImGui::GetStyle().FramePadding.x * 0.5f, ImGui::GetStyle().FramePadding.y);
-    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, tight);
-    const bool open = ImGui::BeginTabBar("##mapTabs", ImGuiTabBarFlags_FittingPolicyShrink);
-    ImGui::PopStyleVar();
-    if (!open)
-        return;
-    for (const auto& [name, tab] : kTabs) {
-        ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, tight);
-        const bool shown = ImGui::BeginTabItem(name, nullptr, requestTab_ == tab ? ImGuiTabItemFlags_SetSelected : 0);
-        ImGui::PopStyleVar();
-        if (!shown)
-            continue;
-        if (requestTab_ == tab)
-            requestTab_.reset();
-        else if (!requestTab_) // a click (while a selectTab is pending, the old tab still shows a frame)
-            followTab(tab);
-        switch (tab) {
-        case Tab::Setup:
-            drawMap(doc, session);
-            drawTiles(doc, session, files, locked);
-            break;
-        case Tab::Zones:
-            drawZones(doc, session, files, locked);
-            break;
-        case Tab::Terrain: drawTerrain(session); break;
-        case Tab::Objects:
-            drawAreas(session);
-            drawSpawns(session);
-            drawObjects(session);
-            break;
-        case Tab::Bake: drawBake(session); break;
+    // Tab-styled buttons that wrap to a second row, so every label stays whole in the narrow default dock (an ImGui
+    // tab bar shrinks or scrolls them instead): the selected one grey with accent text, the others card grey.
+    const ImGuiStyle& style = ImGui::GetStyle();
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, style.TabRounding);
+    for (const auto& [name, t] : kTabs) {
+        const bool selected = t == tab_;
+        if (t != kTabs[0].second) {
+            ImGui::SameLine(0.0f, style.ItemInnerSpacing.x);
+            if (ImGui::GetContentRegionAvail().x < ImGui::CalcTextSize(name).x + style.FramePadding.x * 2.0f)
+                ImGui::NewLine();
         }
-        ImGui::EndTabItem();
+        ImGui::PushStyleColor(ImGuiCol_Button, toVec4(selected ? kField : kCard));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, toVec4(selected ? kField : kRowHover));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, toVec4(kField));
+        ImGui::PushStyleColor(ImGuiCol_Text, toVec4(selected ? kAccent : kTextSecondary));
+        if (ImGui::Button(name))
+            followTab(t);
+        ImGui::PopStyleColor(4);
     }
-    ImGui::EndTabBar();
+    ImGui::PopStyleVar();
+    ImGui::Separator();
+    switch (tab_) {
+    case Tab::Setup:
+        drawMap(doc, session);
+        drawTiles(doc, session, files, locked);
+        break;
+    case Tab::Zones: drawZones(doc, session, files, locked); break;
+    case Tab::Terrain: drawTerrain(session); break;
+    case Tab::Objects:
+        drawAreas(session);
+        drawSpawns(session);
+        drawObjects(session);
+        break;
+    case Tab::Bake: drawBake(session); break;
+    }
 }
 
 void MapPanel::guardMapChange(Document& doc, const MapSession& session)
