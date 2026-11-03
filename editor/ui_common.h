@@ -36,6 +36,17 @@ constexpr ImU32 kCard = IM_COL32(0x15, 0x15, 0x18, 0xff);  // cards, popups, ina
 constexpr ImU32 kField = IM_COL32(0x22, 0x22, 0x27, 0xff); // text fields, borders, active tab, headers, selection
 constexpr ImU32 kRowHover = IM_COL32(0x1c, 0x1c, 0x20, 0xff);
 constexpr ImU32 kFieldHighlight = IM_COL32(0x3a, 0x3a, 0x41, 0xff);
+// Zone tints over the terrain in the Scene view (Map tab, Zones), one per zone in order, repeating: translucent and
+// clear of the yellows/orange (those are for controls) and the error red.
+constexpr ImU32 kZoneTints[] = {
+    IM_COL32(0x3a, 0x86, 0xff, 0x70), // blue
+    IM_COL32(0x2e, 0xc4, 0x8a, 0x70), // green
+    IM_COL32(0x9b, 0x5d, 0xe5, 0x70), // purple
+    IM_COL32(0x00, 0xbb, 0xd4, 0x70), // cyan
+    IM_COL32(0xf1, 0x5b, 0xb5, 0x70), // pink
+    IM_COL32(0x5c, 0x6b, 0xc0, 0x70), // indigo
+};
+constexpr ImU32 kZoneHoverLine = kHighlight; // the tile under the mouse while painting zones; the painted zone's label
 
 // An IM_COL32 (ABGR) color as bgfx's RGBA, e.g. for a clear color.
 constexpr uint32_t toRgba(ImU32 color)

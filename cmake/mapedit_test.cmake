@@ -23,6 +23,10 @@
 # MODE file_save: open SCENE (project-relative) and MAP, run ARGS (edits that make the map invalid and the scene dirty),
 #                 then File > Save (--file-save, as Ctrl+S): the map's files stay byte-identical with the problems in
 #                 the Console, and the scene is still written (it must then contain EXPECT_SCENE).
+# MODE unified_save: open SCENE and MAP, run ARGS (scene, map and zone scene edits), then one real Ctrl+S (--sim-key, the
+#                 Scene view focused): the scene must contain EXPECT_SCENE, zones.json (whitespace removed) match
+#                 EXPECT_JSON and the
+#                 map-relative EXPECT_FILES exist (a created zone scene); then the map must reopen and validate.
 string(REPLACE "|" ";" ARGS "${ARGS}") # | in the test command: no ; escaping through add_test
 string(REPLACE "|" ";" EXPECT_FILES "${EXPECT_FILES}")
 string(REPLACE "|" ";" ARGS2 "${ARGS2}")
@@ -152,6 +156,32 @@ if(MODE STREQUAL "roundtrip" OR MODE STREQUAL "blocked" OR MODE STREQUAL "file_s
     endif()
   endforeach()
   message(STATUS "OK: maps/${MAP}: ${files} unchanged")
+elseif(MODE STREQUAL "unified_save")
+  run(--scene "${copy}/${SCENE}" --map "${MAP}" ${ARGS} --sim-key 30,ctrl+S --focus-panel Scene --frames 60 --size 1600x1000
+      --screenshot "${shot}")
+  if(NOT out MATCHES "Map: saved maps/${MAP}" OR out MATCHES "\\[error\\]")
+    message(FATAL_ERROR "Ctrl+S did not save maps/${MAP}:
+${out}")
+  endif()
+  file(READ "${copy}/${SCENE}" scene)
+  if(NOT scene MATCHES "${EXPECT_SCENE}")
+    message(FATAL_ERROR "${SCENE} was not saved with ${EXPECT_SCENE}:
+${scene}")
+  endif()
+  file(READ "${copy}/maps/${MAP}/zones.json" zones)
+  string(REGEX REPLACE "[ \t\r\n]" "" zones "${zones}") # EXPECT_JSON is matched without whitespace
+  foreach(re ${EXPECT_JSON})
+    if(NOT zones MATCHES "${re}")
+      message(FATAL_ERROR "zones.json does not match ${re}:
+${zones}")
+    endif()
+  endforeach()
+  foreach(f ${EXPECT_FILES})
+    if(NOT EXISTS "${copy}/maps/${MAP}/${f}")
+      message(FATAL_ERROR "maps/${MAP}/${f} was not written")
+    endif()
+  endforeach()
+  run(--map "${MAP}" --validate --headless)
 elseif(MODE STREQUAL "new_map" OR MODE STREQUAL "edit")
   run(--new-map "${MAP},2,2" ${ARGS} --save-map --frames 20 --screenshot "${shot}")
   if(ARGS2)

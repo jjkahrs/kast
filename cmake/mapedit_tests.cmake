@@ -93,6 +93,11 @@ kast_mapedit_cli_test(bake_headless "-DPROJECT=${starter}" -DMODE=bake -DMAP=mea
 # writes nothing and its problems go to the Console, the scene still saves.
 kast_mapedit_cli_test(file_save_blocked "-DPROJECT=${KAST_TEST_PROJECT}" -DMODE=file_save -DMAP=hills -DSCENE=terrain.scene
   "-DARGS=--add-spawn|far,Bat,-50,-50|--set-field|2,Terrain.radius,2" "-DEXPECT_SCENE=\"radius\": 2")
+# One Ctrl+S saves it all: the scene (a Sun field), the map (west shrunk to x 0, east painted over x 1) and the zone
+# scene east's button created (unsaved until then); the map then reopens and validates.
+kast_mapedit_cli_test(unified_save "-DPROJECT=${KAST_TEST_PROJECT}" -DMODE=unified_save -DMAP=tilegrid -DSCENE=scenes/tilegrid.scene
+  "-DARGS=--set-field|1,DirectionalLight.intensity,2|--paint-zone|east,1,0,1,2|--zone-scene-click|east"
+  "-DEXPECT_SCENE=\"intensity\": 2" "-DEXPECT_JSON=\"west\".*\\[\\[0,0,0,2\\]\\]" -DEXPECT_FILES=zones/east.scene)
 add_test(NAME editor_mapedit_no_focus
   COMMAND kast_focus_probe "$<TARGET_FILE:kast_editor>" --project "${starter}" --map meadow --frames 120
           --projects-file "${KAST_MAPEDIT_OUT}/no_focus_projects.json"

@@ -8,10 +8,11 @@
 #              [-DWRAPPER=<exe;args>] [-DSETTINGS_FROM=<json>] [-DSETTINGS_MUST_NOT_CONTAIN=<text;...>]
 #              [-DOUTPUT_FILE=<log>] [-DLAYOUT_FROM=<imgui.ini>] [-DLAYOUT_SAME_DOCK=<window;window...>]
 #              [-DLAYOUT_FIRST_TAB=<window>] [-DLAYOUT_MUST_NOT_CONTAIN=<text;...>]
-#              [-DEXPECT_ONCE=<regex;regex...>] -P smoke_test.cmake
+#              [-DEXPECT_ONCE=<regex;regex...>] [-DFILE_MATCHES=<path=regex;...>] -P smoke_test.cmake
 # NEW_PROJECT_* pass --new-project as separate arguments, so the name may contain spaces; FOCUS_PANEL passes
 # --focus-panel the same way (e.g. "State Machines"). MUST_NOT_EXIST fails the test if that path exists after the run
-# (e.g. a folder the New Project modal must not have created); MUST_EXIST if it doesn't. PROJECTS_FROM is copied to
+# (e.g. a folder the New Project modal must not have created); MUST_EXIST (a list) if any doesn't. FILE_MATCHES (a list
+# of path=regex) fails it unless each file's text, whitespace removed, matches its regex. PROJECTS_FROM is copied to
 # the list before the run; LIST_MUST_CONTAIN is looked for in it after. EXPECT_OUTPUT must match the editor's log
 # (exactly EXPECT_COUNT times if given; for that count the log's ";" read as ","); FORBID_OUTPUT must not match it;
 # EXPECT_ONCE (a list) must each match it exactly once; OUTPUT_FILE gets it as it is written (e.g. for a later secrets check). FRAMES is how many frames run
@@ -94,9 +95,22 @@ endforeach()
 if(DEFINED MUST_NOT_EXIST AND EXISTS "${MUST_NOT_EXIST}")
   message(FATAL_ERROR "Must not exist after the run: ${MUST_NOT_EXIST}")
 endif()
-if(DEFINED MUST_EXIST AND NOT EXISTS "${MUST_EXIST}")
-  message(FATAL_ERROR "Must exist after the run: ${MUST_EXIST}")
-endif()
+foreach(path IN LISTS MUST_EXIST)
+  if(NOT EXISTS "${path}")
+    message(FATAL_ERROR "Must exist after the run: ${path}")
+  endif()
+endforeach()
+foreach(check IN LISTS FILE_MATCHES)
+  string(FIND "${check}" "=" eq)
+  string(SUBSTRING "${check}" 0 ${eq} path)
+  math(EXPR eq "${eq} + 1")
+  string(SUBSTRING "${check}" ${eq} -1 regex)
+  file(READ "${path}" text)
+  string(REGEX REPLACE "[ \t\r\n]" "" text "${text}")
+  if(NOT text MATCHES "${regex}")
+    message(FATAL_ERROR "${path} does not match '${regex}':\n${text}")
+  endif()
+endforeach()
 if(DEFINED LIST_MUST_CONTAIN)
   file(READ "${work_dir}/projects.json" list)
   string(FIND "${list}" "${LIST_MUST_CONTAIN}" found)

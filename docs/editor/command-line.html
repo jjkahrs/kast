@@ -128,7 +128,11 @@
 </tr>
 <tr>
 <td><code>--map-section &lt;Name[,Name...]&gt;</code></td>
-<td>Expand these sections of the Map tab (<code>Map</code>, <code>Tiles</code>, <code>Zones</code>, <code>Terrain</code>, <code>Areas</code>, <code>Spawns</code>, <code>Objects</code>, <code>Bake</code>, <code>Problems</code>; e.g. <code>Map,Problems</code>) and collapse the others after the first 10 frames, for screenshots; pair it with <code>--focus-panel Map</code> to bring the tab to the front.</td>
+<td>After the first 10 frames, select the <a href="map-builder.html#map-tab">Map tab's sub-tab</a> of the last section named (<code>Map</code> and <code>Tiles</code>: Setup; <code>Zones</code>; <code>Terrain</code>; <code>Areas</code>, <code>Spawns</code> and <code>Objects</code>: Objects; <code>Bake</code>; a sub-tab's own name, <code>Setup</code>, works too), as a click on it does (its tool follows), and expand these sections (<code>Problems</code> too) and collapse the others, for screenshots; e.g. <code>Map,Problems</code>. Pair it with <code>--focus-panel Map</code> to bring the tab to the front.</td>
+</tr>
+<tr id="map-wizard">
+<td><code>--map-wizard name[,tilesX,tilesZ,min,max,flat|generated]</code></td>
+<td>After 12 frames, open the <a href="map-builder.html#new-map">New Map wizard</a> (as <strong>New Map...</strong> does) with these fields filled in (only the name: 2 x 2 tiles, 0 .. 100 m, flat). A name with spaces cannot be passed. <code>--map-wizard-create</code> presses <strong>Create</strong> two frames later (a disabled Create logs <code>Map: New Map: Create is disabled: &lt;reason&gt;</code> instead); <code>--map-wizard-confirm</code> presses <strong>Replace</strong> in the replace-link question two frames after that. Pair with <code>--focus-panel Map</code>.</td>
 </tr>
 <tr id="map-click">
 <td><code>--map-click tx,tz</code> (repeatable)</td>
@@ -155,7 +159,11 @@ overlay). <code>--map-click</code> always clicks in Tile scenes mode.</td>
 </tr>
 <tr>
 <td><code>--map-tool &lt;Tool&gt;</code></td>
-<td>Make that Map tab tool active after the first 10 frames, as its button does: <code>Raise</code>, <code>Lower</code>, <code>Flatten</code>, <code>SetSpawn</code> (Place on terrain), <code>AreaRect</code>, <code>AreaPolygon</code>, <code>PlaceSpawn</code>, <code>PathPoints</code>, <code>PlaceObject</code> or <code>Scatter</code>. Pair it with <code>--sim-mouse</code> (without <code>--play</code> it acts on the Scene view) for tests and screenshots of the tools: a click or drag uses the tool, a hover shows the brush ring.</td>
+<td>Make that Map tab tool active after the first 10 frames, as its button does (its sub-tab is selected): <code>Raise</code>, <code>Lower</code>, <code>Flatten</code>, <code>SetSpawn</code> (Place on terrain), <code>AreaRect</code>, <code>AreaPolygon</code>, <code>PlaceSpawn</code>, <code>PathPoints</code>, <code>PlaceObject</code> or <code>Scatter</code>. Pair it with <code>--sim-mouse</code> (without <code>--play</code> it acts on the Scene view) for tests and screenshots of the tools: a click or drag uses the tool, a hover shows the brush cursor (radius circle and falloff ring).</td>
+</tr>
+<tr id="map-range">
+<td><code>--map-range min,max</code></td>
+<td>After 12 frames, type this height range into the <a href="map-builder.html#height-range">Terrain sub-tab's Min / Max</a> and leave the fields, as a user does: it applies at once (<code>Map: height range now ...</code>), or, if it would clip heights, the clip question opens (<code>Map: height range ... would clip N samples: asking first</code>). Max not above Min changes nothing. Pair with <code>--focus-panel Map</code>.</td>
 </tr>
 <tr>
 <td><code>--map-select &lt;id&gt;|object:tx,tz,i|zone:id</code></td>
@@ -201,7 +209,11 @@ volume of the scene is voxelized into <code>&lt;scene-name&gt;_voxelgi/&lt;entit
 </tr>
 <tr>
 <td><code>--file-save</code></td>
-<td>File &gt; Save (as Ctrl+S: the scene, then a map with unsaved edits) after the first 10 frames, for tests.</td>
+<td>File &gt; Save (as Ctrl+S: every open scene with unsaved changes, zone and tile scenes included, then a map with unsaved edits) after the first 10 frames, for tests.</td>
+</tr>
+<tr>
+<td><code>--open-scene &lt;file&gt;</code></td>
+<td>File &gt; Open of <code>file</code> after the first 10 frames, for tests: with unsaved scene or map edits the unsaved-changes prompt opens first (logged as <code>Unsaved changes: &lt;scene&gt;[ and maps/&lt;folder&gt;]</code>).</td>
 </tr>
 <tr>
 <td><code>--no-scene-post</code></td>
@@ -474,7 +486,7 @@ unsaved-changes prompt if that scene has unsaved changes), for screenshots.</td>
 </tr>
 <tr>
 <td><code>--sim-key &lt;frame,[ctrl+]key&gt;</code></td>
-<td>With <code>--play</code>, <code>--open-graph</code>, <code>--open-gui</code> or <code>--focus-panel Scene</code>, repeatable: on frame <code>frame</code> press <code>key</code> (an SDL key name: <code>B</code>, <code>Escape</code>, <code>Tab</code>, <code>Delete</code>, <code>Keypad 5</code>) on the Game panel (with <code>--open-graph</code>, <code>--open-gui</code> or <code>--focus-panel Scene</code>: the focused panel, e.g. the canvas, the GUI Hierarchy inset or the Scene view); <code>ctrl+</code> holds Ctrl with it (<code>ctrl+C</code>, <code>ctrl+V</code>; it types nothing), with the character it types (a letter or digit, lower case) for a focused game GUI text field, and release it two frames later. Synthetic SDL events, like <code>--sim-mouse</code>. Example: <code>--sim-key 600,B</code>.</td>
+<td>With <code>--play</code>, <code>--open-graph</code>, <code>--open-gui</code> or <code>--focus-panel Scene</code> / <code>Map</code>, repeatable: on frame <code>frame</code> press <code>key</code> (an SDL key name: <code>B</code>, <code>Escape</code>, <code>Tab</code>, <code>Delete</code>, <code>Keypad 5</code>, <code>-</code>, <code>=</code>; <code>LeftBracket</code> / <code>RightBracket</code> for <code>[</code> / <code>]</code>, which a CMake list cannot carry) on the Game panel (with <code>--open-graph</code>, <code>--open-gui</code> or <code>--focus-panel Scene</code> / <code>Map</code>: the focused panel, e.g. the canvas, the GUI Hierarchy inset, the Scene view or the Map tab); <code>ctrl+</code> holds Ctrl with it (<code>ctrl+C</code>, <code>ctrl+V</code>; it types nothing), with the character it types (a letter or digit, lower case) for a focused game GUI text field, and release it two frames later. Synthetic SDL events, like <code>--sim-mouse</code>. Example: <code>--sim-key 600,B</code>.</td>
 </tr>
 <tr>
 <td><code>--sim-on-log &lt;text&gt;</code></td>
@@ -496,8 +508,8 @@ unsaved-changes prompt if that scene has unsaved changes), for screenshots.</td>
 </table>
 <p>Without <code>--project</code>, <code>--scene</code>, <code>--save-scene</code> or <code>--build</code>, <code>kast_editor</code> runs the Project Manager instead of the
 editor. Editor-only flags (<code>--select</code>, <code>--play</code>, <code>--select-network-entity</code>, <code>--add-component-popup</code>, <code>--new-component[-prompt]</code>,
-<code>--new-state-machine-prompt</code>, <code>--open-menu</code>, <code>--open-build-settings</code>, <code>--open-online-settings</code>, <code>--focus-panel</code>, <code>--map-click</code>, <code>--zone-scene-click</code>, <code>--grid-view</code>, <code>--grid-mode</code>, <code>--map-section</code>, <code>--map-tool</code>, <code>--assets-*</code>, <code>--open-gui</code>,
-<code>--gui-*</code>, <code>--open-graph</code>, <code>--graph-*</code>, <code>--map-select</code>, <code>--bake</code>, <code>--mapbake</code>, <code>--file-save</code>, <code>--bake-probes</code>, the <a href="#map">map edits</a>) then are invalid arguments, as are Project Manager flags (<code>--launcher</code>, <code>--new-project</code>,
+<code>--new-state-machine-prompt</code>, <code>--open-menu</code>, <code>--open-build-settings</code>, <code>--open-online-settings</code>, <code>--focus-panel</code>, <code>--map-click</code>, <code>--zone-scene-click</code>, <code>--grid-view</code>, <code>--grid-mode</code>, <code>--map-section</code>, <code>--map-tool</code>, <code>--map-range</code>, <code>--assets-*</code>, <code>--open-gui</code>,
+<code>--gui-*</code>, <code>--open-graph</code>, <code>--graph-*</code>, <code>--map-select</code>, <code>--bake</code>, <code>--mapbake</code>, <code>--file-save</code>, <code>--open-scene</code>, <code>--bake-probes</code>, the <a href="#map">map edits</a>) then are invalid arguments, as are Project Manager flags (<code>--launcher</code>, <code>--new-project</code>,
 <code>--launcher-open</code>, <code>--</code>) together with the editor's.</p>
 <h2 id="shader-graph-flags">Shader Graph</h2>
 <p>The <a href="shader-graph.html#shader-graph">Shader Graph</a> panels' edits, for tests and screenshots. They need a project
@@ -807,7 +819,7 @@ implicit zone explicit, named by the map's folder)</td></tr>
 </tr>
 </tbody>
 </table>
-<p>The Map UI flags <code>--focus-panel Map</code>, <code>--map-section</code>, <code>--map-tool</code>, <code>--map-select</code>, <code>--bake</code>,
+<p>The Map UI flags <code>--focus-panel Map</code>, <code>--map-section</code>, <code>--map-wizard</code>, <code>--map-tool</code>, <code>--map-select</code>, <code>--bake</code>,
 <code>--mapbake</code> and <code>--file-save</code> are in the table above.</p>
 <p>Invalid arguments exit with code 2; init failures (SDL, window, bgfx) log the reason, show a message box, and exit 1.</p>
 </main>

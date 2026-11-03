@@ -1,9 +1,11 @@
-// The Map tab (docs/editor/map-builder.html): the open map (MapSession) in one window of collapsing sections. A top
-// bar (the map, Save Map, Undo/Redo, the unsaved marker, the Scene view tool buttons), then Map (pick or create the map
-// the scene's Terrain entity names, its manifest), Tiles (map_tiles.h: the one tile grid, adding and removing tiles and
-// opening tile scenes), Terrain (map_terrain.cpp: brushes, height range, heightmap PNGs, Generate, Height colors, the
-// terrain material), Areas, Spawns (+ patrol paths), Objects (+ the Scatter brush) and Bake (map_objects.cpp), and
-// Zones (map_zones.cpp: the map's zones, painted on the Tiles grid, their zone scenes) and Problems (the last validation). Read-only during Play and in prefab edit mode. Unsaved-changes prompt before the map
+// The Map tab (docs/editor/map-builder.html): the open map (MapSession) in one window. A top bar (the map, Save Map,
+// Undo/Redo, the unsaved marker, the Objects sub-tab's Scene view tool buttons) and Problems (the last validation) always
+// show; below them the sub-tabs: Setup (pick the map or make one with the New Map wizard, its manifest, and Tiles:
+// map_tiles.h, the tile grid, adding and removing tiles and opening tile scenes), Zones (map_zones.cpp: the map's zones,
+// painted on the tile grid, their zone scenes), Terrain (map_terrain.cpp: the sculpt tools and brush, height range, heightmap PNGs,
+// Generate, Height colors, the terrain material), Objects (Areas, Spawns + patrol paths, Objects + the Scatter brush)
+// and Bake (map_objects.cpp). The tool follows the sub-tab: Zones paints zones on the grid, Terrain sculpts (Raise).
+// Read-only during Play and in prefab edit mode. Unsaved-changes prompt before the map
 // changes (here or in the Inspector); scene-wide prompts and Ctrl+S go through FileActions::extra (main.cpp). The active tool gets the
 // Scene view's left mouse through sceneInput (SceneViewport::input) and draws over it with drawSceneOverlay; with no
 // tool, while the tab is in front, the map's handles (area vertices, spawns, path points, objects) drag there.
@@ -45,12 +47,29 @@ public:
     // Saves the map (MapSession::save); a blocked save opens Problems and brings the tab forward. Open zone scenes of
     // renamed zones follow their files.
     bool save(Document& doc, MapSession& session);
-    // --map-section: expand these sections ("Map", "Tiles", "Zones", "Terrain", "Problems") and collapse the others, each the next time
-    // it is drawn.
-    void showSections(const std::vector<std::string>& names) { showSections_ = std::set(names.begin(), names.end()); }
+    // The sub-tabs, in order.
+    enum class Tab { Setup, Zones, Terrain, Objects, Bake };
+    // --map-section: selects the sub-tab of the last section named ("Map", "Tiles", "Zones", "Terrain", "Areas",
+    // "Spawns", "Objects", "Bake"; a sub-tab's own name too) and expands these sections ("Problems" too), collapsing
+    // the others, each the next time it is drawn.
+    void showSections(const std::vector<std::string>& names);
+    // Selects tab as a click on it does: the tool follows (Zones: the grid paints zones; Terrain: Raise; else none).
+    void selectTab(Tab tab);
+    Tab tab() const { return tab_; }
     Tool tool() const { return tool_; }
-    // --map-tool: makes tool active, as its button does (ignored while there is no map or the tab is read-only).
-    void setTool(Tool tool) { tool_ = tool; }
+    // --map-tool: makes tool active in its sub-tab, as its button does (ignored while there is no map or the tab is
+    // read-only).
+    void setTool(Tool tool);
+    // --map-wizard: opens the New Map wizard with spec "name[,tilesX,tilesZ,min,max,flat|generated]" filled in (as
+    // New Map... does: the unsaved-map prompt first). False if spec is malformed.
+    bool openWizard(Document& doc, MapSession& session, std::string_view spec);
+    // --map-wizard-create / --map-wizard-confirm: presses the open wizard's Create / the replace-link prompt's Replace
+    // next frame. A Create that is disabled logs why instead.
+    void pressWizardCreate() { pressCreate_ = true; }
+    void pressWizardReplace() { pressReplace_ = true; }
+    // --map-range "min,max": the Terrain sub-tab's height range typed and left, as a user does (applied, or the clip
+    // prompt). False if spec is malformed.
+    bool editRange(MapSession& session, std::string_view spec);
     // "Raise", "SetSpawn", ...: the Tool of that name; nullopt if none.
     static std::optional<Tool> toolNamed(std::string_view name);
     // --map-select: selects the area or spawn with this id, the map object "object:tx,tz,index" or the zone "zone:id".
@@ -84,7 +103,7 @@ public:
     // it too.
     bool sceneInput(MapSession& session, const SceneViewport::Input& input);
     // SceneViewport::overlay, after MapRender's: areas, spawns, paths and objects, and the active tool's overlay (the
-    // brush ring, the area being drawn), on the tiles the Scene view meshes around centre (the camera's pivot).
+    // brush's radius circle and falloff ring, the area being drawn), on the tiles the Scene view meshes around centre (the camera's pivot).
     void drawSceneOverlay(const MapSession& session, ImDrawList* draw, const float* viewProj, float x, float y, float width,
                           float height, std::array<float, 2> centre) const;
 
@@ -100,26 +119,53 @@ private:
         int map = 0;
     };
 
+    // The New Map wizard's fields.
+    struct NewMap {
+        std::string name, folder; // folder follows name (folderFor) until edited under Advanced
+        bool folderEdited = false;
+        int id = 0, width = 2, depth = 2;
+        float min = 0, max = 100; // new_map's default heightRange
+        bool generated = false;   // start terrain: Generate's fBm (its current settings) instead of flat
+        std::string error;        // new_map's refusal
+    };
+
     bool header(const char* label, const char* section, bool defaultOpen = false);
+    // The sub-tab row (wrapping) and the selected sub-tab's sections.
+    void drawTabs(Document& doc, MapSession& session, FileActions& files, bool locked);
+    // A sub-tab became the selected one (a click, selectTab): the tool and the grid's mode follow it.
+    void followTab(Tab tab);
     void drawTopBar(Document& doc, MapSession& session);
     void drawTerrainEntity(Document& doc, const MapSession& session);
     void drawMap(Document& doc, MapSession& session);
     void drawManifest(mapedit::MapDoc& z, const MapSession& session);
     // An instance map's fields (map.json maxPlayers, emptyTimeoutSec, exit), from the JSON: editable while invalid.
     void drawInstance(mapedit::MapDoc& z, const MapSession& session);
-    // The Tiles section: MapTiles' grid; a click in its Tiles mode adds a free cell's tile or asks to remove a tile.
+    // The Tiles section: drawTileGrid under its header.
     void drawTiles(Document& doc, MapSession& session, FileActions& files, bool locked);
+    // MapTiles' grid; a click in its Tiles mode adds a free cell's tile or asks to remove a tile; Zones mode paints.
+    void drawTileGrid(Document& doc, MapSession& session, FileActions& files, bool locked);
     void drawProblems(const MapSession& session);
     // map_zones.cpp
-    void drawZones(Document& doc, MapSession& session, FileActions& files);
+    void drawZones(Document& doc, MapSession& session, FileActions& files, bool locked);
     void drawZoneFields(Document& doc, MapSession& session, FileActions& files, const kast::map::MapInfo& info,
                         const kast::map::Zone& zone);
     // A paint stroke (MapTiles' Zones mode): tile t into the selected zone; the stroke is one undo step, ended (and
     // logged) by endZoneStroke once the mouse is up.
     void paintZone(mapedit::MapDoc& z, const kast::map::MapInfo& info, kast::map::TileKey t);
     void endZoneStroke(MapSession& session);
+    // Zone paint in the Scene view: the Zones sub-tab in front, its paint mode on, no tool.
+    bool zonePainting() const;
+    // Its Scene view mouse: the tile under it highlighted; a left drag paints every tile it crosses (paintZone).
+    bool zoneInput(mapedit::MapDoc& z, const kast::map::MapInfo& info, bool click);
+    // While the Zones sub-tab shows: each zone's tiles tinted (kZoneTints) with its name, the hovered tile outlined.
+    void drawZoneOverlay(const GroundDraw& g, const mapedit::MapDoc& z, const kast::map::MapInfo& info) const;
     void drawUnsavedPrompt(Document& doc, MapSession& session);
-    void drawNewMapDialog(Document& doc, MapSession& session);
+    // The New Map wizard: why Create is disabled (empty: it is not).
+    std::string newMapBlocker(const MapSession& session) const;
+    void drawNewMapDialog(Document& doc, MapSession& session, FileActions& files);
+    // The wizard's Create: the new map (one zone of every tile, the height range, flat or generated heights), the
+    // Terrain entity (added if missing) pointed at it, the Scene view camera framing it, then File > Save (the scene, then the map). False: new_map refused.
+    bool createMap(Document& doc, MapSession& session, FileActions& files);
     void drawRemoveTilePrompt(MapSession& session);
     void toolButton(const char* label, Tool tool);
     // map_terrain.cpp
@@ -128,7 +174,14 @@ private:
     void drawTerrainColors(mapedit::MapDoc& z);
     void drawHeightRangePrompt(MapSession& session);
     void setHeightRange(mapedit::MapDoc& z, float min, float max);
-    // A sculpt brush's Scene view mouse: Shift+click (Flatten) picks the height; a left drag is one undo step.
+    // A Min/Max field left after an edit: the range applies now unless min >= max (the tab says why) or heights would
+    // be clipped (the clip prompt asks first).
+    void editRange(mapedit::MapDoc& z, float min, float max);
+    // With a sculpt tool active or the Terrain sub-tab in front, and the Scene view hovered or focused (sceneActive),
+    // not typing: 1 / 2 / 3 Raise / Lower / Flatten, [ / ] radius, - / = strength (each logged).
+    void sculptHotkeys(bool sceneActive);
+    // A sculpt brush's Scene view mouse: Shift+click (Flatten) picks the height; a left drag is one undo step. A click
+    // while no brush can apply (an empty height range) logs why.
     void sculptInput(mapedit::MapDoc& z, const kast::map::MapInfo& info, bool click);
     // Ends a sculpt or scatter stroke or a handle drag (its undo step) once the mouse is up, the tool changed or the
     // map went away.
@@ -162,12 +215,15 @@ private:
 
     std::optional<std::set<std::string>> showSections_;
     std::set<std::string> sectionsShown_; // the sections showSections_ has been applied to
+    Tab tab_ = Tab::Setup;
     Tool tool_ = Tool::None;
+    bool toolLost_ = false; // no map, or read-only: no tool until that ends
     Pending pending_;
     bool askUnsaved_ = false;
     bool openNewMap_ = false;
-    std::string newFolder_, newName_, newError_;
-    int newId_ = 0, newWidth_ = 2, newDepth_ = 2;
+    NewMap newMap_;
+    bool askReplace_ = false; // Create on a scene whose Terrain names a map: confirm replacing the link
+    bool pressCreate_ = false, pressReplace_ = false;
     std::optional<kast::map::TileKey> removeTile_; // asking to confirm its removal
     MapTiles tiles_;
     bool tabFront_ = false; // the Map tab showed this frame: its handles are live
@@ -181,10 +237,10 @@ private:
     bool stroking_ = false;
     std::optional<mapedit::Vec3> hover_; // the ground under the mouse while a tool is active
     mapedit::TileKey tile_;              // heightmap import/export: the last tile clicked
-    float rangeMin_ = 0, rangeMax_ = 0;
+    float rangeMin_ = 0, rangeMax_ = 0; // the Min/Max fields
     size_t rangeClips_ = 0;
     bool askRange_ = false;
-    bool rangeEdited_ = false; // Min/Max typed but not applied: keep them
+    bool rangeEdited_ = false; // Min/Max typed but not applied (min >= max, or the clip prompt): keep them
     mapedit::NoiseParams noise_;
     mapedit::Gradient gradient_;    // the stops shown; the manifest's while no edit is in progress
     bool colorsEditing_ = false; // a stop edit's undo step is open
@@ -223,6 +279,10 @@ private:
     std::string flagsText_, flagsError_; // its flags being typed
     bool zoneStroke_ = false;            // a paint stroke's undo step is open
     size_t strokeTiles_ = 0;             // tiles it moved
+    std::string zoneRefused_;            // why the stroke's last refused tile was (shown until the next stroke)
+    std::optional<mapedit::Point> zoneLast_;       // a Scene view stroke: the ground under the mouse last frame
+    std::optional<kast::map::TileKey> zoneHover_;  // the map tile under the mouse while zone painting
+    bool zoneOverlay_ = false;                     // the Zones sub-tab showed this frame
 
     // Bake
     std::filesystem::path settingsFile_;

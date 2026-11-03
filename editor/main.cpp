@@ -87,7 +87,7 @@ constexpr const char* kUsage =
     "[--scene in.scene] [--project dir] [--save-scene out.scene] [--select ID] [--play] [--select-network-entity] [--no-scene-post] [--no-scene-world-ui] [--add-component-popup] "
     "[--new-component-prompt Name] [--new-component Name] [--new-state-machine-prompt Name] [--build dir] "
     "[--open-menu Name] [--open-build-settings] [--open-online-settings] [--open-gui-settings] [--gui-settings-set json] [--game-resolution WxH] [--game-display-scale S] [--gui-preview-scale PERCENT] [--assets-menu path|/] [--assets-create system|fsm|gui|material|shader|shadergraph:folder] [--assets-rename path=name] [--assets-select path] [--assets-edit path] [--material-set field=json] [--material-undo N] [--material-redo N] "
-    "[--focus-panel Window] [--map-click tx,tz]... [--zone-scene-click id]... [--grid-view tx,tz,zoom] [--grid-mode scenes|tiles|zones] [--map-section Map[,Tiles,Problems...]] [--map-tool Raise|Lower|Flatten|SetSpawn|...] [--map-select id|object:tx,tz,index] [--bake] [--mapbake exe] [--open-gui file.rml|file.guiprefab] [--gui-select id] [--gui-preview-size WxH] [--gui-pick X,Y] "
+    "[--focus-panel Window] [--map-click tx,tz]... [--zone-scene-click id]... [--grid-view tx,tz,zoom] [--grid-mode scenes|tiles|zones] [--map-section Map[,Tiles,Problems...]] [--map-wizard name[,tilesX,tilesZ,min,max,flat|generated]] [--map-wizard-create] [--map-wizard-confirm] [--map-range min,max] [--map-tool Raise|Lower|Flatten|SetSpawn|...] [--map-select id|object:tx,tz,index] [--bake] [--mapbake exe] [--open-gui file.rml|file.guiprefab] [--gui-select id] [--gui-preview-size WxH] [--gui-pick X,Y] "
     "[--gui-add Panel|Text|RichText|Button|Toggle|Slider|Dropdown|Spinbox|Progress|ListBox|VirtualList] [--gui-set-attr name=value] [--gui-set-prop name=value] [--gui-rich-wrap tag[=value],start,end] [--gui-undo N] [--gui-redo N] [--gui-save] [--gui-close] [--gui-create-prefab folder|/] [--gui-place-prefab path]... [--gui-revert name|*] [--gui-apply name|*] [--gui-unpack] [--gui-delete] [--gui-move up|down] [--gui-reparent id|/] [--gui-hierarchy-collapse] [--gui-click id] [--gui-hover id] "
     "[--open-graph file.kshadergraph] [--graph-add type[,x,y]] [--graph-link N.pin,M.pin] [--graph-unlink N.pin] [--graph-select N[,M...]] "
     "[--graph-delete N[,M...]] [--graph-set N.setting=json] [--graph-comment title,x,y,w,h] [--graph-paste x,y] [--graph-undo N] [--graph-redo N] "
@@ -95,7 +95,7 @@ constexpr const char* kUsage =
     "[--sim-mouse frame,none|left|right[+shift],dx,dy,wheel[,sx,sy[,hold]]] [--sim-key frame,[ctrl+]key]... [--sim-gamepad frame,frames,control=value[+...]]... [--sim-on-log text] [--settings-file settings.json] [--open-preferences] "
     "[--open-external path] [--drop-model path] [--create-prefab folder|/] [--drop-prefab path[,parentId]] [--drop-prefab-view path,u,v] "
     "[--set-field ID,Component.field,json] [--prefab-revert spec] [--prefab-apply spec] [--prefab-unpack ID] [--edit-prefab path] "
-    "[--prefab-save] [--prefab-back] [--open-additive scene]... [--active-scene N] [--move-to-scene ID,N] [--scene-menu N] [--remove-scene N] [--scene-undo N] [--scene-redo N] [--assets-delete path] [--inspector-apply-menu Component.field] [--prefab-back-prompt] [--world-address host:port] [--online-login-env] [--online-compose up|down|ps] [--log-fps] [--log-sdfgi] [--fixed-dt S] [--no-vsync] [--no-instancing] [--no-culling] [--no-lod] [--lod-bias F] [--force-lod N] [--log-lod] [--no-occlusion] [--occlusion-unsupported] [--lod-tint] [--show-occluded] [--show-hiz MIP] [--show-gdata 1|2|3] [--scroll-post-section NAME] [--scene-debug-menu] [--terrain-lod-tint] [--terrain-lod-checker] [--no-terrain-skirts] [--no-audio-device] [--crash abort|assert] [--file-save] [--bake-probes] [--bake-lightmaps] [--bake-lightmaps-async] [--cancel-lightmaps N] [--bake-voxelgi] [map edits] | "
+    "[--prefab-save] [--prefab-back] [--open-additive scene]... [--active-scene N] [--move-to-scene ID,N] [--scene-menu N] [--remove-scene N] [--scene-undo N] [--scene-redo N] [--assets-delete path] [--inspector-apply-menu Component.field] [--prefab-back-prompt] [--open-scene file] [--world-address host:port] [--online-login-env] [--online-compose up|down|ps] [--log-fps] [--log-sdfgi] [--fixed-dt S] [--no-vsync] [--no-instancing] [--no-culling] [--no-lod] [--lod-bias F] [--force-lod N] [--log-lod] [--no-occlusion] [--occlusion-unsupported] [--lod-tint] [--show-occluded] [--show-hiz MIP] [--show-gdata 1|2|3] [--scroll-post-section NAME] [--scene-debug-menu] [--terrain-lod-tint] [--terrain-lod-checker] [--no-terrain-skirts] [--no-audio-device] [--crash abort|assert] [--file-save] [--bake-probes] [--bake-lightmaps] [--bake-lightmaps-async] [--cancel-lightmaps N] [--bake-voxelgi] [map edits] | "
     "[--launcher] [--new-project name dir] [--launcher-open dir] [-- editor flags...]";
 
 // --sim-mouse: a scripted mouse drag and/or wheel turn on the Game panel (without --play: on the Scene view), for
@@ -113,7 +113,8 @@ struct SimMouse {
 };
 
 // --sim-key: one key press on the Game panel, or the focused panel (down, its typed character, up two frames later),
-// for tests of game keys and the Shader Graph canvas', GUI Builder's and Scene view's (--focus-panel Scene) shortcuts.
+// for tests of game keys and the Shader Graph canvas', GUI Builder's, Scene view's and Map tab's (--focus-panel Scene|Map)
+// shortcuts.
 struct SimKey {
     int frame = 0;
     SDL_Scancode scancode = SDL_SCANCODE_UNKNOWN;
@@ -158,7 +159,10 @@ struct Options {
     std::optional<std::pair<int, int>> gameResolution; // --game-resolution: Window > Game View simulates it
     std::optional<double> gameDisplayScale;           // --game-display-scale: likewise
     std::optional<int> guiPreviewScale;               // --gui-preview-scale: the GUI Preview's UI scale, in percent
-    std::vector<std::string> mapSections; // --map-section: expand these Map tab sections, collapse the others (with --focus-panel Map), for screenshots
+    std::vector<std::string> mapSections; // --map-section: select the Map tab sub-tab of these sections, expand them, collapse the others (with --focus-panel Map), for screenshots
+    std::string mapWizard; // --map-wizard: open the New Map wizard filled in with "name[,tilesX,tilesZ,min,max,flat|generated]"
+    bool mapWizardCreate = false, mapWizardConfirm = false; // --map-wizard-create / -confirm: press Create, then Replace
+    std::string mapRange; // --map-range: the Terrain sub-tab's height range typed as "min,max" (applied or asked)
     std::optional<MapPanel::Tool> mapTool; // --map-tool: this Map tab tool is active (tests, with --sim-mouse)
     std::string mapSelect; // --map-select: select this map area or spawn id, or "object:tx,tz,index"
     bool bake = false;      // --bake: Bake Navmesh on the map (--frames counts once it ends; exit 1 if it fails)
@@ -181,6 +185,7 @@ struct Options {
     std::optional<std::array<float, 3>> gridView; // --grid-view tx,tz,zoom: the Map tab's tile grid centred there
     std::optional<MapTiles::Mode> gridMode; // --grid-mode: what a click on the Map tab's tile grid does
     bool fileSave = false;  // --file-save: File > Save (as Ctrl+S) at frame kAddComponentPopupFrame, for tests
+    std::string openScene;  // --open-scene: File > Open of this scene (the unsaved-changes prompt first) at that frame
     int undo = 0, redo = 0; // --scene-undo N / --scene-redo N: scene Undo N times, then Redo N times, after the startup edits
     // Additive scenes (docs/editor/multi-scene.html), after --scene / --project: --open-additive opens each scene as
     // File > Open Scene Additive does; --active-scene N makes open scene N (0 = the first) active; --move-to-scene
@@ -378,7 +383,7 @@ void pushSimKey(const SimKey& sim, int frame, SDL_WindowID window)
     }
 }
 
-// "frame,key" with a positive frame and an SDL key name ("B", "Escape"), "ctrl+" before it for a Ctrl shortcut; logs
+// "frame,key" with a positive frame and an SDL key name ("B", "Escape"; LeftBracket / RightBracket for [ / ]), "ctrl+" before it for a Ctrl shortcut; logs
 // why not.
 bool parseSimKey(std::string_view text, std::vector<SimKey>& out)
 {
@@ -389,6 +394,8 @@ bool parseSimKey(std::string_view text, std::vector<SimKey>& out)
         sim.ctrl = name.starts_with("ctrl+");
         if (sim.ctrl)
             name.remove_prefix(5);
+        if (name == "LeftBracket" || name == "RightBracket") // CMake lists can't carry an unmatched [ or ]
+            name = name == "LeftBracket" ? "[" : "]";
         sim.scancode = SDL_GetScancodeFromName(std::string(name).c_str());
     }
     if (sim.scancode == SDL_SCANCODE_UNKNOWN) {
@@ -553,8 +560,8 @@ std::optional<Options> parseArgs(int argc, char** argv)
             options.scene = argv[++i];
         } else if (arg == "--project" && hasValue) {
             options.project = argv[++i];
-        } else if (arg == "--save-scene" && hasValue) {
-            options.saveScene = argv[++i];
+        } else if ((arg == "--save-scene" || arg == "--open-scene") && hasValue) { // one branch: MSVC's nesting limit
+            (arg == "--save-scene" ? options.saveScene : options.openScene) = argv[++i];
         } else if (arg == "--select" && hasValue && parsePositive(argv[i + 1], options.select)) {
             ++i;
         } else if (arg == "--new-project" && i + 2 < argc) {
@@ -721,13 +728,17 @@ std::optional<Options> parseArgs(int argc, char** argv)
                 kast::log::error(std::format("Unknown {} '{}'", arg, argv[i]));
                 return std::nullopt;
             }
-        } else if ((arg == "--map-select" || arg == "--zone-scene-click") && hasValue) { // one branch: MSVC's nesting limit
+        } else if ((arg == "--map-select" || arg == "--zone-scene-click" || arg == "--map-wizard" || arg == "--map-range") && hasValue) { // one branch: MSVC's nesting limit
             if (arg == "--map-select")
                 options.mapSelect = argv[++i];
+            else if (arg == "--map-range")
+                options.mapRange = argv[++i];
+            else if (arg == "--map-wizard")
+                options.mapWizard = argv[++i];
             else
                 options.zoneSceneClicks.emplace_back(argv[++i]);
-        } else if (arg == "--bake") {
-            options.bake = true;
+        } else if (arg == "--bake" || arg == "--map-wizard-create" || arg == "--map-wizard-confirm") { // one branch: MSVC's nesting limit
+            (arg == "--bake" ? options.bake : arg == "--map-wizard-create" ? options.mapWizardCreate : options.mapWizardConfirm) = true;
         } else if (arg == "--mapbake" && hasValue) {
             options.mapbake = argv[++i];
         } else if (const std::optional<bool> mapValue = map_cli::takesValue(arg); mapValue && (!*mapValue || hasValue)) {
@@ -930,7 +941,7 @@ std::optional<Options> parseArgs(int argc, char** argv)
                              options.newComponentPrompt || !options.newComponent.empty() || !options.openMenu.empty() ||
                              options.openBuildSettings || options.openOnlineSettings || options.openGuiSettings ||
                              options.guiSettingsSet || options.gameResolution || options.gameDisplayScale ||
-                             options.guiPreviewScale || !options.focusPanel.empty() || !options.scrollPostSection.empty() || !options.mapSections.empty() || options.mapTool || !options.mapSelect.empty() || options.bake || !options.mapbake.empty() || options.newStateMachinePrompt ||
+                             options.guiPreviewScale || !options.focusPanel.empty() || !options.scrollPostSection.empty() || !options.mapSections.empty() || options.mapTool || !options.mapRange.empty() || !options.mapSelect.empty() || options.bake || !options.mapbake.empty() || options.newStateMachinePrompt ||
                              options.assetsMenu || options.assetsCreate || options.assetsRename || !options.assetsSelect.empty() ||
                              !options.assetsEdit.empty() ||
                              !options.materialSets.empty() || options.materialUndo || options.materialRedo ||
@@ -946,7 +957,7 @@ std::optional<Options> parseArgs(int argc, char** argv)
                              options.occlusionUnsupported || options.showOccluded || options.showHiz >= 0 || options.showGData != 0 || options.sceneDebugMenu ||
                              options.terrainLodChecker || options.noTerrainSkirts || !options.worldAddress.empty() || options.onlineLoginEnv ||
                              options.onlineCompose || !options.mapOps.empty() || options.headless || options.noRecycle ||
-                             options.sculptLoop || options.focus || options.promptRemoveTile || !options.mapClicks.empty() || options.gridView || options.gridMode || options.fileSave ||
+                             options.sculptLoop || options.focus || options.promptRemoveTile || !options.mapClicks.empty() || options.gridView || options.gridMode || options.fileSave || !options.openScene.empty() ||
                              options.bakeProbes || options.bakeLightmaps || options.bakeLightmapsAsync ||
                              options.cancelLightmaps || options.bakeVoxelGi || options.undo || options.redo ||
                              !options.openAdditive.empty() || options.activeScene || !options.moveToScene.empty() ||
@@ -958,7 +969,7 @@ std::optional<Options> parseArgs(int argc, char** argv)
                          "--assets-menu, "
                          "--assets-create, --assets-rename, --assets-select, --assets-edit, --open-gui, --gui-select, --gui-preview-size, --gui-pick, --gui-add, --gui-save, --gui-close, "
                          "--gui-click, --gui-hover, --open-graph, --preview-model, --open-preferences, --open-external, --world-address, --online-login-env, --online-compose, the prefab "
-                         "steps, --open-additive, --active-scene, --move-to-scene, --scene-menu, --remove-scene, --scene-undo, --scene-redo, --assets-delete, --inspector-apply-menu, --file-save, --bake-probes, --bake-lightmaps[-async], --cancel-lightmaps, --bake-voxelgi and the map flags require "
+                         "steps, --open-additive, --active-scene, --move-to-scene, --scene-menu, --remove-scene, --scene-undo, --scene-redo, --assets-delete, --inspector-apply-menu, --file-save, --open-scene, --bake-probes, --bake-lightmaps[-async], --cancel-lightmaps, --bake-voxelgi and the map flags require "
                          "--project <dir> or --scene <file>");
         return std::nullopt;
     }
@@ -992,8 +1003,8 @@ std::optional<Options> parseArgs(int argc, char** argv)
         return std::nullopt;
     }
     if (!options.simKeys.empty() && !options.play && options.openGraph.empty() && options.openGui.empty() &&
-        options.focusPanel != "Scene") {
-        kast::log::error("--sim-key requires --play, --open-graph, --open-gui or --focus-panel Scene");
+        options.focusPanel != "Scene" && options.focusPanel != "Map") {
+        kast::log::error("--sim-key requires --play, --open-graph, --open-gui or --focus-panel Scene|Map");
         return std::nullopt;
     }
     if (!options.simGamepad.empty() && !options.play) {
@@ -1103,38 +1114,46 @@ std::string focusedWindow()
 }
 
 // The document Edit > Undo / Redo and the shortcuts act on, by the focused window (menus and popups: the one before).
-// The GUI Builder's panels edit the open GUI, the Shader Graph panels the open graph, the Map tab the open map, the Inspector showing a material that .mat;
-// every other window edits the scene (or the open prefab).
+// The GUI Builder's panels edit the open GUI, the Shader Graph panels the open graph, the Inspector showing a material
+// that .mat; every other window (the Map tab among them) the scene (or the open prefab) and the open map, as one history:
+// the latest edit of either is undone first.
 UndoTarget focusedUndoTarget(const std::string& window, Document& doc, GuiBuilder& guiBuilder, ShaderGraphEditor& graphs,
                              MapSession& session, Panels& panels)
 {
     if (window.ends_with(ShaderGraphEditor::kCanvasWindow) || window.ends_with(ShaderGraphEditor::kInspectorWindow))
         return {.history = &graphs.history(),
+                .redoHistory = &graphs.history(),
                 .undo = [&graphs] { graphs.undo(); },
                 .redo = [&graphs] { graphs.redo(); },
                 .blocked = doc.play != PlayState::Stopped};
     if (UndoStack* materials = panels.materialHistory(); materials && window == "Inspector")
-        return {.history = materials, .undo = [materials] { materials->undo(); }, .redo = [materials] { materials->redo(); }};
+        return {.history = materials,
+                .redoHistory = materials,
+                .undo = [materials] { materials->undo(); },
+                .redo = [materials] { materials->redo(); }};
     constexpr const char* kGuiWindows[] = {GuiBuilder::kInspectorWindow, GuiBuilder::kStyleWindow, GuiBuilder::kPreviewWindow};
     if (std::ranges::any_of(kGuiWindows, [&](const char* id) { return window.ends_with(id); }))
         return {.history = &guiBuilder.history(),
+                .redoHistory = &guiBuilder.history(),
                 .undo = [&guiBuilder] { guiBuilder.undo(); },
                 .redo = [&guiBuilder] { guiBuilder.redo(); },
                 .blocked = doc.play != PlayState::Stopped};
-    if (window == MapPanel::kWindow) {
-        mapedit::MapDoc* z = session.doc();
-        if (!z)
-            return {}; // no map: the scene's history stays out of the way
-        // Blocked mid-stroke, and while the tab is read-only (Play, prefab edit mode).
-        return {.history = &z->history(),
-                .undo = [z] { z->undo(); },
-                .redo = [z] { z->redo(); },
-                .blocked = doc.play != PlayState::Stopped || doc.prefabEdit.has_value() || z->editing()};
-    }
-    return {.history = &doc.history,
-            .undo = [&doc] { undoScene(doc); },
-            .redo = [&doc] { redoScene(doc); },
-            .blocked = doc.play != PlayState::Stopped};
+    mapedit::MapDoc* z = doc.prefabEdit ? nullptr : session.doc(); // the map is read-only in prefab edit mode
+    if (!z)
+        return {.history = &doc.history,
+                .redoHistory = &doc.history,
+                .undo = [&doc] { undoScene(doc); },
+                .redo = [&doc] { redoScene(doc); },
+                .blocked = doc.play != PlayState::Stopped};
+    const UndoStack* undo = latestUndo(doc.history, z->history());
+    const UndoStack* redo = nextRedo(doc.history, z->history());
+    const bool sceneUndo = undo == &doc.history, sceneRedo = redo == &doc.history;
+    // Blocked mid-stroke too.
+    return {.history = undo,
+            .redoHistory = redo,
+            .undo = [&doc, z, sceneUndo] { sceneUndo ? undoScene(doc) : z->undo(); },
+            .redo = [&doc, z, sceneRedo] { sceneRedo ? redoScene(doc) : z->redo(); },
+            .blocked = doc.play != PlayState::Stopped || z->editing()};
 }
 
 // Ctrl+Z undo, Ctrl+Y and Ctrl+Shift+Z redo; ignored while a text field or drag (ImGui's own undo) or the gizmo is
@@ -1188,7 +1207,7 @@ void drawMenuBar(FileActions& files, Document& doc, const UndoTarget& undo, Game
             const bool canUndo = undo.canUndo() && files.idle();
             const bool canRedo = undo.canRedo() && files.idle();
             const std::string undoLabel = canUndo ? "Undo " + undo.history->undoName() : "Undo";
-            const std::string redoLabel = canRedo ? "Redo " + undo.history->redoName() : "Redo";
+            const std::string redoLabel = canRedo ? "Redo " + undo.redoHistory->redoName() : "Redo";
             if (ImGui::MenuItem((undoLabel + "###undo").c_str(), "Ctrl+Z", false, canUndo))
                 undo.undo();
             if (ImGui::MenuItem((redoLabel + "###redo").c_str(), "Ctrl+Y", false, canRedo))
@@ -2010,6 +2029,18 @@ int main(int argc, char** argv)
             mapPanel.select(session, options->mapSelect);
         if (options->bake && frames.frame() == kAddComponentPopupFrame && !std::exchange(bakeStarted, true))
             mapPanel.startBake(session);
+        // The wizard after --focus-panel (which closes popups); Create two frames after it opens, Replace two after that.
+        if (!options->mapWizard.empty() && frames.frame() == kAddComponentPopupFrame + 2 &&
+            !mapPanel.openWizard(doc, session, options->mapWizard))
+            kast::log::error(std::format("Invalid --map-wizard '{}', expected name[,tilesX,tilesZ,min,max,flat|generated]",
+                                         options->mapWizard));
+        if (!options->mapRange.empty() && frames.frame() == kAddComponentPopupFrame + 2 && // after --focus-panel
+            !mapPanel.editRange(session, options->mapRange))
+            kast::log::error(std::format("Invalid --map-range '{}', expected min,max", options->mapRange));
+        if (options->mapWizardCreate && frames.frame() == kAddComponentPopupFrame + 4)
+            mapPanel.pressWizardCreate();
+        if (options->mapWizardConfirm && frames.frame() == kAddComponentPopupFrame + 6)
+            mapPanel.pressWizardReplace();
         if (options->promptRemoveTile && frames.frame() == kAddComponentPopupFrame + 2) // after --focus-panel
             mapPanel.askRemoveTile({(*options->promptRemoveTile)[0], (*options->promptRemoveTile)[1]});
         if (options->gridMode && frames.frame() == kAddComponentPopupFrame)
@@ -2057,6 +2088,8 @@ int main(int argc, char** argv)
         voxelGiJob.poll(doc);
         if (options->fileSave && frames.frame() == kAddComponentPopupFrame)
             files.save();
+        if (!options->openScene.empty() && frames.frame() == kAddComponentPopupFrame)
+            files.openScene(options->openScene);
         if (options->sceneMenu && frames.frame() == kAddComponentPopupFrame)
             panels.openSceneMenu(*options->sceneMenu);
         if (options->removeScene && frames.frame() == kAddComponentPopupFrame &&

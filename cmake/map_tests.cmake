@@ -178,6 +178,109 @@ add_test(NAME editor_map_play_zones
           "-DEXPECT_OUTPUT=${map_zones_start}.*${map_zones_east}.*map zones: scene unloaded map 7 zone west.*${map_zones_back}.*Stop"
           "-DEXPECT_ONCE=map zones: entered map 7 zone east;map zones: left map 7 zone east;map zones: off the map"
           "-DFORBID_OUTPUT=\\[error\\]|Switched to scene" -P "${map_smoke}")
+# Unified undo (docs/editor/undo-redo.html#documents): a scene edit (--set-field), a map edit (--paint-zone) and a
+# Scene view Ctrl+D, then real Ctrl+Z x3 / Ctrl+Y x3 with the Scene view (or the Map tab) focused: the latest edit is undone
+# first, map or scene, and redone in the order made. Nothing is saved.
+set(map_undo_args "--scene ${KAST_TILEGRID} --size 1600x1000 --set-field 1,DirectionalLight.intensity,2 --map tilegrid --paint-zone east,1,0,1,2 --select 3 --sim-key 20,ctrl+D --sim-key 30,ctrl+Z --sim-key 40,ctrl+Z --sim-key 50,ctrl+Z --sim-key 60,ctrl+Y --sim-key 70,ctrl+Y --sim-key 80,ctrl+Y")
+set(map_undo_order "Undo Duplicate Main Camera.*Undo Edit Zones.*Undo Set DirectionalLight.intensity.*Redo Set DirectionalLight.intensity.*Redo Edit Zones.*Redo Duplicate Main Camera")
+add_test(NAME editor_map_undo_order_scene_focus
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/map_undo_order_scene_focus.png"
+          "-DEXTRA_ARGS=${map_undo_args}" -DFOCUS_PANEL=Scene -DFRAMES=100 "-DEXPECT_OUTPUT=${map_undo_order}"
+          "-DFORBID_OUTPUT=\\[error\\]|Saved" -P "${map_smoke}")
+# The Map tab focused: Ctrl+D is the Scene view's, so the scene edits are --set-field (startup) and nothing after the map's.
+add_test(NAME editor_map_undo_order_map_focus
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/map_undo_order_map_focus.png"
+          "-DEXTRA_ARGS=--scene ${KAST_TILEGRID} --size 1600x1000 --set-field 1,DirectionalLight.intensity,2 --map tilegrid --paint-zone east,1,0,1,2 --sim-key 30,ctrl+Z --sim-key 40,ctrl+Z --sim-key 50,ctrl+Y --sim-key 60,ctrl+Y"
+          -DFOCUS_PANEL=Map -DFRAMES=80
+          "-DEXPECT_OUTPUT=Undo Edit Zones.*Undo Set DirectionalLight.intensity.*Redo Set DirectionalLight.intensity.*Redo Edit Zones"
+          "-DFORBID_OUTPUT=\\[error\\]|Saved" -P "${map_smoke}")
+# Only map edits pending (the scene itself clean): opening another scene asks first, naming the map; a --frames run quits
+# at the prompt, so nothing is opened or saved.
+add_test(NAME editor_map_unsaved_prompt
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/map_unsaved_prompt.png"
+          "-DEXTRA_ARGS=--scene ${KAST_TILEGRID} --size 1600x1000 --map tilegrid --paint-zone east,1,0,1,2 --open-scene ${KAST_TEST_PROJECT}/additive_a.scene"
+          -DFOCUS_PANEL=Scene -DFRAMES=40 "-DEXPECT_OUTPUT=Unsaved changes: tilegrid and maps/tilegrid"
+          "-DFORBID_OUTPUT=\\[error\\]|Opened scene '[^']*additive_a|Saved" -P "${map_smoke}")
+# The New Map wizard (docs/editor/map-builder.html#new-map). On the copy's empty scene one Create adds the Terrain
+# entity, makes maps/highlands (folder from the name) with one zone of every tile and the height range, generated
+# heights, frames the map in the Scene view (the saved camera pivot is its centre), and saves the scene and the map.
+set(map_wizard_files [=[@PROJECT@/maps/highlands/map.json="name":"Highlands","tiles":\[\[0,0,2,1\]\],"heightRange":\[-10\.0,60\.0\];@PROJECT@/maps/highlands/zones.json="zones":\[{"id":"highlands","name":"Highlands","tiles":\[\[0,0,2,1\]\]}\];@PROJECT@/scenes/empty.scene="name":"Terrain".*"Terrain":{"map":0,;@PROJECT@/scenes/empty.scene="camera":{"pivot":\[384\.0,[0-9.]+,256\.0\]]=])
+add_test(NAME editor_map_wizard_create
+  COMMAND "${CMAKE_COMMAND}" "-DSOURCE=${KAST_TEST_PROJECT}" "-DEDITOR=$<TARGET_FILE:kast_editor>"
+          "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/map_wizard_create.png"
+          "-DEXTRA_ARGS=--scene @PROJECT@/scenes/empty.scene --size 1600x1000 --map-wizard Highlands,3,2,-10,60,generated --map-wizard-create"
+          -DFOCUS_PANEL=Map
+          "-DEXPECT_OUTPUT=Map: new map maps/highlands \\(id 0, 3x2 tiles\\).*Map: added a Terrain entity.*Map: New Map maps/highlands: 3 x 2 tiles, heights -10 .. 60 m, generated terrain, one zone.*Saved scene '[^']*scenes/empty.scene'.*Map: saved maps/highlands"
+          "-DMUST_EXIST=@PROJECT@/maps/highlands/heights/0_0.r16;@PROJECT@/maps/highlands/heights/2_1.r16"
+          "-DFILE_MATCHES=${map_wizard_files}" "-DFORBID_OUTPUT=\\[error\\]|asking" -P "${map_copy}")
+# The folder is taken (the name Tilegrid makes maps/tilegrid): Create is disabled, nothing is made or saved.
+add_test(NAME editor_map_wizard_folder_exists
+  COMMAND "${CMAKE_COMMAND}" "-DSOURCE=${KAST_TEST_PROJECT}" "-DEDITOR=$<TARGET_FILE:kast_editor>"
+          "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/map_wizard_folder_exists.png"
+          "-DEXTRA_ARGS=--scene @PROJECT@/scenes/empty.scene --size 1600x1000 --map-wizard Tilegrid --map-wizard-create"
+          -DFOCUS_PANEL=Map "-DEXPECT_OUTPUT=Map: New Map: Create is disabled: maps/tilegrid already exists"
+          "-DFORBID_OUTPUT=\\[error\\]|Map: new map|Saved|Terrain entity" -P "${map_copy}")
+# The scene's Terrain already names maps/tilegrid: Create asks before replacing the link (nothing made yet); Replace
+# makes and saves maps/highlands (flat, 2 x 2, 0 .. 100 m) and points the Terrain at it. maps/tilegrid keeps every file.
+add_test(NAME editor_map_wizard_replace_ask
+  COMMAND "${CMAKE_COMMAND}" "-DSOURCE=${KAST_TEST_PROJECT}" "-DEDITOR=$<TARGET_FILE:kast_editor>"
+          "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/map_wizard_replace_ask.png"
+          "-DEXTRA_ARGS=--scene @PROJECT@/scenes/tilegrid.scene --size 1600x1000 --map-wizard Highlands --map-wizard-create"
+          -DFOCUS_PANEL=Map "-DEXPECT_OUTPUT=Map: New Map: the scene's Terrain uses maps/tilegrid. asking before replacing the link"
+          "-DMUST_NOT_EXIST=@PROJECT@/maps/highlands" "-DKEEP_FILES=@PROJECT@/maps/tilegrid"
+          "-DFORBID_OUTPUT=\\[error\\]|Map: new map|Saved" -P "${map_copy}")
+add_test(NAME editor_map_wizard_replace_confirm
+  COMMAND "${CMAKE_COMMAND}" "-DSOURCE=${KAST_TEST_PROJECT}" "-DEDITOR=$<TARGET_FILE:kast_editor>"
+          "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/map_wizard_replace_confirm.png"
+          "-DEXTRA_ARGS=--scene @PROJECT@/scenes/tilegrid.scene --size 1600x1000 --map-wizard Highlands --map-wizard-create --map-wizard-confirm"
+          -DFOCUS_PANEL=Map
+          "-DEXPECT_OUTPUT=asking before replacing the link.*Map: New Map maps/highlands: 2 x 2 tiles, heights 0 .. 100 m, flat terrain, one zone.*Saved scene '[^']*scenes/tilegrid.scene'.*Map: saved maps/highlands"
+          "-DFILE_MATCHES=@PROJECT@/scenes/tilegrid.scene=\"Terrain\":{\"map\":0,;@PROJECT@/maps/highlands/zones.json=\"tiles\":\\[\\[0,0,1,1\\]\\]"
+          "-DKEEP_FILES=@PROJECT@/maps/tilegrid" "-DFORBID_OUTPUT=\\[error\\]" -P "${map_copy}")
+# Sculpting right after Create, with no height range step: the Terrain sub-tab in front, the wizard's flat 2 x 2 map
+# (0 .. 100 m) takes a Raise stroke near its centre; Ctrl+S writes the raised tiles' heights (a flat map has no files).
+add_test(NAME editor_map_wizard_sculpt
+  COMMAND "${CMAKE_COMMAND}" "-DSOURCE=${KAST_TEST_PROJECT}" "-DEDITOR=$<TARGET_FILE:kast_editor>"
+          "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/map_wizard_sculpt.png"
+          "-DEXTRA_ARGS=--scene @PROJECT@/scenes/empty.scene --size 1600x1000 --map-section Terrain --map-wizard Highlands --map-wizard-create --sim-mouse 40,left,40,0,0 --sim-key 60,ctrl+S"
+          -DFOCUS_PANEL=Map
+          "-DEXPECT_OUTPUT=Map: New Map maps/highlands: 2 x 2 tiles, heights 0 .. 100 m, flat terrain.*Map: Raise stroke.*Map: saved maps/highlands"
+          "-DMUST_EXIST=@PROJECT@/maps/highlands/heights/0_0.r16;@PROJECT@/maps/highlands/heights/1_0.r16"
+          "-DFORBID_OUTPUT=\\[error\\]|can't sculpt" -P "${map_copy}")
+# Sub-tabs: --map-section Zones selects the Zones sub-tab, whose tile grid paints zones (the Paint zone mode).
+add_test(NAME editor_map_subtab_zones
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/map_subtab_zones.png"
+          "-DEXTRA_ARGS=--scene ${KAST_TILEGRID} --size 1600x1000 --map-section Zones --map-select zone:west"
+          -DFOCUS_PANEL=Map "-DEXPECT_OUTPUT=Map: Zones tab: the tile grid paints zones" -DEXPECT_COUNT=1
+          "-DFORBID_OUTPUT=\\[error\\]|Terrain tab" -P "${map_smoke}")
+# Zones in the Scene view (Zones sub-tab, zone east selected): a left drag over the terrain from 2_1 (east) to 1_1
+# paints the tiles it crosses into east, one stroke; Ctrl+S writes zones.json with 1_1 in east.
+add_test(NAME editor_map_viewport_zone_paint
+  COMMAND "${CMAKE_COMMAND}" "-DSOURCE=${KAST_TEST_PROJECT}" "-DEDITOR=$<TARGET_FILE:kast_editor>"
+          "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/map_viewport_zone_paint.png"
+          "-DEXTRA_ARGS=--scene @PROJECT@/scenes/tilegrid.scene --size 1600x1000 --map-section Zones --map-select zone:east --sim-mouse 40,left,-170,0,0,170,0 --sim-key 60,ctrl+S"
+          -DFOCUS_PANEL=Map "-DEXPECT_OUTPUT=Map: painted 1 tile\\(s\\) into zone east.*Map: saved maps/tilegrid" -DEXPECT_COUNT=1
+          "-DFILE_MATCHES=@PROJECT@/maps/tilegrid/zones.json=\"id\":\"east\",\"name\":\"EastMarch\",\"tiles\":\\[\\[2,0,2,0\\],\\[1,1,2,1\\],\\[2,2,2,2\\]\\]"
+          "-DFORBID_OUTPUT=\\[error\\]|can't paint" -P "${map_copy}")
+# A click on 0_1 with east selected (0_1 touches no east tile, and would split west's column) is refused: the
+# Console and the Zones tab say why, the zones stay as they were (nothing to save: zones.json untouched).
+add_test(NAME editor_map_viewport_zone_refused
+  COMMAND "${CMAKE_COMMAND}" "-DSOURCE=${KAST_TEST_PROJECT}" "-DEDITOR=$<TARGET_FILE:kast_editor>"
+          "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/map_viewport_zone_refused.png"
+          "-DEXTRA_ARGS=--scene @PROJECT@/scenes/tilegrid.scene --size 1600x1000 --map-section Zones --map-select zone:east --sim-mouse 40,left,0,0,0,-170,0 --sim-key 60,ctrl+S"
+          -DFOCUS_PANEL=Map "-DEXPECT_OUTPUT=\\[warn\\] Map: can't paint tile 0_1 into zone east: zone \"(east|west)\": not contiguous" -DEXPECT_COUNT=1
+          "-DFILE_MATCHES=@PROJECT@/maps/tilegrid/zones.json=\"id\":\"west\",\"name\":\"WestVale\",\"tiles\":\\[\\[0,0,1,2\\]\\].*\"id\":\"east\",\"name\":\"EastMarch\",\"tiles\":\\[\\[2,0,2,2\\]\\]"
+          "-DFORBID_OUTPUT=\\[error\\]|Map: painted|Map: saved" -P "${map_copy}")
+# The zone overlay: each zone tinted with its name on the terrain while the Zones sub-tab shows (not on Setup).
+add_test(NAME editor_map_zone_overlay_setup
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/map_zone_overlay_setup.png"
+          "-DEXTRA_ARGS=--scene ${KAST_TILEGRID} --size 1600x1000 --map-section Setup" -DFOCUS_PANEL=Map
+          "-DFORBID_OUTPUT=\\[error\\]" -P "${map_smoke}")
+add_test(NAME editor_map_zone_overlay_differs
+  COMMAND "${CMAKE_COMMAND}" "-DA=${CMAKE_CURRENT_BINARY_DIR}/map_subtab_zones.png"
+          "-DB=${CMAKE_CURRENT_BINARY_DIR}/map_zone_overlay_setup.png" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/differs_test.cmake")
+set_tests_properties(editor_map_subtab_zones editor_map_zone_overlay_setup PROPERTIES FIXTURES_SETUP map_zone_overlay_shots)
+set_tests_properties(editor_map_zone_overlay_differs PROPERTIES FIXTURES_REQUIRED map_zone_overlay_shots)
 set_tests_properties(editor_map_tab editor_map_tab_old_layout editor_map_tab_pre_mapedit_layout editor_map_tab_zone_own_dock
                      editor_map_no_terrain
                      editor_map_no_project editor_map_click_open
@@ -186,7 +289,10 @@ set_tests_properties(editor_map_tab editor_map_tab_old_layout editor_map_tab_pre
                      editor_map_warnings editor_map_orphan_after_remove editor_map_play_stream editor_map_zones
                      editor_map_zone_scene_open_close editor_map_zone_scene_create editor_map_zone_scene_create_save
                      editor_map_zone_rename_save editor_map_zone_orphan editor_map_zone_root_outside editor_map_zone_play_locked
-                     editor_map_play_zones
+                     editor_map_play_zones editor_map_undo_order_scene_focus editor_map_undo_order_map_focus
+                     editor_map_unsaved_prompt editor_map_wizard_create editor_map_wizard_folder_exists
+                     editor_map_wizard_replace_ask editor_map_wizard_replace_confirm editor_map_wizard_sculpt editor_map_subtab_zones
+                     editor_map_viewport_zone_paint editor_map_viewport_zone_refused editor_map_zone_overlay_setup
                      PROPERTIES LABELS smoke)
 
 # The built player (game "tilegrid" in KAST_GAMES, its copy's 2_0.scene broken): the same streaming path; the broken

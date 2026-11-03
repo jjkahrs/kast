@@ -37,6 +37,10 @@ size_t add_zone(const kast::map::MapInfo& info, MapState& state, const std::stri
                 const std::string& name);
 // Moves the declared tiles of `tiles` into zone `zone`, out of the zones they were in. How many moved.
 size_t paint_zone(const kast::map::MapInfo& info, MapState& state, size_t zone, const TileSet& tiles);
+// paint_zone, refused if it would add a map_zones problem (a zone in pieces, or left with no tiles): then state is as it
+// was, moved is 0 and the problem is returned. The editor's paint strokes (tile grid, Scene view) go through this.
+std::optional<std::string> paint_zone_checked(const kast::map::MapInfo& info, MapState& state, const std::string& folder,
+                                              size_t zone, const TileSet& tiles, size_t& moved);
 // Renames a zone; its scene file (zones/<id>.scene) follows on save (zoneRenames).
 void rename_zone(MapState& state, size_t zone, const std::string& id);
 // Removes a zone. Its tiles go to an edge neighbour's zone (kZoneNeighbours), whose id is returned; with none they are

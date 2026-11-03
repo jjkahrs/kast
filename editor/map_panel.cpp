@@ -1,10 +1,13 @@
 #include "map_panel.h"
 
+#include "assets.h" // fromUtf8
 #include "editor_settings.h"
+#include "map_cli.h" // frameMap
 #include "ui_common.h"
 
 #include <mapedit/terrain_edit.h>
 #include <mapedit/map_edit.h>
+#include <mapedit/zone_edit.h>
 
 #include <components.h>
 #include <log.h>
@@ -17,7 +20,10 @@
 #include <imgui_stdlib.h>
 
 #include <algorithm>
+#include <cctype>
+#include <charconv>
 #include <format>
+#include <ranges>
 
 namespace {
 
@@ -25,9 +31,18 @@ namespace km = kast::map;
 
 constexpr const char* kUnsavedPopup = "Unsaved map changes";
 constexpr const char* kNewMapPopup = "New Map";
+constexpr const char* kReplacePopup = "Replace map link?";
+constexpr std::pair<const char*, MapPanel::Tab> kTabs[] = {
+    {"Setup", MapPanel::Tab::Setup},     {"Zones", MapPanel::Tab::Zones}, {"Terrain", MapPanel::Tab::Terrain},
+    {"Objects", MapPanel::Tab::Objects}, {"Bake", MapPanel::Tab::Bake}};
+// --map-section's section names: the sub-tab each is in.
+constexpr std::pair<const char*, MapPanel::Tab> kSectionTabs[] = {
+    {"Map", MapPanel::Tab::Setup},     {"Tiles", MapPanel::Tab::Setup},    {"Areas", MapPanel::Tab::Objects},
+    {"Spawns", MapPanel::Tab::Objects}, {"Objects", MapPanel::Tab::Objects}};
 constexpr const char* kRemoveTilePopup = "Remove tile?";
 constexpr ImVec4 kDirtyColor = toVec4(kHighlight);
-constexpr ImU32 kBrushColor = kHighlight; // the brush ring
+constexpr ImU32 kBrushColor = kHighlight; // the brush's radius circle
+constexpr ImU32 kBrushFalloffColor = kAccent; // its falloff ring: full strength inside
 constexpr ImVec4 kToolIdle = toVec4(kField); // an idle tool button
 constexpr ImVec4 kToolActive = toVec4(kHighlight); // the active tool
 constexpr float kPickDistance = 10000.0f; // metres: past the far corner of any map in view
@@ -63,6 +78,35 @@ entt::entity firstTerrain(const Document& doc)
     return terrains.empty() ? entt::null : terrains.front();
 }
 
+// The New Map wizard's folder for a map name: lower case letters and digits, '-' and '_' kept, anything else '_'.
+std::string folderFor(const std::string& name)
+{
+    std::string folder;
+    for (const unsigned char c : name)
+        folder += std::isalnum(c) && c < 0x80 ? char(std::tolower(c)) : c == '-' ? '-' : '_';
+    return folder.substr(std::min(folder.find_first_not_of('-'), folder.size())); // not starting with '-'
+}
+
+// The sub-tab whose top bar has tool's button.
+MapPanel::Tab tabOf(MapPanel::Tool tool)
+{
+    switch (tool) {
+    case MapPanel::Tool::Raise:
+    case MapPanel::Tool::Lower:
+    case MapPanel::Tool::Flatten: return MapPanel::Tab::Terrain;
+    case MapPanel::Tool::None:
+    case MapPanel::Tool::SetSpawn: return MapPanel::Tab::Setup;
+    default: return MapPanel::Tab::Objects;
+    }
+}
+
+template <typename T>
+bool parseNumber(std::string_view text, T& out)
+{
+    const auto [end, ec] = std::from_chars(text.data(), text.data() + text.size(), out);
+    return ec == std::errc() && end == text.data() + text.size();
+}
+
 } // namespace
 
 MapPanel::MapPanel(std::filesystem::path settingsFile)
@@ -80,8 +124,12 @@ bool MapPanel::header(const char* label, const char* section, bool defaultOpen)
 void MapPanel::draw(Document& doc, MapSession& session, FileActions& files)
 {
     const bool locked = doc.play != PlayState::Stopped || doc.prefabEdit.has_value();
-    if (locked || !session.doc())
+    if (locked || !session.doc()) {
         tool_ = Tool::None;
+        toolLost_ = true;
+    } else if (std::exchange(toolLost_, false)) { // a map again (Create, Play stopped): the tool follows the sub-tab
+        tool_ = tab_ == Tab::Terrain ? Tool::Raise : Tool::None;
+    }
     if (tool_ != Tool::None && !ImGui::GetTopMostPopupModal() && !ImGui::GetIO().WantTextInput &&
         ImGui::IsKeyPressed(ImGuiKey_Escape, false)) {
         if (!polygon_.empty() || rect_) { // the area being drawn first
@@ -136,21 +184,15 @@ void MapPanel::draw(Document& doc, MapSession& session, FileActions& files)
             ImGui::BeginDisabled(locked);
             drawTopBar(doc, session);
             drawTerrainEntity(doc, session);
-            drawMap(doc, session);
-            drawTiles(doc, session, files, locked);
-            drawZones(doc, session, files);
-            drawTerrain(session);
-            drawAreas(session);
-            drawSpawns(session);
-            drawObjects(session);
-            drawBake(session);
             drawProblems(session);
+            drawTabs(doc, session, files, locked);
             ImGui::EndDisabled();
         }
     }
     ImGui::End();
+    zoneOverlay_ = tabFront_ && tab_ == Tab::Zones && session.doc();
     drawUnsavedPrompt(doc, session);
-    drawNewMapDialog(doc, session);
+    drawNewMapDialog(doc, session, files);
     drawRemoveTilePrompt(session);
     drawHeightRangePrompt(session);
 }
@@ -161,6 +203,84 @@ std::optional<MapPanel::Tool> MapPanel::toolNamed(std::string_view name)
         if (name == n)
             return tool;
     return std::nullopt;
+}
+
+void MapPanel::showSections(const std::vector<std::string>& names)
+{
+    showSections_ = std::set(names.begin(), names.end());
+    for (const std::string& name : names) {
+        for (const auto& [n, tab] : kTabs)
+            if (name == n)
+                selectTab(tab);
+        for (const auto& [n, tab] : kSectionTabs)
+            if (name == n)
+                selectTab(tab);
+    }
+}
+
+void MapPanel::selectTab(Tab tab)
+{
+    followTab(tab);
+}
+
+void MapPanel::followTab(Tab tab)
+{
+    if (tab == tab_)
+        return;
+    tab_ = tab;
+    tool_ = tab == Tab::Terrain ? Tool::Raise : Tool::None;
+    if (tab == Tab::Zones)
+        tiles_.setMode(MapTiles::Mode::Zones);
+    else if (tiles_.mode() == MapTiles::Mode::Zones)
+        tiles_.setMode(MapTiles::Mode::Scenes);
+    if (tab == Tab::Zones || tab == Tab::Terrain)
+        kast::log::info(tab == Tab::Zones ? "Map: Zones tab: the tile grid paints zones"
+                                          : "Map: Terrain tab: Raise tool (left drag in the Scene view)");
+}
+
+void MapPanel::setTool(Tool tool)
+{
+    selectTab(tabOf(tool));
+    tool_ = tool;
+}
+
+void MapPanel::drawTabs(Document& doc, MapSession& session, FileActions& files, bool locked)
+{
+    // Tab-styled buttons that wrap to a second row, so every label stays whole in the narrow default dock (an ImGui
+    // tab bar shrinks or scrolls them instead): the selected one grey with accent text, the others card grey.
+    const ImGuiStyle& style = ImGui::GetStyle();
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, style.TabRounding);
+    for (const auto& [name, t] : kTabs) {
+        const bool selected = t == tab_;
+        if (t != kTabs[0].second) {
+            ImGui::SameLine(0.0f, style.ItemInnerSpacing.x);
+            if (ImGui::GetContentRegionAvail().x < ImGui::CalcTextSize(name).x + style.FramePadding.x * 2.0f)
+                ImGui::NewLine();
+        }
+        ImGui::PushStyleColor(ImGuiCol_Button, toVec4(selected ? kField : kCard));
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, toVec4(selected ? kField : kRowHover));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, toVec4(kField));
+        ImGui::PushStyleColor(ImGuiCol_Text, toVec4(selected ? kAccent : kTextSecondary));
+        if (ImGui::Button(name))
+            followTab(t);
+        ImGui::PopStyleColor(4);
+    }
+    ImGui::PopStyleVar();
+    ImGui::Separator();
+    switch (tab_) {
+    case Tab::Setup:
+        drawMap(doc, session);
+        drawTiles(doc, session, files, locked);
+        break;
+    case Tab::Zones: drawZones(doc, session, files, locked); break;
+    case Tab::Terrain: drawTerrain(session); break;
+    case Tab::Objects:
+        drawAreas(session);
+        drawSpawns(session);
+        drawObjects(session);
+        break;
+    case Tab::Bake: drawBake(session); break;
+    }
 }
 
 void MapPanel::guardMapChange(Document& doc, const MapSession& session)
@@ -182,17 +302,20 @@ void MapPanel::guardMapChange(Document& doc, const MapSession& session)
 bool MapPanel::sceneInput(MapSession& session, const SceneViewport::Input& input)
 {
     hover_.reset();
+    zoneHover_.reset();
     mapedit::MapDoc* z = session.doc();
     const ImGuiIO& io = ImGui::GetIO();
     const bool click = input.hovered && !input.cameraDrag && !io.KeyAlt && ImGui::IsMouseClicked(ImGuiMouseButton_Left);
     const bool dragging = drag_.kind != Drag::Kind::None;
-    if (!z || (tool_ == Tool::None && !click && !dragging))
+    const bool zones = zonePainting();
+    sculptHotkeys(input.hovered || ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows));
+    if (!z || (tool_ == Tool::None && !zones && !click && !dragging))
         return false;
     std::string err;
     const auto info = z->info(err);
     if (!info)
         return tool_ != Tool::None;
-    if (input.hovered || stroking_ || dragging || rect_) { // the ground under the mouse (in-memory heights)
+    if (input.hovered || stroking_ || dragging || rect_ || zoneLast_) { // the ground under the mouse (in-memory heights)
         const kast::Ray ray = kast::screenRay(input.viewProj, io.MousePos.x - input.x, io.MousePos.y - input.y,
                                               input.width, input.height, bgfx::getCaps()->homogeneousDepth);
         hover_ = mapedit::raycast(*info, z->state, {ray.origin.x, ray.origin.y, ray.origin.z},
@@ -200,6 +323,8 @@ bool MapPanel::sceneInput(MapSession& session, const SceneViewport::Input& input
     }
     if (click && hover_) // whatever the tool: the Terrain section's heightmap tile
         tile_ = km::tile_of((*hover_)[0], (*hover_)[2]);
+    if (zones)
+        return zoneInput(*z, *info, click);
     switch (tool_) {
     case Tool::Raise:
     case Tool::Lower:
@@ -231,9 +356,14 @@ void MapPanel::drawSceneOverlay(const MapSession& session, ImDrawList* draw, con
         return;
     draw->PushClipRect(ImVec2(x, y), ImVec2(x + width, y + height), true);
     const GroundDraw g{draw, viewProj, x, y, width, height, *info, z->state, centre};
+    if (zoneOverlay_)
+        drawZoneOverlay(g, *z, *info);
     drawObjectOverlays(g);
-    if (hover_ && (tool_ == Tool::Raise || tool_ == Tool::Lower || tool_ == Tool::Flatten))
+    if (hover_ && (tool_ == Tool::Raise || tool_ == Tool::Lower || tool_ == Tool::Flatten)) {
         g.circle((*hover_)[0], (*hover_)[2], brush_.radius, kBrushColor);
+        if (const float inner = brush_.radius * (1.0f - brush_.falloff); inner > 0.0f && brush_.falloff > 0.0f)
+            g.circle((*hover_)[0], (*hover_)[2], inner, kBrushFalloffColor);
+    }
     draw->PopClipRect();
 }
 
@@ -262,17 +392,17 @@ void MapPanel::drawTopBar(Document& doc, MapSession& session)
     if (ImGui::Button("Redo"))
         z->redo();
     ImGui::EndDisabled();
-    // The Scene view tools, wrapped to the tab's width.
-    toolButton("Raise", Tool::Raise);
-    toolButton("Lower", Tool::Lower);
-    toolButton("Flatten", Tool::Flatten);
-    toolButton("Area Rect", Tool::AreaRect);
-    toolButton("Area Polygon", Tool::AreaPolygon);
-    toolButton("Place Spawn", Tool::PlaceSpawn);
-    toolButton("Path Points", Tool::PathPoints);
-    toolButton("Place Object", Tool::PlaceObject);
-    toolButton("Scatter", Tool::Scatter);
-    ImGui::NewLine();
+    // The sub-tab's Scene view tools, wrapped to the tab's width.
+    // (The Terrain sub-tab's sculpt tools sit with their brush settings, in the tab.)
+    if (tab_ == Tab::Objects) {
+        toolButton("Area Rect", Tool::AreaRect);
+        toolButton("Area Polygon", Tool::AreaPolygon);
+        toolButton("Place Spawn", Tool::PlaceSpawn);
+        toolButton("Path Points", Tool::PathPoints);
+        toolButton("Place Object", Tool::PlaceObject);
+        toolButton("Scatter", Tool::Scatter);
+        ImGui::NewLine();
+    }
     ImGui::EndDisabled();
     if (tool_ != Tool::None)
         ImGui::TextDisabled("Left mouse in the Scene view: the tool. Esc: no tool.");
@@ -467,8 +597,12 @@ void MapPanel::drawInstance(mapedit::MapDoc& z, const MapSession& session)
 
 void MapPanel::drawTiles(Document& doc, MapSession& session, FileActions& files, bool locked)
 {
-    if (!header("Tiles", "Tiles", true))
-        return;
+    if (header("Tiles", "Tiles", true))
+        drawTileGrid(doc, session, files, locked);
+}
+
+void MapPanel::drawTileGrid(Document& doc, MapSession& session, FileActions& files, bool locked)
+{
     mapedit::MapDoc* z = session.doc();
     std::string err;
     const std::optional<km::MapInfo> info = z ? z->info(err) : std::nullopt;
@@ -502,8 +636,14 @@ void MapPanel::drawProblems(const MapSession& session)
     shownProblems_ = session.problems().size();
     if (std::exchange(openProblems_, false))
         ImGui::SetNextItemOpen(true);
+    // Above the sub-tabs, always: its count in the error color while there are any.
     const std::string label = std::format("Problems ({})###Problems", session.problems().size());
-    if (!header(label.c_str(), "Problems"))
+    if (!session.problems().empty())
+        ImGui::PushStyleColor(ImGuiCol_Text, kErrorColor);
+    const bool open = header(label.c_str(), "Problems");
+    if (!session.problems().empty())
+        ImGui::PopStyleColor();
+    if (!open)
         return;
     if (!session.doc())
         ImGui::TextDisabled("No map open");
@@ -545,17 +685,15 @@ void MapPanel::request(Document& doc, MapSession& session, Pending pending)
 
 void MapPanel::run(Document& doc, MapSession& session, const Pending& pending)
 {
-    tool_ = Tool::None;
+    tool_ = tab_ == Tab::Terrain ? Tool::Raise : Tool::None; // as the sub-tab sets it: sculpt the new map straight away
     switch (pending.kind) {
     case Pending::Kind::PickMap:
         setTerrainMap(doc, pending.map); // the session loads it next frame
         break;
     case Pending::Kind::NewMap:
-        newFolder_.clear();
-        newName_.clear();
-        newError_.clear();
-        newId_ = mapedit::next_map_id(session.project());
+        newMap_ = {.id = mapedit::next_map_id(session.project())};
         openNewMap_ = true;
+        askReplace_ = false;
         break;
     case Pending::Kind::None: break;
     }
@@ -605,36 +743,142 @@ void MapPanel::drawUnsavedPrompt(Document& doc, MapSession& session)
     ImGui::EndPopup();
 }
 
-void MapPanel::drawNewMapDialog(Document& doc, MapSession& session)
+bool MapPanel::openWizard(Document& doc, MapSession& session, std::string_view spec)
+{
+    std::vector<std::string_view> parts;
+    for (const auto part : std::views::split(spec, ','))
+        parts.emplace_back(part.begin(), part.end());
+    NewMap filled;
+    filled.name = std::string(parts[0]);
+    if (parts.size() != 1 &&
+        (parts.size() != 6 || !parseNumber(parts[1], filled.width) || !parseNumber(parts[2], filled.depth) ||
+         !parseNumber(parts[3], filled.min) || !parseNumber(parts[4], filled.max) ||
+         (parts[5] != "flat" && parts[5] != "generated")))
+        return false;
+    filled.generated = parts.size() == 6 && parts[5] == "generated";
+    request(doc, session, {Pending::Kind::NewMap, 0});
+    if (openNewMap_) { // no unsaved-map prompt in between
+        filled.id = newMap_.id;
+        newMap_ = filled;
+    }
+    return true;
+}
+
+std::string MapPanel::newMapBlocker(const MapSession& session) const
+{
+    const NewMap& w = newMap_;
+    if (w.folder.empty())
+        return "Enter a name";
+    if (std::filesystem::exists(session.project().root / "maps" / fromUtf8(w.folder)))
+        return std::format("maps/{} already exists: choose another name (or folder under Advanced)", w.folder);
+    if (std::ranges::any_of(session.project().maps, [&](const mapedit::ProjectMap& m) { return m.info.id == w.id; }))
+        return std::format("Id {} is already used", w.id);
+    if (!(w.min < w.max))
+        return "Height Max must be above Min";
+    return {};
+}
+
+void MapPanel::drawNewMapDialog(Document& doc, MapSession& session, FileActions& files)
 {
     if (std::exchange(openNewMap_, false))
         ImGui::OpenPopup(kNewMapPopup);
-    if (!ImGui::BeginPopupModal(kNewMapPopup, nullptr, ImGuiWindowFlags_AlwaysAutoResize))
+    if (!ImGui::BeginPopupModal(kNewMapPopup, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        pressCreate_ = pressReplace_ = false;
         return;
-    ImGui::InputText("Folder", &newFolder_);
-    ImGui::InputText("Name", &newName_);
-    ImGui::InputInt("Id", &newId_);
-    ImGui::InputInt("Tiles X", &newWidth_);
-    ImGui::InputInt("Tiles Z", &newDepth_);
-    newId_ = std::clamp(newId_, 0, 0xFFFF);
-    const bool used = std::ranges::any_of(session.project().maps, [&](const mapedit::ProjectMap& m) { return m.info.id == newId_; });
-    if (used)
-        ImGui::TextColored(kErrorColor, "Id %d is already used", newId_);
-    ImGui::BeginDisabled(used || newFolder_.empty());
-    if (ImGui::Button("Create")) {
-        if (session.newMap(newFolder_, newName_.empty() ? newFolder_ : newName_, uint16_t(newId_), newWidth_, newDepth_,
-                        newError_)) {
-            setTerrainMap(doc, newId_);
+    }
+    NewMap& w = newMap_;
+    ImGui::InputText("Name", &w.name);
+    if (!w.folderEdited)
+        w.folder = folderFor(w.name);
+    ImGui::InputInt("Tiles X", &w.width);
+    ImGui::InputInt("Tiles Z", &w.depth);
+    w.width = std::clamp(w.width, 1, mapedit::kMaxMapTiles);
+    w.depth = std::clamp(w.depth, 1, mapedit::kMaxMapTiles);
+    ImGui::InputFloat("Height Min", &w.min, 0.0f, 0.0f, "%.1f m");
+    ImGui::InputFloat("Height Max", &w.max, 0.0f, 0.0f, "%.1f m");
+    int start = w.generated ? 1 : 0;
+    ImGui::TextUnformatted("Start terrain");
+    ImGui::SameLine();
+    ImGui::RadioButton("Flat", &start, 0);
+    ImGui::SameLine();
+    ImGui::RadioButton("Generated", &start, 1);
+    w.generated = start == 1;
+    if (w.generated)
+        ImGui::TextDisabled("Generate's settings (Terrain tab): seed %u, scale %.0f m", noise_.seed, noise_.scale);
+    if (ImGui::TreeNode("Advanced")) {
+        if (ImGui::InputText("Folder", &w.folder))
+            w.folderEdited = true;
+        ImGui::InputInt("Id", &w.id);
+        w.id = std::clamp(w.id, 0, 0xFFFF);
+        ImGui::TreePop();
+    }
+    ImGui::TextDisabled("maps/%s, id %d: one zone of every tile; saved with the scene", w.folder.c_str(), w.id);
+
+    const std::string blocker = newMapBlocker(session);
+    if (!blocker.empty() && !w.name.empty())
+        ImGui::TextColored(kErrorColor, "%s", blocker.c_str());
+    ImGui::BeginDisabled(!blocker.empty());
+    bool create = ImGui::Button("Create");
+    ImGui::EndDisabled();
+    if (std::exchange(pressCreate_, false)) {
+        create = blocker.empty();
+        if (!create)
+            kast::log::info("Map: New Map: Create is disabled: " + blocker);
+    }
+    if (create || askReplace_) {
+        const bool confirmed = std::exchange(askReplace_, false);
+        if (session.doc() && !confirmed) { // the scene's Terrain names a map: ask first
+            ImGui::OpenPopup(kReplacePopup);
+            kast::log::info(std::format("Map: New Map: the scene's Terrain uses maps/{}; asking before replacing the link",
+                                        session.doc()->folder));
+        } else if (createMap(doc, session, files)) {
             ImGui::CloseCurrentPopup();
         }
     }
-    ImGui::EndDisabled();
     ImGui::SameLine();
-    if (ImGui::Button("Cancel") || ImGui::IsKeyPressed(ImGuiKey_Escape))
+    if (ImGui::Button("Cancel") || (ImGui::IsKeyPressed(ImGuiKey_Escape) && !ImGui::IsPopupOpen(kReplacePopup)))
         ImGui::CloseCurrentPopup();
-    if (!newError_.empty())
-        ImGui::TextColored(kErrorColor, "%s", newError_.c_str());
+    if (!w.error.empty())
+        ImGui::TextColored(kErrorColor, "%s", w.error.c_str());
+
+    if (ImGui::BeginPopupModal(kReplacePopup, nullptr, ImGuiWindowFlags_AlwaysAutoResize)) {
+        const std::string old = session.doc() ? session.doc()->folder : "";
+        ImGui::Text("This scene's Terrain uses maps/%s.", old.c_str());
+        ImGui::Text("Create points it at maps/%s instead. maps/%s stays on disk, unchanged.", w.folder.c_str(),
+                    old.c_str());
+        if (ImGui::Button("Replace") || std::exchange(pressReplace_, false)) {
+            ImGui::CloseCurrentPopup();
+            askReplace_ = true; // the wizard creates next frame, past the question
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Cancel") || ImGui::IsKeyPressed(ImGuiKey_Escape))
+            ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+    }
     ImGui::EndPopup();
+}
+
+bool MapPanel::createMap(Document& doc, MapSession& session, FileActions& files)
+{
+    NewMap& w = newMap_;
+    w.error.clear();
+    if (!session.newMap(w.folder, w.name.empty() ? w.folder : w.name, uint16_t(w.id), w.width, w.depth, w.error))
+        return false;
+    // The wizard's choices are the new map's first state, not undo steps: there is nothing before it to go back to.
+    mapedit::MapDoc& z = *session.doc();
+    std::string err;
+    mapedit::zones_list(*z.info(err), z.state, z.folder); // one zone of every tile
+    mapedit::set_height_range(*z.info(err), z.state, w.min, w.max);
+    const km::MapInfo info = *z.info(err);
+    if (w.generated)
+        mapedit::generate_heights(info, z.state, noise_);
+    z.state.manifest["spawn"]["pos"][1] = kast::jsonNumber(*mapedit::ground_y(info, z.state, info.spawn[0], info.spawn[2]));
+    setTerrainMap(doc, w.id);
+    map_cli::frameMap(doc.camera, z); // in view straight away, as Focus on the map
+    kast::log::info(std::format("Map: New Map maps/{}: {} x {} tiles, heights {} .. {} m, {} terrain, one zone", w.folder,
+                                w.width, w.depth, w.min, w.max, w.generated ? "generated" : "flat"));
+    files.save(); // the scene (asking where if untitled), then the map (FileActions::extra)
+    return true;
 }
 
 void MapPanel::drawRemoveTilePrompt(MapSession& session)
