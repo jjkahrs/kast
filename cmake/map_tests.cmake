@@ -201,6 +201,48 @@ add_test(NAME editor_map_unsaved_prompt
           "-DEXTRA_ARGS=--scene ${KAST_TILEGRID} --size 1600x1000 --map tilegrid --paint-zone east,1,0,1,2 --open-scene ${KAST_TEST_PROJECT}/additive_a.scene"
           -DFOCUS_PANEL=Scene -DFRAMES=40 "-DEXPECT_OUTPUT=Unsaved changes: tilegrid and maps/tilegrid"
           "-DFORBID_OUTPUT=\\[error\\]|Opened scene '[^']*additive_a|Saved" -P "${map_smoke}")
+# The New Map wizard (docs/editor/map-builder.html#new-map). On the copy's empty scene one Create adds the Terrain
+# entity, makes maps/highlands (folder from the name) with one zone of every tile and the height range, generated
+# heights, and saves the scene and the map.
+set(map_wizard_files [=[@PROJECT@/maps/highlands/map.json="name":"Highlands","tiles":\[\[0,0,2,1\]\],"heightRange":\[-10\.0,60\.0\];@PROJECT@/maps/highlands/zones.json="zones":\[{"id":"highlands","name":"Highlands","tiles":\[\[0,0,2,1\]\]}\];@PROJECT@/scenes/empty.scene="name":"Terrain".*"Terrain":{"map":0,]=])
+add_test(NAME editor_map_wizard_create
+  COMMAND "${CMAKE_COMMAND}" "-DSOURCE=${KAST_TEST_PROJECT}" "-DEDITOR=$<TARGET_FILE:kast_editor>"
+          "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/map_wizard_create.png"
+          "-DEXTRA_ARGS=--scene @PROJECT@/scenes/empty.scene --size 1600x1000 --map-wizard Highlands,3,2,-10,60,generated --map-wizard-create"
+          -DFOCUS_PANEL=Map
+          "-DEXPECT_OUTPUT=Map: new map maps/highlands \\(id 0, 3x2 tiles\\).*Map: added a Terrain entity.*Map: New Map maps/highlands: 3 x 2 tiles, heights -10 .. 60 m, generated terrain, one zone.*Saved scene '[^']*scenes/empty.scene'.*Map: saved maps/highlands"
+          "-DMUST_EXIST=@PROJECT@/maps/highlands/heights/0_0.r16;@PROJECT@/maps/highlands/heights/2_1.r16"
+          "-DFILE_MATCHES=${map_wizard_files}" "-DFORBID_OUTPUT=\\[error\\]|asking" -P "${map_copy}")
+# The folder is taken (the name Tilegrid makes maps/tilegrid): Create is disabled, nothing is made or saved.
+add_test(NAME editor_map_wizard_folder_exists
+  COMMAND "${CMAKE_COMMAND}" "-DSOURCE=${KAST_TEST_PROJECT}" "-DEDITOR=$<TARGET_FILE:kast_editor>"
+          "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/map_wizard_folder_exists.png"
+          "-DEXTRA_ARGS=--scene @PROJECT@/scenes/empty.scene --size 1600x1000 --map-wizard Tilegrid --map-wizard-create"
+          -DFOCUS_PANEL=Map "-DEXPECT_OUTPUT=Map: New Map: Create is disabled: maps/tilegrid already exists"
+          "-DFORBID_OUTPUT=\\[error\\]|Map: new map|Saved|Terrain entity" -P "${map_copy}")
+# The scene's Terrain already names maps/tilegrid: Create asks before replacing the link (nothing made yet); Replace
+# makes and saves maps/highlands (flat, 2 x 2, 0 .. 100 m) and points the Terrain at it. maps/tilegrid keeps every file.
+add_test(NAME editor_map_wizard_replace_ask
+  COMMAND "${CMAKE_COMMAND}" "-DSOURCE=${KAST_TEST_PROJECT}" "-DEDITOR=$<TARGET_FILE:kast_editor>"
+          "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/map_wizard_replace_ask.png"
+          "-DEXTRA_ARGS=--scene @PROJECT@/scenes/tilegrid.scene --size 1600x1000 --map-wizard Highlands --map-wizard-create"
+          -DFOCUS_PANEL=Map "-DEXPECT_OUTPUT=Map: New Map: the scene's Terrain uses maps/tilegrid. asking before replacing the link"
+          "-DMUST_NOT_EXIST=@PROJECT@/maps/highlands" "-DKEEP_FILES=@PROJECT@/maps/tilegrid"
+          "-DFORBID_OUTPUT=\\[error\\]|Map: new map|Saved" -P "${map_copy}")
+add_test(NAME editor_map_wizard_replace_confirm
+  COMMAND "${CMAKE_COMMAND}" "-DSOURCE=${KAST_TEST_PROJECT}" "-DEDITOR=$<TARGET_FILE:kast_editor>"
+          "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/map_wizard_replace_confirm.png"
+          "-DEXTRA_ARGS=--scene @PROJECT@/scenes/tilegrid.scene --size 1600x1000 --map-wizard Highlands --map-wizard-create --map-wizard-confirm"
+          -DFOCUS_PANEL=Map
+          "-DEXPECT_OUTPUT=asking before replacing the link.*Map: New Map maps/highlands: 2 x 2 tiles, heights 0 .. 100 m, flat terrain, one zone.*Saved scene '[^']*scenes/tilegrid.scene'.*Map: saved maps/highlands"
+          "-DFILE_MATCHES=@PROJECT@/scenes/tilegrid.scene=\"Terrain\":{\"map\":0,;@PROJECT@/maps/highlands/zones.json=\"tiles\":\\[\\[0,0,1,1\\]\\]"
+          "-DKEEP_FILES=@PROJECT@/maps/tilegrid" "-DFORBID_OUTPUT=\\[error\\]" -P "${map_copy}")
+# Sub-tabs: --map-section Zones selects the Zones sub-tab, whose tile grid paints zones (the Paint zone mode).
+add_test(NAME editor_map_subtab_zones
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/map_subtab_zones.png"
+          "-DEXTRA_ARGS=--scene ${KAST_TILEGRID} --size 1600x1000 --map-section Zones --map-select zone:west"
+          -DFOCUS_PANEL=Map "-DEXPECT_OUTPUT=Map: Zones tab: the tile grid paints zones" -DEXPECT_COUNT=1
+          "-DFORBID_OUTPUT=\\[error\\]|Terrain tab" -P "${map_smoke}")
 set_tests_properties(editor_map_tab editor_map_tab_old_layout editor_map_tab_pre_mapedit_layout editor_map_tab_zone_own_dock
                      editor_map_no_terrain
                      editor_map_no_project editor_map_click_open
@@ -210,7 +252,8 @@ set_tests_properties(editor_map_tab editor_map_tab_old_layout editor_map_tab_pre
                      editor_map_zone_scene_open_close editor_map_zone_scene_create editor_map_zone_scene_create_save
                      editor_map_zone_rename_save editor_map_zone_orphan editor_map_zone_root_outside editor_map_zone_play_locked
                      editor_map_play_zones editor_map_undo_order_scene_focus editor_map_undo_order_map_focus
-                     editor_map_unsaved_prompt
+                     editor_map_unsaved_prompt editor_map_wizard_create editor_map_wizard_folder_exists
+                     editor_map_wizard_replace_ask editor_map_wizard_replace_confirm editor_map_subtab_zones
                      PROPERTIES LABELS smoke)
 
 # The built player (game "tilegrid" in KAST_GAMES, its copy's 2_0.scene broken): the same streaming path; the broken

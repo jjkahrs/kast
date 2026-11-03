@@ -128,7 +128,11 @@
 </tr>
 <tr>
 <td><code>--map-section &lt;Name[,Name...]&gt;</code></td>
-<td>Expand these sections of the Map tab (<code>Map</code>, <code>Tiles</code>, <code>Zones</code>, <code>Terrain</code>, <code>Areas</code>, <code>Spawns</code>, <code>Objects</code>, <code>Bake</code>, <code>Problems</code>; e.g. <code>Map,Problems</code>) and collapse the others after the first 10 frames, for screenshots; pair it with <code>--focus-panel Map</code> to bring the tab to the front.</td>
+<td>After the first 10 frames, select the <a href="map-builder.html#map-tab">Map tab's sub-tab</a> of the last section named (<code>Map</code> and <code>Tiles</code>: Setup; <code>Zones</code>; <code>Terrain</code>; <code>Areas</code>, <code>Spawns</code> and <code>Objects</code>: Objects; <code>Bake</code>; a sub-tab's own name, <code>Setup</code>, works too), as a click on it does (its tool follows), and expand these sections (<code>Problems</code> too) and collapse the others, for screenshots; e.g. <code>Map,Problems</code>. Pair it with <code>--focus-panel Map</code> to bring the tab to the front.</td>
+</tr>
+<tr id="map-wizard">
+<td><code>--map-wizard name[,tilesX,tilesZ,min,max,flat|generated]</code></td>
+<td>After 12 frames, open the <a href="map-builder.html#new-map">New Map wizard</a> (as <strong>New Map...</strong> does) with these fields filled in (only the name: 2 x 2 tiles, 0 .. 100 m, flat). A name with spaces cannot be passed. <code>--map-wizard-create</code> presses <strong>Create</strong> two frames later (a disabled Create logs <code>Map: New Map: Create is disabled: &lt;reason&gt;</code> instead); <code>--map-wizard-confirm</code> presses <strong>Replace</strong> in the replace-link question two frames after that. Pair with <code>--focus-panel Map</code>.</td>
 </tr>
 <tr id="map-click">
 <td><code>--map-click tx,tz</code> (repeatable)</td>
@@ -155,7 +159,7 @@ overlay). <code>--map-click</code> always clicks in Tile scenes mode.</td>
 </tr>
 <tr>
 <td><code>--map-tool &lt;Tool&gt;</code></td>
-<td>Make that Map tab tool active after the first 10 frames, as its button does: <code>Raise</code>, <code>Lower</code>, <code>Flatten</code>, <code>SetSpawn</code> (Place on terrain), <code>AreaRect</code>, <code>AreaPolygon</code>, <code>PlaceSpawn</code>, <code>PathPoints</code>, <code>PlaceObject</code> or <code>Scatter</code>. Pair it with <code>--sim-mouse</code> (without <code>--play</code> it acts on the Scene view) for tests and screenshots of the tools: a click or drag uses the tool, a hover shows the brush ring.</td>
+<td>Make that Map tab tool active after the first 10 frames, as its button does (its sub-tab is selected): <code>Raise</code>, <code>Lower</code>, <code>Flatten</code>, <code>SetSpawn</code> (Place on terrain), <code>AreaRect</code>, <code>AreaPolygon</code>, <code>PlaceSpawn</code>, <code>PathPoints</code>, <code>PlaceObject</code> or <code>Scatter</code>. Pair it with <code>--sim-mouse</code> (without <code>--play</code> it acts on the Scene view) for tests and screenshots of the tools: a click or drag uses the tool, a hover shows the brush ring.</td>
 </tr>
 <tr>
 <td><code>--map-select &lt;id&gt;|object:tx,tz,i|zone:id</code></td>
@@ -811,7 +815,7 @@ implicit zone explicit, named by the map's folder)</td></tr>
 </tr>
 </tbody>
 </table>
-<p>The Map UI flags <code>--focus-panel Map</code>, <code>--map-section</code>, <code>--map-tool</code>, <code>--map-select</code>, <code>--bake</code>,
+<p>The Map UI flags <code>--focus-panel Map</code>, <code>--map-section</code>, <code>--map-wizard</code>, <code>--map-tool</code>, <code>--map-select</code>, <code>--bake</code>,
 <code>--mapbake</code> and <code>--file-save</code> are in the table above.</p>
 <p>Invalid arguments exit with code 2; init failures (SDL, window, bgfx) log the reason, show a message box, and exit 1.</p>
 </main>

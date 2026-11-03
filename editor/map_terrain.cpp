@@ -41,8 +41,6 @@ const char* brushName(mapedit::BrushMode mode)
 
 void MapPanel::drawTerrain(MapSession& session)
 {
-    if (!header("Terrain", "Terrain"))
-        return;
     mapedit::MapDoc* z = session.doc();
     std::string err;
     const auto info = z ? z->info(err) : std::nullopt;

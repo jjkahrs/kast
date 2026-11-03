@@ -72,10 +72,8 @@ void MapPanel::endZoneStroke(MapSession& session)
     }
 }
 
-void MapPanel::drawZones(Document& doc, MapSession& session, FileActions& files)
+void MapPanel::drawZones(Document& doc, MapSession& session, FileActions& files, bool locked)
 {
-    if (!header("Zones", "Zones"))
-        return;
     mapedit::MapDoc* z = session.doc();
     std::string err;
     const std::optional<km::MapInfo> info = z ? z->info(err) : std::nullopt;
@@ -126,6 +124,8 @@ void MapPanel::drawZones(Document& doc, MapSession& session, FileActions& files)
         it != zones.list.end())
         drawZoneFields(doc, session, files, *info, *it);
     tiles_.drawZoneWarnings();
+    ImGui::SeparatorText("Tiles");
+    drawTileGrid(doc, session, files, locked);
 }
 
 void MapPanel::drawZoneFields(Document& doc, MapSession& session, FileActions& files, const km::MapInfo& info,

@@ -73,8 +73,27 @@ right drag flies, Alt + left drag orbits, middle drag pans, the wheel zooms).</p
 <h2 id="map-tab">The Map tab</h2>
 <p>The tab sits beside <strong>Entities</strong> in the left dock (also added there on the first run with an older
 <code>imgui.ini</code>; a layout saved while the editor had a separate Zone tab gives Map that tab's place, or drops it). On top: the open map (<code>maps/&lt;folder&gt; (id N)</code>, with <code>* unsaved</code> while there are
-unsaved edits), <strong>Save Map</strong>, <strong>Undo</strong>, <strong>Redo</strong> and the tool buttons (the active one highlighted). Below
-it, collapsing sections:</p>
+unsaved edits), <strong>Save Map</strong>, <strong>Undo</strong>, <strong>Redo</strong>, the selected sub-tab's tool buttons (the active one
+highlighted) and <strong>Problems</strong>, always shown (its count in red while there are any). Below them, the sub-tabs:</p>
+<table>
+<thead>
+<tr>
+<th>Sub-tab</th>
+<th>Sections</th>
+<th>Tool when selected</th>
+</tr>
+</thead>
+<tbody>
+<tr><td><strong>Setup</strong></td><td>Map (with <a href="#new-map">New Map...</a>), Tiles</td><td>none (the Map section's <strong>Place on terrain</strong> is here)</td></tr>
+<tr><td><strong>Zones</strong></td><td>Zones, with the tile grid below the zone list</td><td>the grid's <strong>Paint zone</strong> mode: a drag on the grid paints the selected zone</td></tr>
+<tr><td><strong>Terrain</strong></td><td>Terrain</td><td><strong>Raise</strong> (the top bar has Raise, Lower, Flatten): a left drag in the Scene view sculpts</td></tr>
+<tr><td><strong>Objects</strong></td><td>Areas, Spawns, Objects</td><td>none (the top bar has Area Rect, Area Polygon, Place Spawn, Path Points, Place Object, Scatter)</td></tr>
+<tr><td><strong>Bake</strong></td><td>Bake</td><td>none</td></tr>
+</tbody>
+</table>
+<p>Selecting a sub-tab sets the tool as above (Zones and Terrain log <code>Map: Zones tab: ...</code> / <code>Map: Terrain tab: ...</code>); leaving
+Zones puts the grid back in Tile scenes mode. Esc still clears the tool. In a narrow dock the sub-tab labels shrink (hover one
+for its full name). The sections:</p>
 <table>
 <thead>
 <tr>
@@ -86,8 +105,7 @@ it, collapsing sections:</p>
 <tbody>
 <tr id="map">
 <td><strong>Map</strong></td>
-<td>the map picker (every <code>maps/*/map.json</code> of the project) and <strong>New Map...</strong> (folder: letters, digits, <code>_</code>,
-<code>-</code>; name; id, the lowest unused by default, a used one refused; 1 to 64 by 1 to 64 tiles (<a href="#map-size-limits">Map size limits</a>); nothing is written until you save);
+<td>the map picker (every <code>maps/*/map.json</code> of the project) and <strong>New Map...</strong> (the <a href="#new-map">New Map wizard</a>);
 id, name, material (a project <code>.mat</code>), <strong>Type</strong> (World or Instance, <a href="#instance">below</a>), player spawn (x, z on the ground, heading; <strong>Place on terrain</strong> then
 click) and own <code>nav</code> settings. Changing the id changes the Terrain entity's <code>map</code> too.</td>
 <td><code>map.json</code></td>
@@ -154,11 +172,29 @@ then next to <code>kast_editor.exe</code></td>
 </tr>
 <tr id="problems">
 <td><strong>Problems</strong></td>
-<td>the last validation (on load, a blocked save or a bake); opens by itself when there are new ones</td>
+<td>the last validation (on load, a blocked save or a bake); above the sub-tabs, so always in view; opens by itself when there are new ones</td>
 <td></td>
 </tr>
 </tbody>
 </table>
+<h3 id="new-map">New Map wizard</h3>
+<p><strong>New Map...</strong> (Setup sub-tab; the unsaved-map prompt first if the open map has unsaved edits) opens one dialog:</p>
+<ul>
+<li><strong>Name</strong>: the map's name. The folder is made from it (lower case; letters, digits, <code>-</code> and <code>_</code> kept, anything
+  else <code>_</code>), shown under the fields with the id.</li>
+<li><strong>Tiles X</strong> / <strong>Tiles Z</strong>: 1 to 64 each (<a href="#map-size-limits">Map size limits</a>); 2 x 2 by default.</li>
+<li><strong>Height Min</strong> / <strong>Height Max</strong>: the height range, 0 .. 100 m by default; Max must be above Min.</li>
+<li><strong>Start terrain</strong>: <strong>Flat</strong>, or <strong>Generated</strong> (<a href="#generated-terrain">Generate</a>'s fBm with the
+  Terrain sub-tab's current settings, over the whole height range).</li>
+<li><strong>Advanced</strong> (collapsed): <strong>Folder</strong> (typing one stops it following the name) and <strong>Id</strong> (the lowest
+  unused by default).</li>
+</ul>
+<p><strong>Create</strong> is disabled, with the reason in red, while the name is empty, <code>maps/&lt;folder&gt;</code> already exists, the id is
+used or Max is not above Min (a folder that is not a plain name is refused on Create, the reason shown). On Create: the map is made with
+one zone of every tile (<code>zones.json</code>), the height range and the start terrain (its first state, not an undo step), the scene's
+first Terrain entity is pointed at it (added if there is none; one scene undo step), and File &gt; Save writes the scene (asking where if
+it is untitled) and then the map. If the scene's Terrain already names a map, Create first asks <strong>Replace map link?</strong>:
+<strong>Replace</strong> goes on, <strong>Cancel</strong> goes back to the wizard. The old map's files are never touched.</p>
 <p>Everything the tab does is also logged to the <strong>Console</strong> (<code>Map: ...</code> lines: loads, strokes, placements, saves,
 problems, Bake output).</p>
 <h3 id="instance">Instance maps</h3>

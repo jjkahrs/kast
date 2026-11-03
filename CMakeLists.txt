@@ -997,7 +997,7 @@ file(WRITE "${KAST_SHADOW_PROJECT}/map_tools.scene" "${map_tools}")
 function(kast_mapedit_tool_test name args)
   add_test(NAME editor_mapedit_tool_${name}
     COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/map_tool_${name}.png"
-            "-DEXTRA_ARGS=--scene ${KAST_SHADOW_PROJECT}/map_tools.scene --map-section Terrain ${args}" -DFOCUS_PANEL=Map
+            "-DEXTRA_ARGS=--scene ${KAST_SHADOW_PROJECT}/map_tools.scene ${args}" -DFOCUS_PANEL=Map
             ${ARGN} -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/smoke_test.cmake")
 endfunction()
 kast_mapedit_tool_test(raise "--map-tool Raise --sim-mouse 40,left,40,0,0" "-DEXPECT_OUTPUT=Map: Raise stroke"
@@ -1007,6 +1007,9 @@ kast_mapedit_tool_test(set_spawn "--map-tool SetSpawn --sim-mouse 40,left,0,0,0"
                     "-DEXPECT_OUTPUT=Map: player spawn at 25[0-9][.][0-9], [0-9.]+, 25[0-9][.][0-9]" -DEXPECT_COUNT=1
                     "-DFORBID_OUTPUT=\\\\[error\\\\]")
 kast_mapedit_tool_test(none "--sim-mouse 40,left,0,0,0" "-DFORBID_OUTPUT=Map: (.* stroke|player spawn)|\\\\[error\\\\]")
+# The tool follows the Map tab's sub-tab (no --map-tool): the Terrain sub-tab is Raise, so the click is a stroke.
+kast_mapedit_tool_test(terrain_tab "--map-section Terrain --sim-mouse 40,left,40,0,0"
+                    "-DEXPECT_OUTPUT=Map: Terrain tab: Raise tool.*Map: Raise stroke" "-DFORBID_OUTPUT=\\\\[error\\\\]")
 # Areas, spawns, paths, objects (map_objects.cpp): each tool's click or drag is one logged edit at the pivot.
 kast_mapedit_tool_test(area_rect "--map-tool AreaRect --sim-mouse 40,left,80,-40,0"
                     "-DEXPECT_OUTPUT=Map: area area added [(][0-9]+ x [0-9]+ m[)]" -DEXPECT_COUNT=1

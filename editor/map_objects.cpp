@@ -957,8 +957,6 @@ void MapPanel::drawObjectFields(MapSession& session)
 
 void MapPanel::drawBake(MapSession& session)
 {
-    if (!header("Bake", "Bake"))
-        return;
     ImGui::TextWrapped("Bakes .server/nav/<tile>.navtile for the world server with kast_mapbake, on the saved map.");
     if (ImGui::InputText("kast_mapbake.exe", &mapbake_))
         mapbakeEdited_ = true;
