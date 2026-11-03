@@ -243,6 +243,34 @@ add_test(NAME editor_map_subtab_zones
           "-DEXTRA_ARGS=--scene ${KAST_TILEGRID} --size 1600x1000 --map-section Zones --map-select zone:west"
           -DFOCUS_PANEL=Map "-DEXPECT_OUTPUT=Map: Zones tab: the tile grid paints zones" -DEXPECT_COUNT=1
           "-DFORBID_OUTPUT=\\[error\\]|Terrain tab" -P "${map_smoke}")
+# Zones in the Scene view (Zones sub-tab, zone east selected): a left drag over the terrain from 2_1 (east) to 1_1
+# paints the tiles it crosses into east, one stroke; Ctrl+S writes zones.json with 1_1 in east.
+add_test(NAME editor_map_viewport_zone_paint
+  COMMAND "${CMAKE_COMMAND}" "-DSOURCE=${KAST_TEST_PROJECT}" "-DEDITOR=$<TARGET_FILE:kast_editor>"
+          "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/map_viewport_zone_paint.png"
+          "-DEXTRA_ARGS=--scene @PROJECT@/scenes/tilegrid.scene --size 1600x1000 --map-section Zones --map-select zone:east --sim-mouse 40,left,-170,0,0,170,0 --sim-key 60,ctrl+S"
+          -DFOCUS_PANEL=Map "-DEXPECT_OUTPUT=Map: painted 1 tile\\(s\\) into zone east.*Map: saved maps/tilegrid" -DEXPECT_COUNT=1
+          "-DFILE_MATCHES=@PROJECT@/maps/tilegrid/zones.json=\"id\":\"east\",\"name\":\"EastMarch\",\"tiles\":\\[\\[2,0,2,0\\],\\[1,1,2,1\\],\\[2,2,2,2\\]\\]"
+          "-DFORBID_OUTPUT=\\[error\\]|can't paint" -P "${map_copy}")
+# A click on 0_1 with east selected (0_1 touches no east tile, and would split west's column) is refused: the
+# Console and the Zones tab say why, the zones stay as they were (nothing to save: zones.json untouched).
+add_test(NAME editor_map_viewport_zone_refused
+  COMMAND "${CMAKE_COMMAND}" "-DSOURCE=${KAST_TEST_PROJECT}" "-DEDITOR=$<TARGET_FILE:kast_editor>"
+          "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/map_viewport_zone_refused.png"
+          "-DEXTRA_ARGS=--scene @PROJECT@/scenes/tilegrid.scene --size 1600x1000 --map-section Zones --map-select zone:east --sim-mouse 40,left,0,0,0,-170,0 --sim-key 60,ctrl+S"
+          -DFOCUS_PANEL=Map "-DEXPECT_OUTPUT=\\[warn\\] Map: can't paint tile 0_1 into zone east: zone \"(east|west)\": not contiguous" -DEXPECT_COUNT=1
+          "-DFILE_MATCHES=@PROJECT@/maps/tilegrid/zones.json=\"id\":\"west\",\"name\":\"WestVale\",\"tiles\":\\[\\[0,0,1,2\\]\\].*\"id\":\"east\",\"name\":\"EastMarch\",\"tiles\":\\[\\[2,0,2,2\\]\\]"
+          "-DFORBID_OUTPUT=\\[error\\]|Map: painted|Map: saved" -P "${map_copy}")
+# The zone overlay: each zone tinted with its name on the terrain while the Zones sub-tab shows (not on Setup).
+add_test(NAME editor_map_zone_overlay_setup
+  COMMAND "${CMAKE_COMMAND}" "-DEDITOR=$<TARGET_FILE:kast_editor>" "-DSCREENSHOT=${CMAKE_CURRENT_BINARY_DIR}/map_zone_overlay_setup.png"
+          "-DEXTRA_ARGS=--scene ${KAST_TILEGRID} --size 1600x1000 --map-section Setup" -DFOCUS_PANEL=Map
+          "-DFORBID_OUTPUT=\\[error\\]" -P "${map_smoke}")
+add_test(NAME editor_map_zone_overlay_differs
+  COMMAND "${CMAKE_COMMAND}" "-DA=${CMAKE_CURRENT_BINARY_DIR}/map_subtab_zones.png"
+          "-DB=${CMAKE_CURRENT_BINARY_DIR}/map_zone_overlay_setup.png" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/differs_test.cmake")
+set_tests_properties(editor_map_subtab_zones editor_map_zone_overlay_setup PROPERTIES FIXTURES_SETUP map_zone_overlay_shots)
+set_tests_properties(editor_map_zone_overlay_differs PROPERTIES FIXTURES_REQUIRED map_zone_overlay_shots)
 set_tests_properties(editor_map_tab editor_map_tab_old_layout editor_map_tab_pre_mapedit_layout editor_map_tab_zone_own_dock
                      editor_map_no_terrain
                      editor_map_no_project editor_map_click_open
@@ -254,6 +282,7 @@ set_tests_properties(editor_map_tab editor_map_tab_old_layout editor_map_tab_pre
                      editor_map_play_zones editor_map_undo_order_scene_focus editor_map_undo_order_map_focus
                      editor_map_unsaved_prompt editor_map_wizard_create editor_map_wizard_folder_exists
                      editor_map_wizard_replace_ask editor_map_wizard_replace_confirm editor_map_subtab_zones
+                     editor_map_viewport_zone_paint editor_map_viewport_zone_refused editor_map_zone_overlay_setup
                      PROPERTIES LABELS smoke)
 
 # The built player (game "tilegrid" in KAST_GAMES, its copy's 2_0.scene broken): the same streaming path; the broken

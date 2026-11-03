@@ -298,10 +298,20 @@ did not change writes no <code>zones.json</code>; keys of a zone the tab does no
 <ul>
 <li><strong>Add Zone</strong> appends a zone with no tiles (<code>zone</code>, <code>zone_2</code>, ...), selects it and switches the grid to
   Paint zone mode. A zone with no tiles blocks the save until painted.</li>
-<li><strong>Paint.</strong> In the Tiles section's <strong>Paint zone</strong> mode a click, or a drag with the left button, moves every
-  declared tile it crosses into the selected zone (one undo step per stroke; a right or middle drag pans). Cells show a thick
-  white line where neighbouring tiles are in different zones, each zone's name on its top-left visible tile, and the selected
-  zone tinted. The overlay shows on every grid mode once the map has a <code>zones.json</code>.</li>
+<li><strong>Paint.</strong> The Zones sub-tab shows the tile grid right under the zone list, in <strong>Paint zone</strong> mode: a
+  click, or a drag with the left button, moves every declared tile it crosses into the selected zone (one undo step per stroke;
+  a right or middle drag pans). Cells show a thick white line where neighbouring tiles are in different zones, each zone's name
+  on its top-left visible tile, and the selected zone tinted. The grid overlay shows on every grid mode once the map has a
+  <code>zones.json</code>.</li>
+<li id="zone-viewport"><strong>Paint in the Scene view.</strong> While the Zones sub-tab is in front (and painting is on: <strong>Stop
+  painting</strong> turns it off), the Scene view paints too: the tile under the mouse is outlined, and a left drag over the terrain
+  moves every tile it crosses into the selected zone, as on the grid. Each zone's tiles are tinted a color of their own with the
+  zone's name on a label (the selected zone's label is outlined); the overlay shows only on the Zones sub-tab.</li>
+<li id="zone-refused"><strong>Refused tiles.</strong> A tile whose move would break a zone rule (leave a zone in pieces, give the
+  selected zone a tile that touches none of its others, or leave a zone with no tiles) is not painted, on the grid or in the Scene
+  view: the Console logs <code>Map: can't paint tile 0_1 into zone east: zone "east": not contiguous (...)</code>, and the Zones
+  sub-tab shows it in red until the next stroke. The zones stay as they were. The <code>--paint-zone</code> command-line edit is not
+  checked (tests use it to make invalid zones).</li>
 <li><strong>Id</strong> is applied when the field is left (letters, digits, <code>_</code>, <code>-</code>; not starting with <code>-</code>; unique, else it
   reverts with an error); <strong>Name</strong> and <strong>Flags</strong> are one undo step per field edit. Flags are checked as you type: the
   last valid JSON object is kept, an empty field removes them.</li>
@@ -313,7 +323,7 @@ Add / remove tiles mode joins the zone of its first neighbour that is in a zone 
 go to the zone of the first neighbour, of its tiles sorted by z then x, that is in another zone. A removed tile leaves its
 zone.</p>
 <p id="zone-problems"><strong>Problems block the save</strong> (listed in the Zones section as you edit, and in Problems after a save attempt; nothing of
-the map is written): a zone split in two (a paint or a removed tile), a zone with no tiles, a declared tile in no zone, a tile in
+the map is written): a zone split in two (a removed tile, a command-line paint), a zone with no tiles, a declared tile in no zone, a tile in
 two zones, a bad or duplicate id, a zone tile not declared in <code>map.json</code>, and a renamed zone whose new
 <code>zones/&lt;id&gt;.scene</code> is already taken.</p>
 <h3 id="zone-scenes">Zone scenes</h3>

@@ -103,6 +103,25 @@ size_t paint_zone(const km::MapInfo& info, MapState& state, size_t zone, const T
     return moved;
 }
 
+std::optional<std::string> paint_zone_checked(const km::MapInfo& info, MapState& state, const std::string& folder,
+                                              size_t zone, const TileSet& tiles, size_t& moved) {
+    // A problem's kind, without the detail that may shift with any edit ("(tile 0_1 shares no edge path ...)").
+    const auto kind = [](const std::string& p) { return p.substr(0, p.find(" (")); };
+    std::vector<std::string> before, after;
+    map_zones(info, state, folder, &before);
+    Json saved = state.zones;
+    moved = paint_zone(info, state, zone, tiles);
+    if (!moved) return std::nullopt;
+    map_zones(info, state, folder, &after);
+    for (const std::string& p : after)
+        if (std::ranges::none_of(before, [&](const std::string& b) { return kind(b) == kind(p); })) {
+            state.zones = std::move(saved);
+            moved = 0;
+            return p;
+        }
+    return std::nullopt;
+}
+
 void rename_zone(MapState& state, size_t zone, const std::string& id) {
     Json* list = zones_json(state);
     if (!list || zone >= list->size()) return;

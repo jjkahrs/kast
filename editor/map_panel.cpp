@@ -185,6 +185,7 @@ void MapPanel::draw(Document& doc, MapSession& session, FileActions& files)
         }
     }
     ImGui::End();
+    zoneOverlay_ = tabFront_ && tab_ == Tab::Zones && session.doc();
     drawUnsavedPrompt(doc, session);
     drawNewMapDialog(doc, session, files);
     drawRemoveTilePrompt(session);
@@ -296,17 +297,19 @@ void MapPanel::guardMapChange(Document& doc, const MapSession& session)
 bool MapPanel::sceneInput(MapSession& session, const SceneViewport::Input& input)
 {
     hover_.reset();
+    zoneHover_.reset();
     mapedit::MapDoc* z = session.doc();
     const ImGuiIO& io = ImGui::GetIO();
     const bool click = input.hovered && !input.cameraDrag && !io.KeyAlt && ImGui::IsMouseClicked(ImGuiMouseButton_Left);
     const bool dragging = drag_.kind != Drag::Kind::None;
-    if (!z || (tool_ == Tool::None && !click && !dragging))
+    const bool zones = zonePainting();
+    if (!z || (tool_ == Tool::None && !zones && !click && !dragging))
         return false;
     std::string err;
     const auto info = z->info(err);
     if (!info)
         return tool_ != Tool::None;
-    if (input.hovered || stroking_ || dragging || rect_) { // the ground under the mouse (in-memory heights)
+    if (input.hovered || stroking_ || dragging || rect_ || zoneLast_) { // the ground under the mouse (in-memory heights)
         const kast::Ray ray = kast::screenRay(input.viewProj, io.MousePos.x - input.x, io.MousePos.y - input.y,
                                               input.width, input.height, bgfx::getCaps()->homogeneousDepth);
         hover_ = mapedit::raycast(*info, z->state, {ray.origin.x, ray.origin.y, ray.origin.z},
@@ -314,6 +317,8 @@ bool MapPanel::sceneInput(MapSession& session, const SceneViewport::Input& input
     }
     if (click && hover_) // whatever the tool: the Terrain section's heightmap tile
         tile_ = km::tile_of((*hover_)[0], (*hover_)[2]);
+    if (zones)
+        return zoneInput(*z, *info, click);
     switch (tool_) {
     case Tool::Raise:
     case Tool::Lower:
@@ -345,6 +350,8 @@ void MapPanel::drawSceneOverlay(const MapSession& session, ImDrawList* draw, con
         return;
     draw->PushClipRect(ImVec2(x, y), ImVec2(x + width, y + height), true);
     const GroundDraw g{draw, viewProj, x, y, width, height, *info, z->state, centre};
+    if (zoneOverlay_)
+        drawZoneOverlay(g, *z, *info);
     drawObjectOverlays(g);
     if (hover_ && (tool_ == Tool::Raise || tool_ == Tool::Lower || tool_ == Tool::Flatten))
         g.circle((*hover_)[0], (*hover_)[2], brush_.radius, kBrushColor);

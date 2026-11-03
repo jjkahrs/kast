@@ -150,6 +150,12 @@ private:
     // logged) by endZoneStroke once the mouse is up.
     void paintZone(mapedit::MapDoc& z, const kast::map::MapInfo& info, kast::map::TileKey t);
     void endZoneStroke(MapSession& session);
+    // Zone paint in the Scene view: the Zones sub-tab in front, its paint mode on, no tool.
+    bool zonePainting() const;
+    // Its Scene view mouse: the tile under it highlighted; a left drag paints every tile it crosses (paintZone).
+    bool zoneInput(mapedit::MapDoc& z, const kast::map::MapInfo& info, bool click);
+    // While the Zones sub-tab shows: each zone's tiles tinted (kZoneTints) with its name, the hovered tile outlined.
+    void drawZoneOverlay(const GroundDraw& g, const mapedit::MapDoc& z, const kast::map::MapInfo& info) const;
     void drawUnsavedPrompt(Document& doc, MapSession& session);
     // The New Map wizard: why Create is disabled (empty: it is not).
     std::string newMapBlocker(const MapSession& session) const;
@@ -262,6 +268,10 @@ private:
     std::string flagsText_, flagsError_; // its flags being typed
     bool zoneStroke_ = false;            // a paint stroke's undo step is open
     size_t strokeTiles_ = 0;             // tiles it moved
+    std::string zoneRefused_;            // why the stroke's last refused tile was (shown until the next stroke)
+    std::optional<mapedit::Point> zoneLast_;       // a Scene view stroke: the ground under the mouse last frame
+    std::optional<kast::map::TileKey> zoneHover_;  // the map tile under the mouse while zone painting
+    bool zoneOverlay_ = false;                     // the Zones sub-tab showed this frame
 
     // Bake
     std::filesystem::path settingsFile_;

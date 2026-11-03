@@ -1103,6 +1103,13 @@ void check_zones() {
     CHECK(has_error(errors, "maps/tilegrid/zones.json", "zone \"west\": not contiguous") && bytes(dir / "zones.json") == original);
     doc.undo();
     CHECK(validate(p, doc).empty());
+    // The editor's checked paint refuses that split, leaving the zones as they were; a paint that keeps both whole goes.
+    const Json before = doc.state.zones;
+    auto refused = paint_zone_checked(info, doc.state, "tilegrid", 1, {{0, 1}}, moved);
+    CHECK(refused && refused->starts_with("zone \"west\": not contiguous") && moved == 0 && doc.state.zones == before);
+    refused = paint_zone_checked(info, doc.state, "tilegrid", 0, {{1, 1}}, moved); // east 1_0..2_2 -> west gets 1_1
+    CHECK(!refused && moved == 1 && validate(p, doc).empty());
+    doc.state.zones = before;
 
     // A new tile joins its first edge neighbour's zone (-x first): 3_1 -> east (2_1); -1_2 -> west (0_2).
     doc.edit([&](MapState& s) { add_tile(info, s, {3, 1}); });
